@@ -6,7 +6,8 @@
 //!
 //! The particles read the wind field, so [`WindPlugin`](crate::WindPlugin) must be present;
 //! without it (or without an [`ElementsCamera`](crate::ElementsCamera)) nothing is simulated or
-//! drawn. Ground is the plane y = 0 until terrain arrives.
+//! drawn. Ground is the terrain's surface plus the water standing on it (the plane y = 0 without a
+//! terrain).
 
 mod gpu;
 pub(crate) mod model;
@@ -29,6 +30,7 @@ use crate::gpu::grid::storage_buffer;
 use crate::plugin::{
     ElementsCamera, ElementsQuality, ElementsSystems, ElementsView, ensure_gpu_core,
 };
+use crate::terrain::{NO_TERRAIN, TerrainParamsGpu, TerrainState};
 use crate::wind::{WindFieldParams, WindState};
 use model::{marshall_palmer_lambda, particle_counts};
 
@@ -40,7 +42,7 @@ pub const MAX_PRECIPITATION_BLOCKERS: usize = 256;
 pub(crate) const SPLASH_RING: usize = 4096;
 /// Rain impacts closer than this horizontally to the camera spawn a splash, m.
 const SPLASH_RADIUS_M: f32 = 20.0;
-/// Height of the ground plane until terrain exists, m.
+/// Height of the ground plane without a terrain, m.
 const GROUND_M: f32 = 0.0;
 /// The shaders' clock wraps at this many seconds so f32 keeps its resolution.
 const TIME_WRAP_S: f32 = 1024.0;
@@ -118,6 +120,7 @@ pub(crate) struct PrecipParams {
     /// x: flutter speed m/s. y: snow fall speed m/s. zw: flutter frequency range, Hz.
     snow: Vec4,
     wind: WindFieldParams,
+    terrain: TerrainParamsGpu,
 }
 
 /// Uniform of `draw.wesl`.
@@ -194,6 +197,8 @@ pub(crate) struct PrecipitationGpu {
     pub particles: Handle<ShaderBuffer>,
     pub splashes: Handle<ShaderBuffer>,
     pub wind_field: Handle<Image>,
+    /// The terrain's `terrain_cells`, or the one-cell placeholder without a live terrain.
+    pub terrain: Handle<ShaderBuffer>,
     pub capacity: u32,
     pub params: PrecipParams,
     pub draw: DrawParams,
@@ -277,6 +282,7 @@ fn ensure_buffers(
         particles,
         splashes,
         wind_field: wind.field.clone(),
+        terrain: NO_TERRAIN,
         capacity,
         params: PrecipParams::default(),
         draw: DrawParams::default(),
@@ -301,6 +307,7 @@ fn update_precipitation(
     state: Option<ResMut<PrecipitationState>>,
     flash: Res<LightningFlash>,
     shadows: Option<Res<CloudShadows>>,
+    terrain: Option<Res<TerrainState>>,
 ) {
     let (Some(mut gpu), Some(mut state)) = (gpu, state) else {
         return;
@@ -323,6 +330,7 @@ fn update_precipitation(
         return;
     }
     let camera = view.position;
+    let live = terrain.as_ref().filter(|t| t.is_live());
 
     let selected = nearest_blockers(
         camera,
@@ -352,7 +360,11 @@ fn update_precipitation(
         ),
         snow: SNOW_FLUTTER,
         wind: wind.field_params(),
+        terrain: live.map_or_else(TerrainParamsGpu::default, |t| {
+            TerrainParamsGpu::new(&t.grid, 1, true)
+        }),
     };
+    gpu.terrain = live.map_or(NO_TERRAIN, |t| t.cells.clone());
     // Never an empty binding: the count says how many records are real.
     gpu.blockers = if selected.is_empty() {
         vec![BlockerGpu::default()]

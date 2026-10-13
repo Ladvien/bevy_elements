@@ -65,7 +65,10 @@ impl Plugin for ExampleHarness {
             Update,
             (fly, clock_keys, weather_keys).before(ElementsSystems::Clock),
         )
-        .add_systems(Update, (status, run_limit).after(ElementsSystems::Readback));
+        .add_systems(
+            Update,
+            (settle_on_ground, status, run_limit).after(ElementsSystems::Readback),
+        );
         ground::plugin(app);
     }
 }
@@ -86,6 +89,31 @@ pub fn camera(position: Vec3, look_at: Vec3) -> impl Bundle {
             0.0,
         )),
     )
+}
+
+/// Marks a camera that moves to `height` metres above the terrain at its XZ once the terrain's
+/// heights have been read back (the heights are not known on the first frames).
+#[derive(Component)]
+pub struct StandOnGround {
+    height: f32,
+}
+
+/// See [`StandOnGround`].
+pub fn stand_on_ground(height: f32) -> StandOnGround {
+    StandOnGround { height }
+}
+
+fn settle_on_ground(
+    mut commands: Commands,
+    env: Environment,
+    mut cameras: Query<(Entity, &mut Transform, &StandOnGround)>,
+) {
+    for (entity, mut transform, stand) in &mut cameras {
+        if let Some(ground) = env.terrain_height(transform.translation.xz()) {
+            transform.translation.y = ground + stand.height;
+            commands.entity(entity).remove::<StandOnGround>();
+        }
+    }
 }
 
 fn fly(

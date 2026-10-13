@@ -6,10 +6,11 @@
 //! wind field is not passed on.
 
 use bevy::prelude::*;
-use bevy_flora::{FloraSeason, FloraWetness, FloraWind, GustFront};
+use bevy_flora::{FloraGround, FloraSeason, FloraWetness, FloraWind, GustFront};
 
 use crate::climate::{SeasonState, SurfaceWeathering, Weather};
 use crate::plugin::{ElementsSystems, ensure_core};
+use crate::query::EnvironmentSnapshot;
 use crate::wind::{WindGust, WindState};
 
 /// Wind speed at 10 m, m/s, that `bevy_flora`'s `FloraWind::strength` of 1 ("a strong wind")
@@ -31,6 +32,7 @@ pub const FLORA_FULL_WIND_MS: f32 = 20.0;
 /// | `FloraWind::launch_gust` | each [`WindGust`], strength / 20 |
 /// | `FloraSeason` | `SeasonState::{autumn, leaf_fall, blossom}`, `snow` = `SurfaceWeathering::snow_cover` |
 /// | `FloraWetness` | `SurfaceWeathering::wetness` |
+/// | `FloraGround` | the terrain's height snapshot ([`Environment::terrain_height`](crate::Environment::terrain_height)), edge cells extended outside the terrain; removed again when the terrain goes |
 pub struct ElementsFloraPlugin;
 
 impl Plugin for ElementsFloraPlugin {
@@ -38,7 +40,7 @@ impl Plugin for ElementsFloraPlugin {
         ensure_core(app);
         app.add_systems(
             Update,
-            (drive_wind, drive_season).after(ElementsSystems::Readback),
+            (drive_wind, drive_season, drive_ground).after(ElementsSystems::Readback),
         );
     }
 }
@@ -93,4 +95,28 @@ fn drive_season(
     if let (Some(ground), Some(mut wetness)) = (ground, wetness) {
         wetness.set_if_neq(FloraWetness(ground.wetness));
     }
+}
+
+/// Insert `FloraGround` from the terrain snapshot whenever a new readback arrived. The closure
+/// captures the snapshot (its heights are shared, not copied).
+fn drive_ground(
+    snapshot: Res<EnvironmentSnapshot>,
+    mut commands: Commands,
+    mut inserted: Local<Option<usize>>,
+) {
+    let key = snapshot
+        .terrain
+        .as_ref()
+        .map(|t| std::sync::Arc::as_ptr(&t.surface).cast::<f32>() as usize);
+    if key == *inserted {
+        return;
+    }
+    match &snapshot.terrain {
+        Some(terrain) => {
+            let terrain = terrain.clone();
+            commands.insert_resource(FloraGround::new(move |at: Vec2| terrain.height_clamped(at)));
+        }
+        None => commands.remove_resource::<FloraGround>(),
+    }
+    *inserted = key;
 }

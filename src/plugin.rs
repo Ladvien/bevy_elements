@@ -20,6 +20,7 @@ use crate::gpu::readback::ReadbackPlugin;
 use crate::lightning::LightningPlugin;
 use crate::precipitation::PrecipitationPlugin;
 use crate::query::EnvironmentSnapshot;
+use crate::terrain::TerrainPlugin;
 use crate::wind::{WindPlugin, WindState};
 
 /// Every domain plugin that exists in this version, in dependency order.
@@ -39,6 +40,7 @@ impl PluginGroup for ElementsPlugins {
             .add(ClimatePlugin)
             .add(CelestialPlugin)
             .add(WindPlugin)
+            .add(TerrainPlugin)
             .add(FogPlugin)
             .add(CloudPlugin)
             .add(LightningPlugin)
@@ -126,6 +128,18 @@ impl ElementsQuality {
         }
     }
 
+    /// The most cells per axis the terrain's simulation grid has (`Terrain::resolution` is
+    /// clamped to this and rounded down to a power of two). The hydrology and erosion kernels
+    /// run on this grid, so this is the one number to lower if they do not fit their budget.
+    pub fn terrain_max_resolution(self) -> u32 {
+        match self {
+            Self::Low => 256,
+            Self::Medium => 512,
+            Self::High => 1024,
+            Self::Ultra => 2048,
+        }
+    }
+
     /// Ray-march steps for Bevy's volumetric fog.
     pub fn fog_steps(self) -> u32 {
         match self {
@@ -198,6 +212,14 @@ impl Plugin for ElementsGpuCorePlugin {
         load_shader_library!(app, "noise.wesl");
         load_shader_library!(app, "grid.wesl");
         load_shader_library!(app, "wind.wesl");
+        // The one-cell `terrain_cells` that wind, precipitation and ground materials bind until
+        // a terrain exists.
+        if let Some(mut buffers) = app
+            .world_mut()
+            .get_resource_mut::<Assets<bevy::render::storage::ShaderBuffer>>()
+        {
+            crate::terrain::insert_placeholder(&mut buffers);
+        }
         app.add_plugins(ReadbackPlugin).add_observer(dress_camera);
     }
 }

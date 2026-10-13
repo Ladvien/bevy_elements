@@ -13,6 +13,7 @@ mod lightning;
 mod plugin;
 mod precipitation;
 mod query;
+mod terrain;
 mod wind;
 
 // Plugin group, system sets, camera, quality.
@@ -61,6 +62,13 @@ pub use flash::LightningFlash;
 pub use lightning::{
     FLASH_LUMENS, LightningPlugin, LightningStrike, SPEED_OF_SOUND_MS, STRIKE_RADIUS_M,
     StrikeLightning, Thunder,
+};
+
+// Terrain.
+pub use terrain::{
+    GroundExtension, GroundMaterial, GroundParams, ProceduralTerrain, Terrain, TerrainExtension,
+    TerrainGrid, TerrainMaterial, TerrainMaterialParams, TerrainPlugin, TerrainRender,
+    TerrainSnapshot, TerrainSource, TerrainState,
 };
 
 // `bevy_flora` integration.
