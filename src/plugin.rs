@@ -17,6 +17,7 @@ use crate::climate::{ClimatePlugin, Weather};
 use crate::clouds::CloudPlugin;
 use crate::fog::FogPlugin;
 use crate::gpu::readback::ReadbackPlugin;
+use crate::hydrology::HydrologyPlugin;
 use crate::lightning::LightningPlugin;
 use crate::precipitation::PrecipitationPlugin;
 use crate::query::EnvironmentSnapshot;
@@ -41,6 +42,7 @@ impl PluginGroup for ElementsPlugins {
             .add(CelestialPlugin)
             .add(WindPlugin)
             .add(TerrainPlugin)
+            .add(HydrologyPlugin)
             .add(FogPlugin)
             .add(CloudPlugin)
             .add(LightningPlugin)
@@ -140,6 +142,17 @@ impl ElementsQuality {
         }
     }
 
+    /// The most hydrology and erosion substeps per frame (each is `HydrologySettings::step_s`
+    /// of simulated time); an erosion bake runs this many every frame.
+    pub fn hydrology_substeps(self) -> u32 {
+        match self {
+            Self::Low => 2,
+            Self::Medium => 4,
+            Self::High => 8,
+            Self::Ultra => 16,
+        }
+    }
+
     /// Ray-march steps for Bevy's volumetric fog.
     pub fn fog_steps(self) -> u32 {
         match self {
@@ -212,6 +225,7 @@ impl Plugin for ElementsGpuCorePlugin {
         load_shader_library!(app, "noise.wesl");
         load_shader_library!(app, "grid.wesl");
         load_shader_library!(app, "wind.wesl");
+        load_shader_library!(app, "climate/snow.wesl");
         app.add_plugins(ReadbackPlugin).add_observer(dress_camera);
     }
 }

@@ -9,6 +9,7 @@ mod flash;
 mod flora;
 mod fog;
 mod gpu;
+mod hydrology;
 mod lightning;
 mod plugin;
 mod precipitation;
@@ -68,6 +69,12 @@ pub use lightning::{
 pub use terrain::{
     ProceduralTerrain, Terrain, TerrainGrid, TerrainPlugin, TerrainRender, TerrainSnapshot,
     TerrainSource, TerrainState,
+};
+
+// Hydrology and erosion.
+pub use hydrology::{
+    ErodeTerrain, ErosionSettings, HydrologyBoundary, HydrologyPlugin, HydrologySettings,
+    HydrologyStats, MAX_WATER_SOURCES, TerrainBaked, WaterSink, WaterSource, evaporation_mm_h,
 };
 
 // `bevy_flora` integration.

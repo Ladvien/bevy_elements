@@ -7,6 +7,7 @@ use bevy::prelude::*;
 
 use crate::celestial::{SunState, WorldClock};
 use crate::climate::Weather;
+use crate::hydrology::{WaterDepthSnapshot, WaterVelocitySnapshot};
 use crate::terrain::{TerrainLeaves, TerrainSnapshot};
 use crate::wind::{WindSnapshot, WindState};
 
@@ -22,6 +23,10 @@ pub struct EnvironmentSnapshot {
     pub(crate) terrain: Option<TerrainSnapshot>,
     /// The terrain's leaf-patch bounds at the last readback.
     pub(crate) terrain_leaves: Option<TerrainLeaves>,
+    /// The water depth at the last readback, if a terrain with hydrology exists.
+    pub(crate) water_depth: Option<WaterDepthSnapshot>,
+    /// The depth-weighted water velocity at the last readback (half resolution).
+    pub(crate) water_velocity: Option<WaterVelocitySnapshot>,
     /// Real time of the last completed readback.
     pub(crate) updated_at: Option<Duration>,
 }
@@ -87,6 +92,27 @@ impl Environment<'_> {
             .terrain
             .as_ref()
             .and_then(|t| t.height(position))
+    }
+
+    /// Depth of the water above the ground at `position` (world XZ), m: `Some(0.0)` on dry
+    /// ground, `None` outside the terrain, when there is none, and before the first readback
+    /// (the simulation has to have run). A bilinear sample of the last readback, up to one
+    /// readback interval old.
+    pub fn water_depth(&self, position: Vec2) -> Option<f32> {
+        self.snapshot
+            .water_depth
+            .as_ref()
+            .and_then(|w| w.depth_at(position))
+    }
+
+    /// Depth-averaged velocity of the water at `position` (world XZ), m/s along world X and Z:
+    /// zero where the water is shallower than a millimetre. `None` outside the terrain, when
+    /// there is none, and before the first readback. Sampled from a half-resolution field.
+    pub fn water_velocity(&self, position: Vec2) -> Option<Vec2> {
+        self.snapshot
+            .water_velocity
+            .as_ref()
+            .and_then(|w| w.velocity_at(position))
     }
 
     /// Real time since the snapshot was last filled; `Duration::MAX` before the first readback.

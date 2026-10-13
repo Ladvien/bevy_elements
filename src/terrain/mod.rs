@@ -13,6 +13,8 @@ mod gpu;
 mod gpu_tests;
 pub(crate) mod model;
 
+pub(crate) use gpu::TerrainDispatch;
+
 use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
