@@ -11,9 +11,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use bevy::camera::ScalingMode;
 use bevy::prelude::*;
-use bevy::render::render_resource::{
-    AsBindGroup, BindingType, BufferBindingType, ShaderStages,
-};
+use bevy::render::render_resource::{AsBindGroup, BindingType, BufferBindingType, ShaderStages};
 use bevy::render::renderer::RenderDevice;
 use bevy::render::{RenderApp, RenderStartup};
 use bevy_elements::*;
@@ -61,10 +59,7 @@ fn rig() -> Rig {
     app.add_plugins((support::headless_plugins(), WeatheredPlugin))
         .init_resource::<SurfaceWeathering>()
         .init_resource::<Pin>()
-        .add_systems(
-            Update,
-            pin_weather.in_set(ElementsSystems::Weather),
-        );
+        .add_systems(Update, pin_weather.in_set(ElementsSystems::Weather));
     support::finish(&mut app);
 
     let base = StandardMaterial {
@@ -92,7 +87,10 @@ fn rig() -> Rig {
                 bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
                 None,
             ));
-            (bevy::camera::RenderTarget::Image(handle.clone().into()), handle)
+            (
+                bevy::camera::RenderTarget::Image(handle.clone().into()),
+                handle,
+            )
         };
         let camera = world
             .spawn((
@@ -157,7 +155,10 @@ impl Rig {
     }
 
     fn set_exposure(&mut self, exposure: f32) {
-        let mut materials = self.app.world_mut().resource_mut::<Assets<WeatheredMaterial>>();
+        let mut materials = self
+            .app
+            .world_mut()
+            .resource_mut::<Assets<WeatheredMaterial>>();
         materials
             .get_mut(&self.left)
             .expect("the weathered material")
@@ -167,7 +168,10 @@ impl Rig {
 
     /// The plain cube's material: the colour and roughness the weather should have produced.
     fn set_plain(&mut self, color: Color, roughness: f32) {
-        let mut materials = self.app.world_mut().resource_mut::<Assets<StandardMaterial>>();
+        let mut materials = self
+            .app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>();
         let mut m = materials.get_mut(&self.right).expect("the plain material");
         m.base_color = color;
         m.perceptual_roughness = roughness;
@@ -178,7 +182,12 @@ impl Rig {
         for _ in 0..6 {
             self.app.update();
         }
-        support::read_texture(&mut self.app, self.image.clone(), SIZE as usize * 4, SIZE as usize)
+        support::read_texture(
+            &mut self.app,
+            self.image.clone(),
+            SIZE as usize * 4,
+            SIZE as usize,
+        )
     }
 }
 
@@ -256,7 +265,12 @@ fn weathered_tops_match_the_plain_material_with_the_notes_numbers() {
     rig.set_exposure(1.0);
     rig.set_weather(1.0, 0.0, 0.0);
     rig.set_plain(
-        Color::from(LinearRgba::new(base.red * 0.5, base.green * 0.5, base.blue * 0.5, 1.0)),
+        Color::from(LinearRgba::new(
+            base.red * 0.5,
+            base.green * 0.5,
+            base.blue * 0.5,
+            1.0,
+        )),
         0.1,
     );
     let (wet, plain_wet) = centres(&rig.render());
@@ -296,12 +310,18 @@ fn walls_streak_in_rain_and_stay_bare_in_snow() {
 
     // Dry: the same pixels.
     let dry = region(&rig.render());
-    assert!(dry.iter().all(|(l, r)| l == r), "a dry wall is the plain wall");
+    assert!(
+        dry.iter().all(|(l, r)| l == r),
+        "a dry wall is the plain wall"
+    );
 
     // Snow: a vertical face stays bare (the flora curve is 0 at n_y = 0).
     rig.set_weather(0.0, 1.0, 0.0);
     let snow = region(&rig.render());
-    assert!(snow.iter().all(|(l, r)| l == r), "a wall under snow stays bare");
+    assert!(
+        snow.iter().all(|(l, r)| l == r),
+        "a wall under snow stays bare"
+    );
 
     // Rain at 25 mm/h (intensity 1) with dry ground: streaks only.
     rig.set_weather(0.0, 0.0, 25.0);
@@ -310,10 +330,22 @@ fn walls_streak_in_rain_and_stay_bare_in_snow() {
         .iter()
         .filter(|(l, r)| (0..3).all(|c| l[c] <= r[c]) && max_diff(*l, *r) >= 2)
         .count();
-    let lighter = rain.iter().filter(|(l, r)| (0..3).any(|c| l[c] > r[c])).count();
-    println!("streaks: {darker} of {} wall pixels darker by 2+ levels, {lighter} lighter", rain.len());
-    assert!(darker > rain.len() / 50, "streaks are visible: {darker} pixels");
-    assert!(darker < rain.len() * 9 / 10, "streaks are not a wash: {darker} pixels");
+    let lighter = rain
+        .iter()
+        .filter(|(l, r)| (0..3).any(|c| l[c] > r[c]))
+        .count();
+    println!(
+        "streaks: {darker} of {} wall pixels darker by 2+ levels, {lighter} lighter",
+        rain.len()
+    );
+    assert!(
+        darker > rain.len() / 50,
+        "streaks are visible: {darker} pixels"
+    );
+    assert!(
+        darker < rain.len() * 9 / 10,
+        "streaks are not a wash: {darker} pixels"
+    );
     assert_eq!(lighter, 0, "rain never brightens a wall");
 
     // Sheltered: no streaks.

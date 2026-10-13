@@ -93,12 +93,7 @@ impl Builder<'_> {
     }
 
     /// A box of `size` standing on the ground at `x, z`.
-    fn cuboid(
-        &mut self,
-        size: Vec3,
-        at: Vec2,
-        material: Handle<WeatheredMaterial>,
-    ) -> Entity {
+    fn cuboid(&mut self, size: Vec3, at: Vec2, material: Handle<WeatheredMaterial>) -> Entity {
         self.commands
             .spawn((
                 Mesh3d(self.meshes.add(Cuboid::new(size.x, size.y, size.z))),
@@ -199,7 +194,11 @@ fn setup(
     // The pavilion: a flat roof (a `PrecipitationBlocker`, so no particle falls under it) over a
     // box and four posts whose exposure is 0, so they take no wetness, streaks or snow.
     let sheltered = b.material(Color::srgb(0.55, 0.26, 0.20), 0.9, 0.0, 0.0);
-    b.cuboid(Vec3::new(4.0, 2.5, 4.0), Vec2::new(8.0, 22.0), sheltered.clone());
+    b.cuboid(
+        Vec3::new(4.0, 2.5, 4.0),
+        Vec2::new(8.0, 22.0),
+        sheltered.clone(),
+    );
     for (dx, dz) in [(-5.0, -5.0), (5.0, -5.0), (-5.0, 5.0), (5.0, 5.0)] {
         b.cuboid(
             Vec3::new(0.4, 4.0, 0.4),

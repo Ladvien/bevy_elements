@@ -14,8 +14,8 @@ mod plugin;
 mod precipitation;
 mod query;
 mod terrain;
-mod wind;
 mod weathered;
+mod wind;
 
 // Plugin group, system sets, camera, quality.
 pub use plugin::{ElementsCamera, ElementsPlugins, ElementsQuality, ElementsSystems};
