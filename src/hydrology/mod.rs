@@ -34,6 +34,7 @@ use crate::plugin::{ElementsQuality, ElementsSystems, ElementsView, ensure_gpu_c
 use crate::precipitation::{BlockerGpu, PrecipitationBlocker, nearest_blockers};
 use crate::query::EnvironmentSnapshot;
 use crate::terrain::{TerrainGpu, TerrainGrid, TerrainState};
+pub(crate) use gpu::HydrologyDispatch;
 pub use model::{MAX_WATER_SOURCES, evaporation_mm_h};
 use model::{
     MM_H_TO_M_S, QuantumAccumulator, Scheduler, THERMAL_PERIOD, depth_cap_m, source_entry,

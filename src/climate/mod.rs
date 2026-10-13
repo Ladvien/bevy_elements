@@ -4,7 +4,7 @@
 mod model;
 mod season;
 mod weather;
-mod weathering;
+pub(crate) mod weathering;
 
 use bevy::prelude::*;
 

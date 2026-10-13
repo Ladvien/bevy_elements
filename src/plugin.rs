@@ -15,6 +15,7 @@ use bevy::shader::load_shader_library;
 use crate::celestial::{CelestialPlugin, SunState, clock_plugin};
 use crate::climate::{ClimatePlugin, Weather};
 use crate::clouds::CloudPlugin;
+use crate::cover::GroundCoverPlugin;
 use crate::fog::FogPlugin;
 use crate::gpu::readback::ReadbackPlugin;
 use crate::hydrology::HydrologyPlugin;
@@ -44,6 +45,7 @@ impl PluginGroup for ElementsPlugins {
             .add(WindPlugin)
             .add(TerrainPlugin)
             .add(HydrologyPlugin)
+            .add(GroundCoverPlugin)
             .add(FogPlugin)
             .add(CloudPlugin)
             .add(LightningPlugin)

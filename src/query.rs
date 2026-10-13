@@ -7,6 +7,7 @@ use bevy::prelude::*;
 
 use crate::celestial::{SunState, WorldClock};
 use crate::climate::Weather;
+use crate::cover::CoverSnapshot;
 use crate::hydrology::{WaterDepthSnapshot, WaterVelocitySnapshot};
 use crate::terrain::{TerrainLeaves, TerrainSnapshot};
 use crate::wind::{WindSnapshot, WindState};
@@ -27,6 +28,8 @@ pub struct EnvironmentSnapshot {
     pub(crate) water_depth: Option<WaterDepthSnapshot>,
     /// The depth-weighted water velocity at the last readback (half resolution).
     pub(crate) water_velocity: Option<WaterVelocitySnapshot>,
+    /// The snow depth and wetness at the last readback, if a terrain with ground cover exists.
+    pub(crate) cover: Option<CoverSnapshot>,
     /// Real time of the last completed readback.
     pub(crate) updated_at: Option<Duration>,
 }
@@ -113,6 +116,28 @@ impl Environment<'_> {
             .water_velocity
             .as_ref()
             .and_then(|w| w.velocity_at(position))
+    }
+
+    /// Depth of the snow on the ground at `position` (world XZ), m: `Some(0.0)` on bare ground,
+    /// `None` outside the terrain, when there is none, and before the first readback (the cover
+    /// simulation has to have run). A bilinear sample of the last readback, up to one readback
+    /// interval old.
+    pub fn snow_depth(&self, position: Vec2) -> Option<f32> {
+        self.snapshot
+            .cover
+            .as_ref()
+            .and_then(|c| c.depth_at(position))
+    }
+
+    /// How wet the ground is at `position` (world XZ), 0 dry to 1 soaked (a full film; puddles
+    /// are water depth, see [`water_depth`](Self::water_depth)). `None` outside the terrain,
+    /// when there is none, and before the first readback. A bilinear sample of the last
+    /// readback, up to one readback interval old.
+    pub fn wetness(&self, position: Vec2) -> Option<f32> {
+        self.snapshot
+            .cover
+            .as_ref()
+            .and_then(|c| c.wetness_at(position))
     }
 
     /// Real time since the snapshot was last filled; `Duration::MAX` before the first readback.

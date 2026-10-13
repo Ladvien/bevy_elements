@@ -9,6 +9,7 @@
 import bevy_elements::grid::{GridParams, grid_taps};
 import bevy_elements::noise::{perlin3, perlin3_d, fbm3};
 import bevy_elements::terrain::common::TerrainParams;
+import bevy_elements::surface_cover::{weather_surface, ripple_weights, ripple_offset};
 import bevy_pbr::render::{
     mesh_functions,
     mesh_view_bindings::view,
@@ -39,10 +40,18 @@ struct TerrainMaterialParams {
     shadow: vec4<f32>,
     // xyz: unit direction toward the light the map was made for. w: 1 when a map is bound.
     light: vec4<f32>,
+    // x: 1 when the cover maps are bound. y: rain intensity min(1, R_liquid / 20). z: puddle start
+    // depth (m). w: full-puddle depth (m).
+    cover: vec4<f32>,
+    // Phase of each of the four ripple layers, 0–1.
+    ripple: vec4<f32>,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> material: TerrainMaterialParams;
 @group(constants::MATERIAL_BIND_GROUP) @binding(101) var<storage, read> terrain_cells: array<vec4<f32>>;
+// (snow depth m, wetness 0–1, snow water equivalent m, —) per cell; a one-cell placeholder while
+// `material.cover.x` is 0.
+@group(constants::MATERIAL_BIND_GROUP) @binding(102) var<storage, read> cover_cells: array<vec4<f32>>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(103) var cloud_map: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(104) var cloud_sampler: sampler;
 
@@ -70,6 +79,17 @@ fn terrain_gradient(xz: vec2<f32>) -> vec2<f32> {
     return mix(mix(g00, g10, t.w.x), mix(g01, g11, t.w.x), t.w.y);
 }
 
+// Snow depth (m) at world XZ from the cover pack; 0 without the maps.
+fn snow_depth(xz: vec2<f32>) -> f32 {
+    if material.cover.x < 0.5 {
+        return 0.0;
+    }
+    let t = grid_taps(material.terrain.grid, xz);
+    let a = mix(cover_cells[t.i00].x, cover_cells[t.i10].x, t.w.x);
+    let b = mix(cover_cells[t.i01].x, cover_cells[t.i11].x, t.w.x);
+    return mix(a, b, t.w.y);
+}
+
 fn morph_k(distance: f32, lod: u32) -> f32 {
     if f32(lod) >= material.top.x {
         return 0.0;
@@ -89,7 +109,8 @@ fn terrain_vertex_position(local: vec3<f32>, instance_index: u32) -> vec4<f32> {
     let d = distance(view.lod_view_world_position, vec3<f32>(wxz.x, m[3].y + terrain_height(wxz), wxz.y));
     let odd = gi - 2.0 * floor(gi * 0.5);
     wxz = wxz - odd * step * morph_k(d, lod);
-    return vec4<f32>(wxz.x, m[3].y + terrain_height(wxz), wxz.y, 1.0);
+    // The snow lies on the surface: the same depth in the prepass, so the depths agree.
+    return vec4<f32>(wxz.x, m[3].y + terrain_height(wxz) + snow_depth(wxz), wxz.y, 1.0);
 }
 
 @vertex
@@ -178,9 +199,36 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let bump = 0.04 * (1.0 - smoothstep(0.0, 60.0, dist));
     n = normalize(n - bump * (grad - dot(grad, n) * n));
 
+    // Ground cover: wet darkening and gloss, puddles with ripples while it rains, snow
+    // (docs/research/wetness.md, snow-cover.md). The water depth is the hydrology layer's.
+    var wet = 0.0;
+    var snow_cover = 0.0;
+    var puddle = 0.0;
+    var ripple = vec2<f32>(0.0);
+    if material.cover.x > 0.5 {
+        let k00 = cover_cells[t.i00];
+        let k10 = cover_cells[t.i10];
+        let k01 = cover_cells[t.i01];
+        let k11 = cover_cells[t.i11];
+        let cover = mix(mix(k00.xy, k10.xy, t.w.x), mix(k01.xy, k11.xy, t.w.x), t.w.y);
+        let water = mix(mix(c00.z, c10.z, t.w.x), mix(c01.z, c11.z, t.w.x), t.w.y);
+        snow_cover = smoothstep(0.0, 0.05, cover.x);
+        wet = cover.y;
+        puddle = smoothstep(material.cover.z, material.cover.w, water);
+        if puddle > 0.0 && material.cover.y > 0.0 {
+            ripple = ripple_offset(p.xz, material.ripple, ripple_weights(material.cover.y));
+        }
+    }
+    let surface = weather_surface(
+        albedo, rough, 0.0, pbr_input.material.reflectance, n, wet, puddle, snow_cover, ripple,
+    );
+    albedo = surface.base_color;
+    n = surface.normal;
+
     pbr_input.material.base_color = vec4<f32>(albedo, 1.0);
-    pbr_input.material.perceptual_roughness = rough;
-    pbr_input.material.metallic = 0.0;
+    pbr_input.material.perceptual_roughness = surface.roughness;
+    pbr_input.material.metallic = surface.metallic;
+    pbr_input.material.reflectance = surface.reflectance;
     pbr_input.world_normal = n;
     pbr_input.N = n;
 

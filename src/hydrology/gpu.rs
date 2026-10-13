@@ -37,6 +37,11 @@ impl ExtractResource<RenderApp> for HydrologyGpu {
     }
 }
 
+/// Hydrology's kernels. The ground-cover kernels run `.after` them: they read and write the water
+/// layer.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct HydrologyDispatch;
+
 #[derive(Resource)]
 struct HydrologyPipelines {
     flux: Kernel,
@@ -104,7 +109,10 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(Render, prepare.in_set(RenderSystems::PrepareBindGroups))
         .add_systems(
             RenderGraph,
-            dispatch.before(TerrainDispatch).before(camera_driver),
+            dispatch
+                .in_set(HydrologyDispatch)
+                .before(TerrainDispatch)
+                .before(camera_driver),
         );
 }
 
