@@ -6,11 +6,13 @@
 //! elsewhere. Set `ELEMENTS_QUALITY=low|medium|high|ultra` (default high),
 //! `ELEMENTS_RESOLUTION=WxH` (default 1920x1080), `ELEMENTS_PRESET=Thunderstorm` (default `Fog`;
 //! the precipitation passes only run in a wet preset) and `ELEMENTS_BLOCKERS=256` (spawn that
-//! many precipitation blockers around the camera). `ELEMENTS_TERRAIN=hills|mountains|none`
+//! many precipitation blockers around the camera). `ELEMENTS_TERRAIN=hills|mountains|dunes|none`
 //! (default `hills`): a 2 km terrain at the quality's full simulation resolution with a 50 m³/s
 //! water source, so hydrology and erosion run their full substeps every frame
 //! (`elements_hydrology`) and the terrain repacks its layers every frame (`elements_terrain`);
-//! `none` is the flat test scene with neither. Bevy's main and depth passes the scene is drawn in
+//! `none` is the flat test scene with neither. `dunes` runs the aeolian transport
+//! (`elements_aeolian_*`, 20 steps a second) in a forced `DustStorm`, unless `ELEMENTS_PRESET`
+//! says otherwise. Bevy's main and depth passes the scene is drawn in
 //! are printed on their own line.
 //!
 //! The timed passes are compute and do not depend on the resolution, but the GPU's clocks do: a
@@ -30,8 +32,11 @@ use common::{ExampleHarness, camera, stand_on_ground, test_scene};
 /// Frames before the per-pass minimum starts counting.
 const WARMUP_FRAMES: u32 = 240;
 
+/// Share of a 60 Hz frame that carries a transport step (20 steps a second).
+const AEOLIAN_FRAME_SHARE: f64 = 20.0 / 60.0;
+
 /// The crate's GPU passes, by diagnostic span name.
-const PASSES: [&str; 12] = [
+const PASSES: [&str; 16] = [
     "elements_wind",
     "elements_fog",
     "elements_clouds_noise",
@@ -43,6 +48,10 @@ const PASSES: [&str; 12] = [
     "elements_precip_sim",
     "elements_precip_draw",
     "elements_hydrology",
+    "elements_aeolian_capacity",
+    "elements_aeolian_flux",
+    "elements_aeolian_move",
+    "elements_aeolian_avalanche",
     "elements_terrain",
 ];
 
@@ -110,6 +119,7 @@ fn setup(
     let terrain = match std::env::var("ELEMENTS_TERRAIN").as_deref() {
         Ok("none") => None,
         Ok("mountains") => Some(ProceduralTerrain::mountains(42)),
+        Ok("dunes") => Some(ProceduralTerrain::dunes(42)),
         _ => Some(ProceduralTerrain::hills(42)),
     };
     match terrain {
@@ -138,7 +148,11 @@ fn setup(
                 .into_iter()
                 .find(|p| format!("{p:?}").eq_ignore_ascii_case(&name))
         })
-        .unwrap_or(WeatherPreset::PartlyCloudy);
+        .unwrap_or(if matches!(std::env::var("ELEMENTS_TERRAIN").as_deref(), Ok("dunes")) {
+            WeatherPreset::DustStorm
+        } else {
+            WeatherPreset::PartlyCloudy
+        });
     director.force(preset, std::time::Duration::ZERO);
     // Roofs scattered through the particle box: each particle tests every uploaded blocker.
     let blockers: usize = std::env::var("ELEMENTS_BLOCKERS")
@@ -197,6 +211,8 @@ fn report(
     }
     let mut total = 0.0;
     let mut clouds = 0.0;
+    // The transport steps at most 20 times a second: of a 60 Hz frame's cost it is a third.
+    let mut aeolian = 0.0;
     let mut line = format!("{:?}:", *quality);
     for pass in PASSES {
         let gpu = DiagnosticPath::new(format!("render/{pass}/elapsed_gpu"));
@@ -208,7 +224,12 @@ fn report(
                 // The noise volumes are generated once, in the first frames: not a per-frame cost.
                 // The terrain repacks every frame while hydrology runs, so it counts.
                 if !pass.ends_with("_noise") {
-                    total += min;
+                    if pass.starts_with("elements_aeolian") {
+                        aeolian += min;
+                        total += min * AEOLIAN_FRAME_SHARE;
+                    } else {
+                        total += min;
+                    }
                     if pass.starts_with("elements_clouds") {
                         clouds += min;
                     }
@@ -222,6 +243,12 @@ fn report(
         }
     }
     println!("{line}  | total min {total:.3} ms GPU, clouds min {clouds:.3} ms GPU");
+    if aeolian > 0.0 {
+        println!(
+            "aeolian: {aeolian:.3} ms per step (min), {:.3} ms per 60 Hz frame at 20 steps a second",
+            aeolian * AEOLIAN_FRAME_SHARE
+        );
+    }
     let mut scene = String::from("scene:");
     for pass in SCENE_PASSES {
         let gpu = DiagnosticPath::new(format!("render/{pass}/elapsed_gpu"));

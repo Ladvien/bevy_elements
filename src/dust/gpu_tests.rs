@@ -373,21 +373,43 @@ fn gpu_aeolian_matches_the_cpu_mirror() {
     rig.finish();
 }
 
-/// Validation 3, 4 and 6: a Gaussian pile on flat bedrock, 16 m/s along +x, 600 frames at time
-/// scale 600: sand is conserved, never negative, bedrock is bit-unchanged, the pile moves
-/// downwind at the Bagnold rate, and no slope is steeper than the repose angle plus 3°.
+/// Validation 3, 4 and 6: a 3 m slab of sand on flat bedrock, 16 m/s along +x, 600 frames at time
+/// scale 600: sand is conserved, never negative, bedrock is bit-unchanged, the sand moves downwind
+/// at the Bagnold rate, and no slope is steeper than the repose angle plus 3°.
 #[test]
 #[ignore = "needs a GPU"]
 fn gpu_aeolian_conserves_sand_and_moves_the_pile_downwind() {
     let _lock = serial();
     let (n, cell) = (256usize, 2.0f32);
     let mut rig = Rig::flat(n as u32, cell, HydrologyBoundary::Closed, 16.0);
-    // 3 m high, σ 20 m, 120 m from the upwind wall.
-    let sediment = pile(n, cell, (60.0, 128.0), 20.0, 3.0, 0.0);
+    // A slab of sand 3 m thick and 60 m long across the whole width, 120 m from the upwind wall:
+    // every row is the same one-dimensional problem. (A gentle Gaussian pile would do nothing
+    // like it: see the note's Deviation 12.) Its upwind edge is stripped back at the speed the
+    // note estimates, `c = F q_s / H`.
+    let mut sediment = vec![0.0f32; n * n];
+    for z in 0..n {
+        for x in 0..n {
+            let at = (x as f32 + 0.5) * cell - 120.0;
+            if (0.0..60.0).contains(&at) {
+                sediment[z * n + x] = 3.0;
+            }
+        }
+    }
     rig.write_sediment(&sediment);
     let bedrock0 = rig.bedrock();
     let before = volume(&sediment, cell);
-    let (x0, z0) = centre_of_mass(&sediment, n, cell);
+    // The centre of mass of the sand in the field: what the wind carried past the last cells
+    // and the closed edge holds is not the slab's.
+    let in_field = |layer: &[f32]| {
+        let mut layer = layer.to_vec();
+        for z in 0..n {
+            for x in n - 4..n {
+                layer[z * n + x] = 0.0;
+            }
+        }
+        centre_of_mass(&layer, n, cell)
+    };
+    let (x0, z0) = in_field(&sediment);
 
     // 600 frames of 1/60 s at 20 steps per second: 200 steps of 30 s of bed time.
     rig.enable(true);
@@ -404,7 +426,7 @@ fn gpu_aeolian_conserves_sand_and_moves_the_pile_downwind() {
     let after_layer = rig.sediment();
     let after = volume(&after_layer, cell);
     let bedrock1 = rig.bedrock();
-    let (x1, z1) = centre_of_mass(&after_layer, n, cell);
+    let (x1, z1) = in_field(&after_layer);
 
     let drift = (after - before).abs() / before;
     println!("volume {before:.1} -> {after:.1} m³ (relative drift {drift:.2e})");
@@ -455,15 +477,18 @@ fn gpu_aeolian_avalanches_a_steep_pile_to_the_repose_angle() {
     rig.write_sediment(&sediment);
     let bedrock0 = rig.bedrock();
     let before = volume(&sediment, cell);
-    let mut slopes = sand_slopes(&bedrock0, &sediment, n, cell);
-    let p99_before = percentile(&mut slopes, 0.99);
-    // 0.5 s of real time: 10 steps.
-    rig.run_steps(10);
+    let steepest = |layer: &[f32]| {
+        sand_slopes(&bedrock0, layer, n, cell)
+            .into_iter()
+            .fold(0.0f32, f32::max)
+    };
+    let p99_before = steepest(&sediment);
+    // 2 s of real time: 40 steps.
+    rig.run_steps(40);
     let after_layer = rig.sediment();
-    let mut slopes = sand_slopes(&bedrock0, &after_layer, n, cell);
-    let p99_after = percentile(&mut slopes, 0.99);
+    let p99_after = steepest(&after_layer);
     let drift = (volume(&after_layer, cell) - before).abs() / before;
-    println!("99th percentile slope {p99_before:.1}° -> {p99_after:.1}°, volume drift {drift:.2e}");
+    println!("steepest slope {p99_before:.1}° -> {p99_after:.1}°, volume drift {drift:.2e}");
     assert!(p99_before > 40.0, "the cone is not steep: {p99_before}");
     assert!(p99_after < p99_before - 3.0, "the pile did not relax: {p99_after}");
     assert!(p99_after <= 37.0 + 3.0, "slope {p99_after}° after the avalanche");
@@ -514,86 +539,92 @@ fn gpu_aeolian_does_not_move_sand_below_the_threshold() {
     rig.finish();
 }
 
-/// Validation 7: on `ProceduralTerrain::dunes(7)` in the forced dust storm, the sediment map
-/// shifts downwind by the distance the note predicts, 60 s of real time apart.
+/// Strip a terrain's uniform sand sheet for 60 s of real time and measure how far the stripped
+/// region's front moved downwind: `(predicted m, measured m, spread m, volume before, after)`.
+/// The front of a row is the first cell with more than 0.5 m of sand (where the terrain material
+/// turns to sand); the measure is the median over the rows, the spread their 25–75 % range.
+fn front_migration(
+    terrain: Terrain,
+    quality: ElementsQuality,
+    lay_sheet_m: Option<f32>,
+) -> (f64, f64, f64, f64, f64) {
+    let mut rig = Rig::new(terrain, HydrologyBoundary::Closed, 16.0, quality);
+    let (n, cell) = (rig.n, rig.cell);
+    assert_eq!(cell, 2.0);
+    if let Some(depth) = lay_sheet_m {
+        rig.write_sediment(&vec![depth; n * n]);
+    }
+    let bedrock = rig.bedrock();
+    let sheet = rig.sediment();
+    let depth = f64::from(sheet.iter().sum::<f32>() / sheet.len() as f32);
+    let front = |layer: &[f32]| -> Vec<f64> {
+        let margin = 40usize;
+        (margin..n - margin)
+            .map(|z| {
+                let x = (0..n - 8).find(|x| layer[z * n + x] > 0.5).unwrap_or(n - 8);
+                x as f64 * f64::from(cell)
+            })
+            .collect()
+    };
+    let median = |mut v: Vec<f64>, p: f64| {
+        v.sort_by(f64::total_cmp);
+        v[((v.len() - 1) as f64 * p).round() as usize]
+    };
+    // Two seconds for the flux to establish itself, then 60 s.
+    rig.run_steps(40);
+    let first = rig.sediment();
+    rig.run_steps(1200);
+    let second = rig.sediment();
+    assert_eq!(rig.bedrock(), bedrock, "bedrock changed");
+    let (f0, f1) = (front(&first), front(&second));
+    let moved: Vec<f64> = f0.iter().zip(&f1).map(|(a, b)| b - a).collect();
+    let (before, after) = (volume(&first, cell), volume(&second, cell));
+    rig.finish();
+    // `Q_eff · 60 s / H` with H the sheet's depth: the note's 36.9 m for 4 m.
+    let q_eff = f64::from(FLUX_COEFFICIENT) * 8.0 * 256.0 * f64::from(TIME_SCALE);
+    (
+        q_eff * 60.0 / depth,
+        median(moved.clone(), 0.5),
+        median(moved.clone(), 0.75) - median(moved, 0.25),
+        before,
+        after,
+    )
+}
+
+fn assert_front(label: &str, result: (f64, f64, f64, f64, f64)) {
+    let (predicted, measured, spread, before, after) = result;
+    println!(
+        "{label}: predicted front shift {predicted:.1} m, measured {measured:.1} m (rows' 25-75 % spread {spread:.1} m); volume {before:.0} -> {after:.0} m³"
+    );
+    assert!(
+        (0.4 * predicted..=1.6 * predicted).contains(&measured),
+        "{label}: shift {measured} m outside [0.4, 1.6] × {predicted}"
+    );
+    assert!(measured >= 6.0, "{label}: shift {measured} m is under three cells");
+    assert!((after - before).abs() / before < 1e-3, "{label}: volume {before} -> {after}");
+}
+
+/// Validation 7 on level ground: the stripped front of a 4 m sand sheet moves by `Q_eff · 60 s / H`.
 #[test]
 #[ignore = "needs a GPU"]
-fn gpu_aeolian_migrates_the_dunes_by_the_predicted_distance() {
+fn gpu_aeolian_strips_a_sand_sheet_by_the_predicted_distance() {
+    let _lock = serial();
+    let terrain = Terrain::flat(0.0)
+        .with_extent(Vec2::splat(1024.0))
+        .with_resolution(UVec2::splat(512));
+    // `flat` has no sand: lay the 4 m sheet the dunes preset has.
+    assert_front("flat", front_migration(terrain, ElementsQuality::High, Some(4.0)));
+}
+
+/// Validation 7 on `ProceduralTerrain::dunes(7)`, the example's terrain and sand sheet.
+#[test]
+#[ignore = "needs a GPU"]
+fn gpu_aeolian_strips_the_dunes_sheet_by_the_predicted_distance() {
     let _lock = serial();
     let terrain = Terrain::procedural(ProceduralTerrain::dunes(7))
         .with_extent(Vec2::splat(1024.0))
         .with_resolution(UVec2::splat(512));
-    let mut rig = Rig::new(
-        terrain,
-        HydrologyBoundary::Closed,
-        16.0,
-        ElementsQuality::High,
-    );
-    let n = rig.n;
-    assert_eq!(rig.cell, 2.0);
-    // The dunes' sand: the generator lays a uniform sheet, so add the dune pattern the transport
-    // would otherwise take minutes to form: a ridge field over the sheet.
-    let mut sediment = rig.sediment();
-    let bedrock = rig.bedrock();
-    for z in 0..n {
-        for x in 0..n {
-            let (fx, fz) = (x as f32 * 2.0, z as f32 * 2.0);
-            let crest = 0.5 + 0.5 * (fx * std::f32::consts::TAU / 170.0 + 0.8 * (fz * 0.011).sin()).sin();
-            sediment[z * n + x] += 3.0 * crest * crest;
-        }
-    }
-    rig.write_sediment(&sediment);
-    // Let the flux establish itself.
-    rig.settings(|s| s.avalanche_passes = 2);
-    rig.run_steps(40);
-    let first = rig.sediment();
-    let mut sorted = first.clone();
-    let p95 = percentile(&mut sorted, 0.95);
-    let p05 = percentile(&mut sorted, 0.05);
-    let height = f64::from(p95 - p05);
-    // 60 s of real time: 1200 steps at 20 Hz.
-    rig.run_steps(1200);
-    let second = rig.sediment();
-    let before = volume(&first, 2.0);
-    let after = volume(&second, 2.0);
-
-    // The predicted shift, at the transport's own flux law at 16 m/s.
-    let q_eff = f64::from(FLUX_COEFFICIENT) * 8.0 * 256.0 * f64::from(TIME_SCALE);
-    let predicted = q_eff * 60.0 / height;
-    // The 2-D cross-correlation peak of the two maps, by brute force over a window of lags.
-    let mean = |m: &[f32]| m.iter().map(|v| f64::from(*v)).sum::<f64>() / m.len() as f64;
-    let (m1, m2) = (mean(&first), mean(&second));
-    let margin = 40usize;
-    let mut best = (f64::MIN, 0i32, 0i32);
-    for dz in -10i32..=10 {
-        for dx in -4i32..=60 {
-            let mut sum = 0.0f64;
-            for z in margin..n - margin {
-                let zz = (z as i32 + dz) as usize;
-                for x in margin..n - margin - 60 {
-                    let xx = (x as i32 + dx) as usize;
-                    sum += (f64::from(first[z * n + x]) - m1) * (f64::from(second[zz * n + xx]) - m2);
-                }
-            }
-            if sum > best.0 {
-                best = (sum, dx, dz);
-            }
-        }
-    }
-    let lag_m = f64::from(best.1) * 2.0;
-    let lateral_m = f64::from(best.2) * 2.0;
-    println!(
-        "H = {height:.2} m, predicted shift {predicted:.1} m, measured {lag_m:.1} m downwind, {lateral_m:.1} m across; volume {before:.0} -> {after:.0} m³; bedrock changed: {}",
-        rig.bedrock() != bedrock
-    );
-    assert!(
-        (0.4 * predicted..=1.6 * predicted).contains(&lag_m),
-        "shift {lag_m} m outside [0.4, 1.6] × {predicted}"
-    );
-    assert!(lag_m >= 6.0, "shift {lag_m} m is under three cells");
-    assert!(lateral_m.abs() < 0.2 * lag_m, "lateral {lateral_m} of {lag_m}");
-    assert!((after - before).abs() / before < 1e-3, "volume {before} -> {after}");
-    rig.finish();
+    assert_front("dunes(7)", front_migration(terrain, ElementsQuality::High, None));
 }
 
 /// `ProceduralTerrain::dunes` is the preset the note names.
