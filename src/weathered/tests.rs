@@ -200,6 +200,14 @@ fn ripples_follow_lagardes_layers() {
     assert!(peak > 0.15, "a ring is visible: peak {peak}");
     println!("peak ripple normal offset of one layer: {peak:.4} (strength 0.35)");
 
+    // The four layers add.
+    let (phases, weights) = ([0.1, 0.4, 0.7, 0.9], mirror::ripple_weights(1.0));
+    let xz = Vec2::new(0.13, 0.29);
+    let sum: Vec2 = (0..4)
+        .map(|k| mirror::ripple_layer(xz, k as u32, phases[k], weights[k]))
+        .sum();
+    assert_eq!(mirror::ripple_offset(xz, phases, weights), sum);
+
     // Phases are f64 values, continuous across an hour wrap and a day wrap, and each layer's
     // period is 1 / (1.6 · TimeMul).
     for t0 in [3599.99, 86_399.99, 1.0e6] {

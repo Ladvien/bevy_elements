@@ -2,7 +2,7 @@
 //! to check the shading numbers of `docs/research/wetness.md` and
 //! `docs/research/snow-cover.md`.
 
-use bevy::math::{IVec3, Vec2, Vec3};
+use bevy::math::{IVec3, Vec2, Vec3, Vec3Swizzles};
 
 use crate::gpu::noise_mirror::{hash33, perlin3_d};
 
