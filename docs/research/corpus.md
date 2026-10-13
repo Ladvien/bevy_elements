@@ -70,6 +70,10 @@ Not in the corpus (read from PDFs or URLs, see `clouds.md`): Hillaire 2016 *Phys
 |---|---|---|
 | `s2006-advances-materials-5`, `-6`, `s2006-advances-full-course-notes-pdf` | Tatarchuk 2006, *Artist-directable real-time rain rendering in city environments* (ToyShop): rain streaks, splashes, lightning, wet surfaces, puddles | seed `10.1145/1185657.1185828`, present under course stems |
 | `s2017-advances-pdf-slides-notes` | Wronski? 2017, *Optimized pixel-projected reflections for planar reflectors* | puddle reflections |
+| `book_real_time_rendering_4th_akenine` §§13.6, 13.6.2, 13.8, 5.5 | Real-Time Rendering 4th ed.: axial billboards, soft particles, particle systems, additive blending | rain streaks and snow sprites |
+| `kim-lin-2004` (home-still S3 PDF only, not converted) | Kim & Lin 2004, *Physically based animation and rendering of lightning* (`10.1109/pccga.2004.1348357`) | contrast to Reed & Wyvill |
+
+Not in the corpus (open PDFs or SciDB, under `/tmp/research/pdf`; see `precipitation.md`, `lightning.md`): Reed & Wyvill 1994, Garg & Nayar 2006/2007, Langer et al. 2004, Wang & Wade 2004 (the plan's seed `10.1145/1186223.1186241`), Uijlenhoet 2001, Kanazawa & Uchida 2025, Rasmussen et al. 1999, Poelman et al. 2021, Rakov. The library has no other precipitation or lightning rendering work.
 
 ### Terrain and LOD (M3)
 
