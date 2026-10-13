@@ -61,9 +61,10 @@ fn finish(app: &mut App) {
     app.world_mut().write_message(AppExit::Success);
 }
 
-/// Update until `done` holds (at most 20 s of wall time).
+/// Update until `done` holds (at most 60 s of wall time: a readback on a GPU shared with other
+/// work can take over 20 s).
 fn run_until(app: &mut App, what: &str, mut done: impl FnMut(&mut App) -> bool) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
     while std::time::Instant::now() < deadline {
         app.update();
         if done(app) {
