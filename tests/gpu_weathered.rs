@@ -86,16 +86,13 @@ fn rig() -> Rig {
             .add(Cuboid::new(6.0, 6.0, 6.0));
         let (target, image) = {
             let mut images = world.resource_mut::<Assets<Image>>();
-            let target = {
-                let handle = images.add(Image::new_target_texture(
-                    SIZE,
-                    SIZE,
-                    bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
-                    None,
-                ));
-                (bevy::camera::RenderTarget::Image(handle.clone().into()), handle)
-            };
-            target
+            let handle = images.add(Image::new_target_texture(
+                SIZE,
+                SIZE,
+                bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+                None,
+            ));
+            (bevy::camera::RenderTarget::Image(handle.clone().into()), handle)
         };
         let camera = world
             .spawn((
@@ -139,20 +136,11 @@ fn rig() -> Rig {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum View {
-    /// Straight down: the cubes' top faces, `n_y = 1`.
-    Top,
-    /// From +Z: the cubes' walls, `n_y = 0`.
-    Wall,
-}
-
 impl Rig {
-    fn set_view(&mut self, view: View) {
-        let transform = match view {
-            View::Top => Transform::from_xyz(0.0, 30.0, 0.0).looking_at(Vec3::ZERO, Vec3::NEG_Z),
-            View::Wall => Transform::from_xyz(0.0, 3.0, 30.0).looking_at(Vec3::new(0.0, 3.0, 0.0), Vec3::Y),
-        };
+    /// From +Z: the cubes' walls, `n_y = 0` (the rig starts looking straight down at their tops).
+    fn look_at_the_walls(&mut self) {
+        let transform =
+            Transform::from_xyz(0.0, 3.0, 30.0).looking_at(Vec3::new(0.0, 3.0, 0.0), Vec3::Y);
         *self
             .app
             .world_mut()
@@ -294,7 +282,7 @@ fn weathered_tops_match_the_plain_material_with_the_notes_numbers() {
 fn walls_streak_in_rain_and_stay_bare_in_snow() {
     let _lock = serial();
     let mut rig = rig();
-    rig.set_view(View::Wall);
+    rig.look_at_the_walls();
 
     let region = |image: &[u8]| -> Vec<([u8; 3], [u8; 3])> {
         let mut out = Vec::new();

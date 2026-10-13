@@ -141,7 +141,13 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<WeatheredMaterial>>,
 ) {
-    commands.spawn(camera(Vec3::new(0.0, 4.5, -14.0), Vec3::new(2.0, 3.5, 24.0)));
+    // `ELEMENTS_VIEW=wall` stands close to a brick wall (the rain streaks); the default sees the
+    // whole town from above.
+    let (eye, target) = match std::env::var("ELEMENTS_VIEW").as_deref() {
+        Ok("wall") => (Vec3::new(-12.0, 2.5, 8.0), Vec3::new(-12.0, 2.5, 22.0)),
+        _ => (Vec3::new(0.0, 12.0, -20.0), Vec3::new(0.0, 2.0, 26.0)),
+    };
+    commands.spawn(camera(eye, target));
     if let Some(preset) = fixed_preset() {
         commands.queue(move |world: &mut World| {
             world
@@ -167,37 +173,37 @@ fn setup(
     // Houses: brick, plaster, and a timber shed.
     b.house(
         Vec3::new(9.0, 5.0, 7.0),
-        Vec2::new(-12.0, 22.0),
+        Vec2::new(-12.0, 24.0),
         Color::srgb(0.55, 0.26, 0.20),
         Color::srgb(0.22, 0.20, 0.20),
     );
     b.house(
         Vec3::new(7.0, 8.0, 7.0),
-        Vec2::new(-26.0, 32.0),
+        Vec2::new(-26.0, 36.0),
         Color::srgb(0.72, 0.64, 0.48),
         Color::srgb(0.30, 0.16, 0.12),
     );
     b.house(
         Vec3::new(5.0, 3.0, 4.0),
-        Vec2::new(-3.0, 14.0),
+        Vec2::new(-20.0, 12.0),
         Color::srgb(0.38, 0.27, 0.16),
         Color::srgb(0.20, 0.20, 0.22),
     );
 
     // A metal box and a glazed one: low porosity, so they gloss but do not darken.
     let metal = b.material(Color::srgb(0.65, 0.66, 0.70), 0.35, 1.0, 1.0);
-    b.cuboid(Vec3::new(2.5, 2.0, 2.5), Vec2::new(3.0, 12.0), metal);
+    b.cuboid(Vec3::new(2.5, 2.0, 2.5), Vec2::new(16.0, 12.0), metal);
     let glazed = b.material(Color::srgb(0.20, 0.45, 0.60), 0.35, 0.0, 1.0);
-    b.cuboid(Vec3::new(2.5, 2.0, 2.5), Vec2::new(7.0, 12.0), glazed);
+    b.cuboid(Vec3::new(2.5, 2.0, 2.5), Vec2::new(20.0, 12.0), glazed);
 
     // The pavilion: a flat roof (a `PrecipitationBlocker`, so no particle falls under it) over a
     // box and four posts whose exposure is 0, so they take no wetness, streaks or snow.
     let sheltered = b.material(Color::srgb(0.55, 0.26, 0.20), 0.9, 0.0, 0.0);
-    b.cuboid(Vec3::new(4.0, 2.5, 4.0), Vec2::new(16.0, 20.0), sheltered.clone());
+    b.cuboid(Vec3::new(4.0, 2.5, 4.0), Vec2::new(8.0, 22.0), sheltered.clone());
     for (dx, dz) in [(-5.0, -5.0), (5.0, -5.0), (-5.0, 5.0), (5.0, 5.0)] {
         b.cuboid(
             Vec3::new(0.4, 4.0, 0.4),
-            Vec2::new(16.0 + dx, 20.0 + dz),
+            Vec2::new(8.0 + dx, 22.0 + dz),
             sheltered.clone(),
         );
     }
@@ -210,12 +216,12 @@ fn setup(
             roof_half.z * 2.0,
         ))),
         MeshMaterial3d(roof_material),
-        Transform::from_xyz(16.0, 4.2, 20.0),
+        Transform::from_xyz(8.0, 4.2, 22.0),
         PrecipitationBlocker {
             half_extents: roof_half,
         },
     ));
     // The same box in the open, beside it, for comparison.
     let open = b.material(Color::srgb(0.55, 0.26, 0.20), 0.9, 0.0, 1.0);
-    b.cuboid(Vec3::new(4.0, 2.5, 4.0), Vec2::new(26.0, 20.0), open);
+    b.cuboid(Vec3::new(4.0, 2.5, 4.0), Vec2::new(-1.0, 22.0), open);
 }
