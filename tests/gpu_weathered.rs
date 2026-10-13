@@ -55,7 +55,16 @@ struct Rig {
 /// Two 6 m cubes, 8 m apart, the left weathered and the right plain, seen from straight above
 /// or from the front by an orthographic camera 16 m tall.
 fn rig() -> Rig {
+    rig_with(false)
+}
+
+/// The same rig, rendered by Bevy's deferred path when `deferred` (the extension supplies its own
+/// deferred fragment shader).
+fn rig_with(deferred: bool) -> Rig {
     let mut app = App::new();
+    if deferred {
+        app.insert_resource(bevy::pbr::DefaultOpaqueRendererMethod::deferred());
+    }
     app.add_plugins((support::headless_plugins(), WeatheredPlugin))
         .init_resource::<SurfaceWeathering>()
         .init_resource::<Pin>()
@@ -110,6 +119,13 @@ fn rig() -> Rig {
                 Transform::from_xyz(0.0, 30.0, 0.0).looking_at(Vec3::ZERO, Vec3::NEG_Z),
             ))
             .id();
+        if deferred {
+            world.entity_mut(camera).insert((
+                bevy::core_pipeline::prepass::DepthPrepass,
+                bevy::core_pipeline::prepass::DeferredPrepass,
+                Msaa::Off,
+            ));
+        }
         world.spawn((
             DirectionalLight {
                 illuminance: 2500.0,
@@ -291,6 +307,52 @@ fn weathered_tops_match_the_plain_material_with_the_notes_numbers() {
     let (sheltered, plain) = centres(&rig.render());
     assert_eq!(sheltered, plain, "exposure 0 under rain");
     println!("dry {l:?} snow {snowy:?} half {mixed:?} wet {wet:?}");
+    done(rig);
+}
+
+/// The deferred pipeline runs the extension's own deferred fragment (the base shader would drop
+/// the weather): snow and wetness reach the G-buffer, `exposure` 0 shelters, dry is plain.
+#[test]
+#[ignore = "needs a GPU"]
+fn deferred_tops_match_the_plain_material() {
+    let _lock = serial();
+    let mut rig = rig_with(true);
+    let base = BASE.to_linear();
+
+    let (l, r) = centres(&rig.render());
+    assert!(max_diff(l, r) <= 1, "deferred dry {l:?} vs plain {r:?}");
+
+    rig.set_weather(0.0, 1.0, 0.0);
+    rig.set_plain(snow_color(), 0.9);
+    let (snowy, plain_snow) = centres(&rig.render());
+    assert!(
+        max_diff(snowy, plain_snow) <= 2,
+        "deferred snow: {snowy:?} vs {plain_snow:?}"
+    );
+    assert!(snowy[0] > l[0] + 20, "snow is brighter: {snowy:?} vs {l:?}");
+
+    rig.set_weather(1.0, 0.0, 0.0);
+    rig.set_plain(
+        Color::from(LinearRgba::new(
+            base.red * 0.5,
+            base.green * 0.5,
+            base.blue * 0.5,
+            1.0,
+        )),
+        0.1,
+    );
+    let (wet, plain_wet) = centres(&rig.render());
+    assert!(
+        max_diff(wet, plain_wet) <= 2,
+        "deferred wet: {wet:?} vs {plain_wet:?}"
+    );
+    assert!(wet[0] < l[0], "wet is darker: {wet:?} vs {l:?}");
+
+    rig.set_exposure(0.0);
+    rig.set_plain(BASE, 0.9);
+    let (sheltered, plain) = centres(&rig.render());
+    assert!(max_diff(sheltered, plain) <= 1, "deferred exposure 0");
+    println!("deferred dry {l:?} snow {snowy:?} wet {wet:?}");
     done(rig);
 }
 
