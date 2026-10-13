@@ -22,7 +22,7 @@ fn pcg3d(v_in: UVec3) -> UVec3 {
     v
 }
 
-fn hash33(p: IVec3) -> Vec3 {
+pub(crate) fn hash33(p: IVec3) -> Vec3 {
     let w = p & IVec3::splat(NOISE_PERIOD - 1);
     let h: UVec3 = pcg3d(w.as_uvec3()) >> 8u32;
     h.as_vec3() * (1.0 / 16_777_216.0)
