@@ -79,6 +79,13 @@ pub fn fog_hue(sun_altitude_deg: f32, dust: f32) -> Vec3 {
     tinted.lerp(DUST_ALBEDO, dust.clamp(0.0, 1.0))
 }
 
+/// Single-scattering albedo of the haze: fog droplets' 0.95, falling to dust's 0.9 as `dust` goes
+/// from 0 to 1. Dust adds colour and a little absorption, not extinction: the weather's visibility
+/// is already the dust's extinction (`docs/research/dust.md` "Fog consistency").
+pub(crate) fn haze_albedo(dust: f32) -> f32 {
+    FOG_ALBEDO + (DUST_SINGLE_SCATTER - FOG_ALBEDO) * dust.clamp(0.0, 1.0)
+}
+
 /// `FogVolume::light_intensity` that makes the volume's sunlit in-scattering right at the camera.
 ///
 /// Bevy attenuates the light reaching each fog sample by `exp(−density · R)`, with `R` the
@@ -259,7 +266,7 @@ fn update_volume(
     );
     let precipitation_share =
         split.precipitation / (MEAN_NOISE_FACTOR * split.haze + split.precipitation).max(1e-9);
-    let haze_albedo = FOG_ALBEDO + (DUST_SINGLE_SCATTER - FOG_ALBEDO) * dust;
+    let haze_albedo = haze_albedo(dust);
     let albedo = haze_albedo + (1.0 - haze_albedo) * precipitation_share;
     volume.absorption = 1.0 - albedo;
     volume.scattering = albedo;
@@ -398,6 +405,29 @@ mod tests {
         assert!((fog_hue(45.0, 1.0) - DUST_ALBEDO).length() < 1e-6);
         assert_eq!(fog_hue(0.0, 0.0), FOG_COLOUR * crate::celestial::DUSK_TINT);
         assert_eq!(fog_hue(-20.0, 0.0), FOG_COLOUR);
+    }
+
+    /// `dust.md` Validation 9: the dust storm's haze is the preset's visibility and nothing more,
+    /// with albedo and colour moved toward the dust's.
+    #[test]
+    fn a_dust_storm_changes_the_haze_colour_and_albedo_not_its_extinction() {
+        use crate::precipitation::model::precipitation_split;
+        // Preset: visibility 800 m, no precipitation, dust 0.9.
+        let sigma_v = extinction_for_visibility(800.0);
+        assert!((sigma_v - 4.890e-3).abs() < 1e-6, "{sigma_v}");
+        let split = precipitation_split(800.0, 0.0, 0.0);
+        // The density kernel's haze amplitude is `split.haze`, with or without dust: no dust input.
+        assert_eq!(split.haze, sigma_v);
+        assert_eq!(split.precipitation, 0.0);
+        // Albedo 0.95 → 0.9 with dust (0.905 at the preset's 0.9), colour toward the dust's.
+        assert_eq!(haze_albedo(0.0), FOG_ALBEDO);
+        assert!((haze_albedo(0.9) - 0.9).abs() < 0.006, "{}", haze_albedo(0.9));
+        assert!((haze_albedo(1.0) - DUST_SINGLE_SCATTER).abs() < 1e-6);
+        let colour = Vec3::ONE.lerp(DUST_ALBEDO, 0.9);
+        assert!((colour - Vec3::new(0.784, 0.64, 0.478)).length() < 1e-3, "{colour}");
+        // The camera's distance fog takes the same hue at the preset's dust.
+        let hue = fog_hue(45.0, 0.9);
+        assert!(hue.x > hue.y && hue.y > hue.z, "{hue}");
     }
 
     /// CPU transliteration of `fog_density` in `density.wesl` with the neutral weather map

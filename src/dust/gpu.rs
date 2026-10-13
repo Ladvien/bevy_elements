@@ -51,8 +51,7 @@ struct DustUniforms {
 
 #[derive(Resource)]
 struct DustBindGroups {
-    /// `[step reads q_a, step reads q_b]`.
-    aeolian: [BindGroup; 2],
+    aeolian: BindGroup,
     avalanche: BindGroup,
 }
 
@@ -129,8 +128,8 @@ fn prepare(
         Some(thermal_a),
         Some(thermal_b),
         Some(cap),
-        Some(q_a),
-        Some(q_b),
+        Some(q_x),
+        Some(q_z),
     ) = (
         get(&s.bedrock),
         get(&s.sediment),
@@ -161,22 +160,18 @@ fn prepare(
     uniforms.avalanche.set(gpu.avalanche);
     uniforms.avalanche.write_buffer(&device, &queue);
 
-    let aeolian_layout = cache.get_bind_group_layout(&pipelines.capacity.layout);
-    let aeolian = |q_in: &bevy::render::render_resource::Buffer,
-                   q_out: &bevy::render::render_resource::Buffer| {
-        device.create_bind_group(
-            "elements_aeolian",
-            &aeolian_layout,
-            &BindGroupEntries::sequential((
-                &uniforms.aeolian,
-                bedrock.as_entire_buffer_binding(),
-                sediment.as_entire_buffer_binding(),
-                cap.as_entire_buffer_binding(),
-                q_in.as_entire_buffer_binding(),
-                q_out.as_entire_buffer_binding(),
-            )),
-        )
-    };
+    let aeolian = device.create_bind_group(
+        "elements_aeolian",
+        &cache.get_bind_group_layout(&pipelines.capacity.layout),
+        &BindGroupEntries::sequential((
+            &uniforms.aeolian,
+            bedrock.as_entire_buffer_binding(),
+            sediment.as_entire_buffer_binding(),
+            cap.as_entire_buffer_binding(),
+            q_x.as_entire_buffer_binding(),
+            q_z.as_entire_buffer_binding(),
+        )),
+    );
     let avalanche = device.create_bind_group(
         "elements_aeolian_avalanche",
         &cache.get_bind_group_layout(&thermal.thermal_flux.layout),
@@ -190,7 +185,7 @@ fn prepare(
         )),
     );
     commands.insert_resource(DustBindGroups {
-        aeolian: [aeolian(q_a, q_b), aeolian(q_b, q_a)],
+        aeolian,
         avalanche,
     });
 }
@@ -230,7 +225,7 @@ fn dispatch(
     };
     let size = gpu.params.size;
     let (cx, cy) = (groups(size.x, 8), groups(size.y, 8));
-    let group = &bind_groups.aeolian[(gpu.parity & 1) as usize];
+    let group = &bind_groups.aeolian;
     let diagnostics = ctx.diagnostic_recorder();
     let diagnostics = diagnostics.as_deref();
     let mut run = |label: &'static str, record: &mut dyn FnMut(&mut bevy::render::render_resource::ComputePass)| {
@@ -252,7 +247,8 @@ fn dispatch(
     run("elements_aeolian_flux", &mut |pass| {
         pass.set_pipeline(flux);
         pass.set_bind_group(0, group, &[]);
-        pass.dispatch_workgroups(cx, cy, 1);
+        // One thread per row and per column.
+        pass.dispatch_workgroups(groups(size.x + size.y, 64), 1, 1);
     });
     run("elements_aeolian_move", &mut |pass| {
         pass.set_pipeline(mov);

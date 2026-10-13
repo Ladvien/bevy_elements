@@ -4,11 +4,12 @@
 //! angle of repose. The dust that hangs in the air is drawn by the precipitation particles
 //! (`kind = 2`) and the ground fog. See `docs/research/dust.md`.
 //!
-//! The transport (`aeolian.wesl`) runs outside hydrology's substep loop, at most
+//! The transport (`aeolian.wesl`: a capacity kernel, a flux scan along the wind and a bed update) runs outside hydrology's substep loop, at most
 //! [`DustSettings::step_hz`] times a second of real time and only while the wind can exceed the
 //! threshold, on the terrain's `sediment` layer; hydrology's thermal kernels do the avalanching.
-//! The bed advances by the real time since the last step times
-//! [`WorldClock::time_scale`](crate::WorldClock): dune evolution follows game time. Needs a
+//! The bed advances by the virtual time since the last step times
+//! [`WorldClock::time_scale`](crate::WorldClock): dune evolution follows game time. (A paused
+//! `WorldClock` freezes the sky, not the sand; pause `Time<Virtual>` to stop both.) Needs a
 //! [`Terrain`](crate::Terrain) and [`HydrologyPlugin`](crate::HydrologyPlugin) (the thermal
 //! kernels and their scratch buffers); idles without either. The edge is
 //! [`HydrologySettings::boundary`](crate::HydrologySettings).
@@ -33,7 +34,7 @@ use crate::gpu::grid::zeroed_buffer;
 use crate::hydrology::{HydroParams, HydrologyBoundary, HydrologySettings};
 use crate::plugin::{ElementsSystems, ensure_gpu_core};
 use crate::terrain::{TerrainGpu, TerrainState};
-use model::{StepClock, can_transport, relaxation};
+use model::{StepClock, can_transport};
 
 /// The aeolian transport's settings. Insert it before the plugin to override the defaults.
 #[derive(Resource, Clone, Debug, PartialEq, Reflect)]
@@ -95,16 +96,17 @@ pub(crate) struct AeolianParams {
     wind: Vec4,
     /// x: flux coefficient. y: transport threshold, m/s.
     law: Vec4,
-    /// x: `1 − exp(−Δ / L_sat)`. y: the bed's time step, s.
+    /// x: saturation length, m. y: the bed's time step, s.
     step: Vec4,
 }
 
-/// The scratch of the transport: the saturation flux and the flux ping-pong pair.
+/// The scratch of the transport: the saturation flux and the face fluxes along x and z.
 #[derive(Clone, Debug)]
 pub(crate) struct AeolianBuffers {
     /// `aeolian_cap`, `array<f32>`, m²/s.
     pub cap: Handle<ShaderBuffer>,
-    /// `aeolian_q`, the flux, a ping-pong pair of `array<f32>`, m²/s.
+    /// `aeolian_q_x` and `aeolian_q_z`, the flux through each cell's downwind x and z face,
+    /// `array<f32>`, m²/s.
     pub q: [Handle<ShaderBuffer>; 2],
 }
 
@@ -118,8 +120,6 @@ pub(crate) struct DustGpu {
     pub avalanche_passes: u32,
     /// Run a transport step this frame.
     pub run: bool,
-    /// Which of the flux pair the step reads: the step count modulo 2.
-    pub parity: u32,
     /// Steps recorded.
     pub executed: Arc<AtomicU64>,
     /// The render world has every pipeline and buffer it needs.
@@ -190,15 +190,14 @@ fn ensure_dust(
         buffers: AeolianBuffers {
             cap: zeroed_buffer(&mut buffers, "elements_aeolian_cap", cells * 4),
             q: [
-                zeroed_buffer(&mut buffers, "elements_aeolian_q_a", cells * 4),
-                zeroed_buffer(&mut buffers, "elements_aeolian_q_b", cells * 4),
+                zeroed_buffer(&mut buffers, "elements_aeolian_q_x", cells * 4),
+                zeroed_buffer(&mut buffers, "elements_aeolian_q_z", cells * 4),
             ],
         },
         params: AeolianParams::default(),
         avalanche: HydroParams::default(),
         avalanche_passes: 0,
         run: false,
-        parity: 0,
         executed: Arc::new(AtomicU64::new(0)),
         ready: Arc::new(AtomicBool::new(false)),
     });
@@ -230,7 +229,6 @@ fn run_dust(
     let wind = weather.wind_speed_ms;
     if !ready
         || !settings.enabled
-        || clock.paused
         || direction == Vec2::ZERO
         || !can_transport(wind, settings.threshold_ms)
     {
@@ -254,12 +252,7 @@ fn run_dust(
         pad1: UVec2::ZERO,
         wind: Vec4::new(direction.x, direction.y, wind, f32::from(u8::from(closed))),
         law: Vec4::new(settings.flux_coefficient, settings.threshold_ms, 0.0, 0.0),
-        step: Vec4::new(
-            relaxation(grid.cell_m, settings.saturation_length_m),
-            bed_s,
-            0.0,
-            0.0,
-        ),
+        step: Vec4::new(settings.saturation_length_m.max(1e-3), bed_s, 0.0, 0.0),
     };
     // The bedrock threshold is pinned out of reach: only loose sand avalanches.
     gpu.avalanche = HydroParams::avalanche(
@@ -269,7 +262,6 @@ fn run_dust(
         model::AVALANCHE_RATE,
     );
     gpu.avalanche_passes = settings.avalanche_passes;
-    gpu.parity = (runtime.scheduled % 2) as u32;
     gpu.run = true;
     runtime.scheduled += 1;
     runtime.bed_time_s += f64::from(bed_s);

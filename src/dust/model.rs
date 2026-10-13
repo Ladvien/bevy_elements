@@ -37,11 +37,6 @@ pub(crate) fn can_transport(wind_ms: f32, threshold_ms: f32) -> bool {
     wind_ms * SPEEDUP_MAX > threshold_ms
 }
 
-/// The factor `1 − e^{−Δ/L}` by which one upwind sweep relaxes the flux toward saturation.
-pub(crate) fn relaxation(cell_m: f32, saturation_length_m: f32) -> f32 {
-    1.0 - (-cell_m / saturation_length_m.max(1e-3)).exp()
-}
-
 /// Real time that has accumulated toward the next transport step.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct StepClock {
@@ -137,10 +132,6 @@ pub(crate) mod mirror {
             self.bedrock[k] + self.sediment[k]
         }
 
-        fn face_open(&self, x: i32, y: i32) -> bool {
-            self.inside(x, y) || self.boundary == Boundary::Open
-        }
-
         fn sign(&self) -> (i32, i32) {
             (
                 if self.dir[0] >= 0.0 { 1 } else { -1 },
@@ -191,67 +182,57 @@ pub(crate) mod mirror {
             cap
         }
 
-        /// One upwind sweep (`aeolian_flux`).
-        pub(crate) fn flux_sweep(&self, cap: &[f32], q_in: &[f32]) -> Vec<f32> {
-            let relax = 1.0 - (-self.cell / self.l_sat).exp();
+        /// The scans (`aeolian_flux`): the flux through every cell's downwind x face and z face.
+        pub(crate) fn flux_scan(&self, cap: &[f32]) -> (Vec<f32>, Vec<f32>) {
             let (sx, sy) = self.sign();
             let a = [self.dir[0].abs(), self.dir[1].abs()];
-            let mut out = vec![0.0; self.n * self.n];
-            for y in 0..self.n as i32 {
-                for x in 0..self.n as i32 {
-                    let k = self.idx(x, y);
-                    let q_x = if self.inside(x - sx, y) {
-                        q_in[self.idx(x - sx, y)]
-                    } else {
-                        0.0
-                    };
-                    let q_z = if self.inside(x, y - sy) {
-                        q_in[self.idx(x, y - sy)]
-                    } else {
-                        0.0
-                    };
-                    let arriving = a[0] * q_x + a[1] * q_z;
-                    let q_up = arriving / (a[0] + a[1]);
-                    let relaxed = q_up + (cap[k] - q_up) * relax;
-                    let mut weight = 0.0;
-                    if self.face_open(x + sx, y) {
-                        weight += a[0];
+            let mut qx = vec![0.0f32; self.n * self.n];
+            let mut qz = vec![0.0f32; self.n * self.n];
+            let closed = self.boundary == Boundary::Closed;
+            let n = self.n;
+            let scan = |axis: usize, line: usize, out: &mut Vec<f32>| {
+                let share = a[axis] / (a[0] + a[1]);
+                let rho = 1.0 - (-self.cell / (self.l_sat * a[axis].max(1e-3))).exp();
+                let forward = if axis == 0 { sx > 0 } else { sy > 0 };
+                let mut arriving = 0.0f32;
+                for m in 0..n {
+                    let i = if forward { m } else { n - 1 - m };
+                    let k = if axis == 0 { line * n + i } else { i * n + line };
+                    let mut q = 0.0;
+                    if a[axis] > 1e-6 {
+                        let relaxed = arriving + (cap[k] * a[axis] - arriving) * rho;
+                        let supply = arriving + self.sediment[k] * self.cell / self.dt_bed * share;
+                        q = relaxed.min(supply).max(0.0);
+                        if closed && m == n - 1 {
+                            q = 0.0;
+                        }
                     }
-                    if self.face_open(x, y + sy) {
-                        weight += a[1];
-                    }
-                    let mut q = relaxed;
-                    if weight > 1e-6 {
-                        q = q.min((arriving + self.sediment[k] * self.cell / self.dt_bed) / weight);
-                    }
-                    out[k] = q.max(0.0);
+                    out[k] = q;
+                    arriving = q;
                 }
+            };
+            for line in 0..n {
+                scan(0, line, &mut qx);
+                scan(1, line, &mut qz);
             }
-            out
+            (qx, qz)
         }
 
         /// The bed change (`aeolian_move`); returns the new sediment layer.
-        pub(crate) fn move_bed(&self, q: &[f32]) -> Vec<f32> {
+        pub(crate) fn move_bed(&self, qx: &[f32], qz: &[f32]) -> Vec<f32> {
             let (sx, sy) = self.sign();
-            let a = [self.dir[0].abs(), self.dir[1].abs()];
             let mut out = self.sediment.clone();
             for y in 0..self.n as i32 {
                 for x in 0..self.n as i32 {
                     let k = self.idx(x, y);
                     let mut arriving = 0.0;
                     if self.inside(x - sx, y) {
-                        arriving += a[0] * q[self.idx(x - sx, y)];
+                        arriving += qx[self.idx(x - sx, y)];
                     }
                     if self.inside(x, y - sy) {
-                        arriving += a[1] * q[self.idx(x, y - sy)];
+                        arriving += qz[self.idx(x, y - sy)];
                     }
-                    let mut leaving = 0.0;
-                    if self.face_open(x + sx, y) {
-                        leaving += a[0] * q[k];
-                    }
-                    if self.face_open(x, y + sy) {
-                        leaving += a[1] * q[k];
-                    }
+                    let leaving = qx[k] + qz[k];
                     out[k] = (self.sediment[k] + self.dt_bed / self.cell * (arriving - leaving))
                         .max(0.0);
                 }
@@ -266,24 +247,23 @@ pub(crate) mod mirror {
                 * f64::from(self.cell)
         }
 
-        /// The sediment that has left through open faces in one step, m³: what `move_bed` removes
-        /// beyond what it delivers, for the conservation check.
-        pub(crate) fn exported(&self, q: &[f32]) -> f64 {
+        /// The sediment that has left through open faces in one step, m³, for the conservation
+        /// check of an open boundary.
+        pub(crate) fn exported(&self, qx: &[f32], qz: &[f32]) -> f64 {
             let (sx, sy) = self.sign();
-            let a = [self.dir[0].abs(), self.dir[1].abs()];
             let mut lost = 0.0f64;
             for y in 0..self.n as i32 {
                 for x in 0..self.n as i32 {
                     let k = self.idx(x, y);
-                    if !self.inside(x + sx, y) && self.face_open(x + sx, y) {
-                        lost += f64::from(a[0] * q[k]);
+                    if !self.inside(x + sx, y) {
+                        lost += f64::from(qx[k]);
                     }
-                    if !self.inside(x, y + sy) && self.face_open(x, y + sy) {
-                        lost += f64::from(a[1] * q[k]);
+                    if !self.inside(x, y + sy) {
+                        lost += f64::from(qz[k]);
                     }
                 }
             }
-            // q is m²/s, over a face of one cell: m³/s · dt.
+            // q is m²/s through a face one cell wide: m³ over the step.
             lost * f64::from(self.cell) * f64::from(self.dt_bed)
         }
     }
@@ -431,16 +411,12 @@ mod tests {
         }
     }
 
-    fn run(field: &mut Field, steps: usize) -> Vec<f32> {
-        let cap = field.capacity();
-        let mut q_a = vec![0.0; field.n * field.n];
-        let mut last = q_a.clone();
+    fn run(field: &mut Field, steps: usize) {
         for _ in 0..steps {
-            last = field.flux_sweep(&cap, &q_a);
-            field.sediment = field.move_bed(&last);
-            q_a = last.clone();
+            let cap = field.capacity();
+            let (qx, qz) = field.flux_scan(&cap);
+            field.sediment = field.move_bed(&qx, &qz);
         }
-        last
     }
 
     /// Validation 3 (CPU mirror): a closed pile loses nothing, an open one only what crosses the
@@ -468,12 +444,11 @@ mod tests {
         let mut open = pile(128, 2.0, Boundary::Open);
         let before = open.volume();
         let mut gone = 0.0;
-        let cap = open.capacity();
-        let mut q = vec![0.0; 128 * 128];
         for _ in 0..400 {
-            q = open.flux_sweep(&cap, &q);
-            gone += open.exported(&q);
-            open.sediment = open.move_bed(&q);
+            let cap = open.capacity();
+            let (qx, qz) = open.flux_scan(&cap);
+            gone += open.exported(&qx, &qz);
+            open.sediment = open.move_bed(&qx, &qz);
         }
         assert!(gone > 0.0, "the pile never reached the edge in this run");
         let after = open.volume();
