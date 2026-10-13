@@ -96,7 +96,17 @@ Not in the corpus (open PDFs or SciDB, under `/tmp/research/pdf`; see `precipita
 | `10.48550_arxiv.2210.14496` | Lim et al. 2022, *Visually improved erosion algorithm for tile-based terrain* | |
 | `eth-cgl-sim_anim-Sol11b` | Solenthaler et al. 2011, SPH-based shallow water for real-time | shallow-water alternative |
 
-Mei 2007 (virtual pipes), Jákó & Tóth 2011, Galin 2019 and Cordonnier 2016 are not in the corpus.
+Fetched for M3 (2026-10-13), text from `pdftotext -layout` in `/tmp/research/pdf/<name>.txt`, not yet converted by scribe:
+
+| file | what it is | how obtained |
+|---|---|---|
+| `10.1109_pg.2007.15` | Mei, Decaudin & Hu 2007, *Fast hydraulic erosion simulation and visualization on GPU* (virtual pipes) | SciDB, ingested into home-still |
+| `jako2011` | Jákó 2011, *Fast hydraulic and thermal erosion on the GPU* (supervised by Tóth), CESCG 2011 | open PDF `old.cescg.org/CESCG-2011/papers/TUBudapest-Jako-Balazs.pdf`; the plan's DOI `10.2312/eg2011/short/057-060` is not this paper's (it is a CESCG student paper, not an EG 2011 short) and is absent from SciDB |
+| `10.1111_cgf.13657` | Galin et al. 2019, *A review of digital terrain modeling* | `hs paper download` |
+| `10.1111_cgf.12820` | Cordonnier et al. 2016, *Large scale terrain generation from tectonic uplift and fluvial erosion* | `hs paper download` |
+| `10.1111_j.1467-8659.2009.01361.x` | Krištof et al. 2009, *Hydraulic erosion using smoothed particle hydrodynamics* | SciDB, ingested |
+| `10.1145_97880.97884` | Kass & Miller 1990, *Rapid, stable fluid dynamics for computer graphics* | SciDB, ingested |
+| `chentanez2010` | Chentanez & Müller 2010, *Real-time simulation of large bodies of water with small scale details* (SCA) | open PDF `matthias-research.github.io/pages/publications/hfFluid.pdf` |
 
 ### Water rendering (M3)
 
