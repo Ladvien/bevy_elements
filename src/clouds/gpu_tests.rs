@@ -41,6 +41,10 @@ struct Case {
     wall: bool,
     /// Render into an unclamped `Rgba16Float` target with no tonemapping.
     linear_target: bool,
+    /// Civil date of the clock (2026-06-21 unless a test sets it).
+    date: CivilDate,
+    /// Vertical field of view in degrees, `None` for Bevy's default (45°).
+    fov_deg: Option<f32>,
 }
 
 impl Case {
@@ -54,6 +58,8 @@ impl Case {
             debug: CloudDebug::default(),
             wall: false,
             linear_target: false,
+            date: CivilDate::new(2026, 6, 21),
+            fov_deg: None,
         }
     }
 }
@@ -75,7 +81,7 @@ fn app(case: Case) -> App {
         )))
         .insert_resource(WorldClock {
             paused: true,
-            ..WorldClock::new(CivilDate::new(2026, 6, 21)).at_hour(case.hour)
+            ..WorldClock::new(case.date).at_hour(case.hour)
         })
         .insert_resource(case.quality)
         .insert_resource(case.debug.clone())
@@ -109,6 +115,12 @@ fn app(case: Case) -> App {
                     },
                     Transform::from_translation(case.position).looking_to(case.look, up),
                 ));
+                if let Some(fov) = case.fov_deg {
+                    camera.insert(Projection::Perspective(PerspectiveProjection {
+                        fov: fov.to_radians(),
+                        ..default()
+                    }));
+                }
                 if case.linear_target {
                     camera.insert((Tonemapping::None, DebandDither::Disabled, Hdr));
                 }
@@ -624,5 +636,182 @@ fn a_flash_lights_the_cloud_at_dusk_and_not_at_noon() {
         );
         assert!(lit / dark.max(1e-9) >= minimum_ratio);
         assert!((lit - dark).abs() / dark.max(1e-9) <= maximum_change);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Deviation 27: the far veil continues the marched deck
+// ---------------------------------------------------------------------------------------------
+
+/// Elevation, degrees, of the ray from a camera `camera_m` above the surface that enters the
+/// shell whose lower surface is `base_m` high at distance `distance_m`.
+fn entry_elevation_deg(base_m: f64, camera_m: f64, distance_m: f64) -> f64 {
+    let r = model::PLANET_RADIUS_M;
+    let (o, s) = (r + camera_m, r + base_m);
+    ((s * s - o * o - distance_m * distance_m) / (2.0 * o * distance_m))
+        .asin()
+        .to_degrees()
+}
+
+/// Chroma of a linear colour: (max − min) / max.
+fn chroma(c: [f32; 3]) -> f32 {
+    let max = c.iter().copied().fold(0.0, f32::max);
+    let min = c.iter().copied().fold(f32::MAX, f32::min);
+    (max - min) / max.max(1e-9)
+}
+
+/// The mean colour of the rows of a 64 × 64 target whose centres lie between `from_deg` and
+/// `to_deg` of elevation, for a camera at `pitch_deg` with vertical field of view `fov_deg`.
+fn rows_mean(
+    texels: &[[f32; 4]],
+    pitch_deg: f64,
+    fov_deg: f64,
+    from_deg: f64,
+    to_deg: f64,
+) -> [f32; 3] {
+    let half = (fov_deg.to_radians() / 2.0).tan();
+    let mut sum = [0.0f32; 3];
+    let mut n = 0.0;
+    for y in 0..64 {
+        let ndc = 1.0 - 2.0 * (y as f64 + 0.5) / 64.0;
+        let elevation = pitch_deg + (ndc * half).atan().to_degrees();
+        if elevation >= from_deg && elevation <= to_deg {
+            for x in 0..64 {
+                for c in 0..3 {
+                    sum[c] += texels[y * 64 + x][c];
+                }
+            }
+            n += 64.0;
+        }
+    }
+    assert!(n > 0.0, "no rows between {from_deg}° and {to_deg}°");
+    sum.map(|v| v / n)
+}
+
+/// Blue-ness of a linear colour: (b − r) / (r + g + b), positive for a bluish colour, negative
+/// for a peach one.
+fn tint(c: [f32; 3]) -> f32 {
+    (c[2] - c[0]) / (c[0] + c[1] + c[2]).max(1e-9)
+}
+
+/// Deviation 27: at full cover the far veil continues the marched deck. The camera looks at the
+/// elevation where the layer entry is 32 km away (the end of the march: below it only the veil
+/// shows) at 12° field of view; the rows 0.15–0.6° above that elevation show the fading deck and
+/// the rows 0.15–0.6° below it the veil. Their mean colours differ in luminance by under 20 %
+/// (measured 4–13 %, about the natural gradient of the aerial perspective over 0.9°; before
+/// Deviation 27 the step was 1.7× at sun 60° and 2.4× at 20°), in blue-ness by under 0.03
+/// (measured 0.013 at most; before: about 0.25, a peach band under a blue deck at 20°) and in
+/// chroma by under 0.05 (measured 0.032 at most; before: 0.23); the veil rows 1.5–2.1° below the
+/// boundary have the blue-ness and chroma of the deck rows 1.5–2.1° above it to within 0.06 and
+/// 0.1 (measured 0.034 and 0.068). Sun 60° and 20° (the second is the low winter sun of the
+/// `snowfall` example), Snow (cover 1) and Overcast (0.95), looking away from the sun and
+/// toward it.
+#[test]
+#[ignore = "needs a GPU"]
+fn the_far_veil_continues_the_marched_deck_at_full_cover() {
+    let fov_deg = 12.0_f64;
+    let camera_m = 2.0_f32;
+    for (preset, date, hour, sun_range) in [
+        (
+            WeatherPreset::Snow,
+            CivilDate::new(2026, 5, 1),
+            12.0,
+            58.0..63.0,
+        ),
+        (
+            WeatherPreset::Snow,
+            CivilDate::new(2026, 1, 15),
+            10.5,
+            17.0..23.0,
+        ),
+        (
+            WeatherPreset::Overcast,
+            CivilDate::new(2026, 4, 20),
+            12.0,
+            55.0..58.0,
+        ),
+        (
+            WeatherPreset::Overcast,
+            CivilDate::new(2026, 1, 15),
+            10.5,
+            17.0..23.0,
+        ),
+    ] {
+        let mut case = Case::sky(preset);
+        case.date = date;
+        case.hour = hour;
+        case.linear_target = true;
+        case.fov_deg = Some(fov_deg as f32);
+        let mut app = app(case);
+        run(&mut app, 4);
+        let sun = *app.world().resource::<crate::celestial::SunState>();
+        let base_m = app.world().resource::<crate::clouds::CloudLayer>().base_m;
+        assert!(
+            sun_range.contains(&sun.altitude_deg),
+            "sun {}°",
+            sun.altitude_deg
+        );
+        let boundary = entry_elevation_deg(f64::from(base_m), f64::from(camera_m), 32_000.0);
+        for rel_azimuth_deg in [180.0_f32, 0.0] {
+            let pitch = (boundary as f32).to_radians();
+            let azimuth = (sun.azimuth_deg + rel_azimuth_deg).to_radians();
+            let look = Dir3::new(Vec3::new(
+                azimuth.sin() * pitch.cos(),
+                pitch.sin(),
+                -azimuth.cos() * pitch.cos(),
+            ))
+            .expect("a unit look direction");
+            let mut cameras = app
+                .world_mut()
+                .query_filtered::<&mut Transform, With<ElementsCamera>>();
+            for mut transform in cameras.iter_mut(app.world_mut()) {
+                *transform = Transform::from_translation(Vec3::new(0.0, camera_m, 0.0))
+                    .looking_to(look, Vec3::Y);
+            }
+            // Past the 1 s smoothing of the light factor and a full accumulation window.
+            run(&mut app, 400);
+            let target = app.world().resource::<Target>().0.clone();
+            let texels = rgba16(&support::read_texture(&mut app, target, 64 * 8, 64));
+
+            let rows = |from: f64, to: f64| {
+                rows_mean(&texels, boundary, fov_deg, boundary + from, boundary + to)
+            };
+            let (deck, veil) = (rows(0.15, 0.6), rows(-0.6, -0.15));
+            let (deck_far, veil_far) = (rows(1.5, 2.1), rows(-2.1, -1.5));
+            let lum = |c: [f32; 3]| luminance([c[0], c[1], c[2], 0.0]);
+            let ratio = lum(veil) / lum(deck);
+            println!(
+                "{preset:?} sun {:.1}° rel {rel_azimuth_deg}: boundary {boundary:.2}°, luminance deck {:.3} veil {:.3} (ratio {ratio:.3}); tint deck {:.3} veil {:.3}, chroma deck {:.3} veil {:.3}; 1.5–2.1° away: tint {:.3} / {:.3}, chroma {:.3} / {:.3}",
+                sun.altitude_deg,
+                lum(deck),
+                lum(veil),
+                tint(deck),
+                tint(veil),
+                chroma(deck),
+                chroma(veil),
+                tint(deck_far),
+                tint(veil_far),
+                chroma(deck_far),
+                chroma(veil_far),
+            );
+            assert!(
+                (0.85..=1.2).contains(&ratio),
+                "{preset:?}: luminance ratio {ratio}"
+            );
+            assert!((tint(veil) - tint(deck)).abs() <= 0.03, "{preset:?}: tint");
+            assert!(
+                (chroma(veil) - chroma(deck)).abs() <= 0.05,
+                "{preset:?}: chroma"
+            );
+            assert!(
+                (tint(veil_far) - tint(deck_far)).abs() <= 0.06,
+                "{preset:?}: far tint"
+            );
+            assert!(
+                (chroma(veil_far) - chroma(deck_far)).abs() <= 0.1,
+                "{preset:?}: far chroma"
+            );
+        }
+        finish(&mut app);
     }
 }

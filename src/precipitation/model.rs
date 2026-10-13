@@ -415,6 +415,52 @@ mod tests {
         assert!((0.25 * coverage(d, 30.0, f) - 0.0125).abs() < 5e-4);
     }
 
+    /// CPU mirror of the snow stretch in `particle_vertex`: the world length of a flake's streak
+    /// for the relative speed `v_rel`, capped at `SNOW_MAX_STRETCH` diameters.
+    fn snow_streak_m(v_rel: f32, diameter_m: f32) -> f32 {
+        const SNOW_MAX_STRETCH: f32 = 1.0;
+        (v_rel / 60.0).min(SNOW_MAX_STRETCH * diameter_m)
+    }
+
+    /// Image of a flake at depth `z` moving across the view at `v_rel`: the capsule's total
+    /// length over its width, both in pixels. The width is the flake's own, at least two pixels
+    /// (`SNOW_MIN_HALF_WIDTH` = 1 px each side, as in the vertex shader).
+    fn snow_quad_ratio(v_rel: f32, diameter_m: f32, z: f32, focal_px: f32) -> f32 {
+        const SNOW_MIN_HALF_WIDTH: f32 = 1.0;
+        let half_width = (0.5 * diameter_m * focal_px / z).max(SNOW_MIN_HALF_WIDTH);
+        let length = snow_streak_m(v_rel, diameter_m) * focal_px / z;
+        (length + 2.0 * half_width) / (2.0 * half_width)
+    }
+
+    /// Deviation 17: a flake is a soft, slightly elongated disc, whatever the wind. The note's
+    /// streak `|v_rel| T` made a 6 mm flake in a 4 m/s wind 6.7 cm long (a 12:1 dash); the
+    /// capsule is now at most twice as long as it is wide at 4 and 14 m/s, and a flake moving
+    /// slower than the cap is stretched as the note says.
+    #[test]
+    fn a_snowflake_is_a_disc_of_bounded_elongation_in_any_wind() {
+        let f = 540.0 / 30f32.to_radians().tan();
+        for v_rel in [4.0_f32, 14.0] {
+            for d in [0.004_f32, 0.006, 0.008] {
+                // Without the cap: the streak the note's formula gives, in diameters.
+                assert!(v_rel / 60.0 / d > 8.0, "{v_rel} m/s, {d} m");
+                for z in [0.5_f32, 1.0, 2.0, 5.0, 10.0, 30.0] {
+                    let ratio = snow_quad_ratio(v_rel, d, z, f);
+                    assert!(
+                        (1.0..=2.0 + 1e-4).contains(&ratio),
+                        "{v_rel} m/s, d {d} m, z {z} m: length/width {ratio}"
+                    );
+                }
+                // A flake wider than its minimum is at its cap: exactly 2:1.
+                assert!((snow_quad_ratio(v_rel, d, 1.0, f) - 2.0).abs() < 1e-4);
+            }
+        }
+        // Slower than the cap the note's length stands: 1.7 mm at 0.1 m/s, 4.5 mm flake.
+        let slow = snow_streak_m(0.1, 0.0045);
+        assert!((slow - 0.1 / 60.0).abs() < 1e-7, "{slow}");
+        // Rain streaks are untouched (Validation 9): 9 m/s is 15 cm.
+        assert!((9.0_f32 / 60.0 - 0.150).abs() < 1e-3);
+    }
+
     /// Validation 10 (the CPU half): with 7 m/s wind and the 4.4 m/s mean fall speed a shaft
     /// leans atan(7 / 4.4) = 57.8° from vertical.
     #[test]

@@ -2,14 +2,16 @@
 
 > ⚠️ **Vibe Coded** — written by an AI agent working from a human's direction. It is used in a shipping game and covered by tests, but it has had no line-by-line human audit. Read it before you trust it.
 
-**Living environments for Bevy 0.20.** A sun and moon placed by real ephemerides, the bright-star sky, a seeded climate that schedules hourly weather, a GPU wind field, distance and ground fog, and exposure that keeps night looking like night. Simulation runs in compute shaders; gameplay asks the `Environment` system parameter and is answered from a throttled async readback.
+**Living environments for Bevy 0.20.** A sun and moon placed by real ephemerides, the bright-star sky, a seeded climate that schedules hourly weather, a GPU wind field, volumetric clouds that shade the ground, rain and snow, lightning and thunder, distance and ground fog, and exposure that keeps night looking like night. Simulation runs in compute shaders; gameplay asks the `Environment` system parameter and is answered from a throttled async readback.
 
 | | | |
 |---|---|---|
-| ![Solstice noon at latitude 45°: a 68° sun, short shadows](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/noon.png) | ![19:30 on the solstice: a 2° sun, long warm shadows, the sky graded to the horizon](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/sunset.png) | ![23:00: stars from the Yale Bright Star Catalogue, a half moon low in the east, moon shadows](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/night.png) |
-| Noon, 21 June, 45° N | Sunset 19:30 | 23:00, half moon |
-| ![The Fog preset: a bright ground-fog bank hiding everything past 100 m, blue sky overhead](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/fog.png) | ![The Clear preset of the same scene](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/clear.png) | ![bevy_flora trees in autumn colour moved by this crate's wind and rain](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/flora_wind.png) |
-| `Fog` preset | `Clear` preset | with `bevy_flora` |
+| ![Partly cloudy at 10:00: domed cumulus with sunlit tops over the test scene](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/clouds.png) | ![The same sky at sunset: cloud bases lit pink and orange from below, distant clouds fading into haze](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/cloud_sunset.png) | ![A thunderstorm at 23:00 three frames into a strike: the cloud deck lit from inside, wind-driven rain, the ground lit by the flash](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/storm.png) |
+| `PartlyCloudy`, 10:00 | `PartlyCloudy`, sunset | `Thunderstorm` at night, mid-flash |
+| ![The Rain preset at 15:00: rain streaks, splash rings on the ground, a roof with a blocker keeping the rain off](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/rain.png) | ![Snowfall: flakes and haze under a grey sky](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/snowfall.png) | ![An overcast noon: a grey deck, soft light, no hard shadows](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/overcast.png) |
+| `Rain` | `Snow` | `Overcast` |
+| ![23:00: stars from the Yale Bright Star Catalogue, a half moon low in the east, moon shadows](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/night.png) | ![The Fog preset: a bright ground-fog bank hiding everything past 100 m](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/fog.png) | ![bevy_flora trees in autumn colour moved by this crate's wind and rain](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/flora_wind.png) |
+| 23:00, half moon | `Fog` | with `bevy_flora` |
 
 Every system was studied in the home-still paper library first. The note for each one, in [`docs/research/`](docs/research), names the papers, the equations adopted, every deviation from the plan with its source, and the numbers the tests assert.
 
@@ -26,9 +28,10 @@ Every system was studied in the home-still paper library first. The note for eac
 | `PrecipitationPlugin` | `precipitation` | Rain and snow as a GPU particle set in a 60 m box around the camera (Marshall–Palmer drop sizes and fall speeds, wind-field advection, `PrecipitationBlocker` roofs, ground splashes), drawn soft-faded against the depth prepass; the far-field shafts and haze are part of `FogPlugin`'s density kernel |
 | `TerrainPlugin` | `terrain` | A heightfield `Terrain` (procedural presets, a height map or level ground) generated on the GPU into per-cell layers, drawn with a CDLOD patch pool and a slope/sediment layer-blending material, or shaded on your own mesh with `GroundExtension`; `Environment::terrain_height`; the wind solid mask and precipitation use its height |
 | `WeatheredPlugin` | `weathered` | `WeatheredMaterial` for any mesh: wet surfaces darken and gloss, rain streaks down walls, up-facing faces whiten under snow with `bevy_flora`'s curve, cloud shadows; one shared `ElementsGlobals` storage buffer, a per-material `exposure` for shelter |
+| `HydrologyPlugin` | `hydrology` | Flooding, rivers and lakes as one shallow-water field on the terrain grid (Mei et al. 2007 virtual pipes with a depth-dependent pipe area and Manning friction), `WaterSource` and `WaterSink`, rain split into rain and snow per cell, hydraulic erosion with flux-form sediment transport, thermal erosion, `ErodeTerrain` bakes, and `Environment::water_depth` / `water_velocity` |
 | `ElementsFloraPlugin` (feature `flora`) | `flora` | Drives `bevy_flora`'s wind, gusts, season and wetness, and `FloraGround` from the terrain's height snapshot |
 
-`ElementsPlugins` adds the first nine. Each is public on its own, so `ElementsPlugins.build().disable::<FogPlugin>()` works.
+`ElementsPlugins` adds every plugin above except `ElementsFloraPlugin`. Each is public on its own, so `ElementsPlugins.build().disable::<FogPlugin>()` works.
 
 ## Install
 
@@ -151,6 +154,27 @@ fn spawn(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials
 
 The shading is a public WESL import for your own shaders, `bevy_elements::surface_cover` (`weather_surface`, `mesh_snow_cover`, `rain_streak`, `ripple_offset`, `ElementsGlobals`): bind `ElementsGlobals`'s buffer at any slot. The forward and deferred passes are covered; the depth and normal prepass stays Bevy's, so SSAO reads the dry normal. Order-independent transparency, meshlets and forward decals are not weathered.
 
+### Hydrology and erosion
+
+`HydrologyPlugin` simulates water on the `Terrain`'s grid with Mei et al.'s virtual pipes, the pipe's cross-section taken from the local depth (so waves travel at 0.9 √(g d), not at a constant speed) and Manning friction (`HydrologySettings::manning_n`, 0.035). Time runs in fixed 20 ms substeps scheduled from *real* time (`HydrologySettings::time_scale`, independent of the `WorldClock`), at most `ElementsQuality::hydrology_substeps()` a frame (2 / 4 / 4 / 16), on a grid of at most `terrain_max_resolution()` cells per side (256 / 512 / 512 / 2048). The boundary is an open free overfall or a closed wall. Rain is the weather's, split into rain and snow per cell at that cell's lapse-rate temperature, delivered in quanta of at least 5 µm so it is never lost to f32 rounding, and shaded by `PrecipitationBlocker`s. `WaterSource` and `WaterSink` pour or drain a rate over the cells within a radius.
+
+```rust
+# use bevy::prelude::*;
+# use bevy_elements::*;
+fn pour_a_river(mut commands: Commands, mut bake: MessageWriter<ErodeTerrain>) {
+    // 50 m³/s over the cells within 5 m of this point; the weather's rain falls everywhere.
+    commands.spawn((
+        WaterSource { rate_m3_s: 50.0, radius_m: 5.0 },
+        Transform::from_xyz(-200.0, 4.0, 0.0),
+    ));
+    // Ten simulated minutes of erosion under 20 mm/h, at the quality's full substep rate.
+    // `TerrainBaked` follows when it is done.
+    bake.write(ErodeTerrain { duration_s: 600.0, rain_mm_h: 20.0 });
+}
+```
+
+`ErosionSettings` carries Mei's capacity law `K_c · max(sin α, min_tilt) · |v|`, dissolve and deposit (sediment first, then bedrock; sediment moves with the water through the same pipe fluxes, so solids are conserved to rounding) and thermal erosion every 4th substep (35° talus, bedrock above 45°). **Bare bedrock erodes at the capacity rate**: the `flood` valley's 50 m³/s river carves its bedrock by up to 7.9 m in 120 s of simulated time and arrives at a marker 100 m away after 63 s instead of 36 s, so set `ErosionSettings::enabled = false` for a flood that should not change the ground (the `flood` example does). `HydrologyStats` counts substeps and simulated time, for code that waits on them.
+
 ## Gameplay queries
 
 ```rust
@@ -168,6 +192,8 @@ fn seek_shelter(env: Environment) {
 ```
 
 `wind_at` answers from the GPU field as of the last readback (4 Hz by default, `ElementsReadback`) and falls back to the prevailing wind outside it or before the first readback; `snapshot_age` says how old the answer is.
+
+`water_depth(Vec2)` is the water above the ground at a world XZ: `None` until the first readback or off the terrain, `Some(0.0)` on dry ground. `water_velocity(Vec2)` is the depth-weighted flow velocity (half resolution). Both are bilinear samples of the last readback.
 
 ## Plays well with
 
@@ -208,25 +234,36 @@ Clouds at 1920 × 1080, PartlyCloudy (the scene the clouds note fixes for the be
 
 The budget is 1.0 ms at High. The weather map, shadow map, resolve and composite passes cost about 0.27 ms at every quality, so the qualities differ only in the march, and Low and Medium (both a quarter of the resolution) within the measurement's noise.
 
-Terrain at High (1024² cells, 2048 m, `hills(42)`), 3840 × 2160, the camera 30 m above the ground looking 20° above the horizon (about half the frame is ground), minimum over the diagnostic history with the GPU at 1800–1950 MHz: the generator and first pack (`elements_terrain`: generate, pack, flow pack, leaf bounds and readback kernels, once at spawn, then again only when hydrology or erosion changes a layer) 0.34 ms; the terrain drawn: Bevy's `main_opaque_pass_3d` 0.088 ms (mean 0.146) against 0.016 ms (0.025) for the flat test scene, and the depth prepass 0.005 ms (0.002 ms for the flat scene). The selection picks at most 133 patches at High over 1500 random cameras, and the pool update writes nothing for a patch that kept its slot and bounds.
+Terrain with 1024² cells over 2048 m (`hills(42)`; measured before High took Medium's 512² simulation size, below), 3840 × 2160, the camera 30 m above the ground looking 20° above the horizon (about half the frame is ground), minimum over the diagnostic history with the GPU at 1800–1950 MHz: the generator and first pack (`elements_terrain`: generate, pack, flow pack, leaf bounds and readback kernels, once at spawn, then again only when hydrology or erosion changes a layer) 0.34 ms; the terrain drawn: Bevy's `main_opaque_pass_3d` 0.088 ms (mean 0.146) against 0.016 ms (0.025) for the flat test scene, and the depth prepass 0.005 ms (0.002 ms for the flat scene). The selection picks at most 133 patches at High over 1500 random cameras, and the pool update writes nothing for a patch that kept its slot and bounds.
+
+Hydrology and erosion (`elements_hydrology`: every substep's two kernels, the thermal kernels on every 4th, and the readback kernels on a readback tick), minimum over the diagnostic history after 240 warm-up frames, a 2 km procedural terrain with a 50 m³/s `WaterSource`, the quality's full substeps per frame; the GPU held 1800–1950 MHz (P2) with the clocks logged in the same shell:
+
+| Quality | Grid | Substeps per frame | `elements_hydrology` | Terrain pack passes (`elements_terrain`) |
+|---|---|---|---|---|
+| Low | 256² | 2 | 0.033 ms | 0.022 ms |
+| Medium | 512² | 4 | 0.255 ms | 0.042 ms |
+| High | 512² | 4 | 0.258 ms | 0.043 ms |
+| Ultra | 2048² | 16 | 14.75 ms | 0.478 ms |
+
+The plan's budget for hydrology and erosion at High is 0.6 ms for 1024² at 8 substeps, which measures **1.86 ms** (0.23 ms per substep, 80 % of the card's memory bandwidth, as `docs/research/hydrology.md` predicted), so High takes Medium's values (512², 4 substeps; `ElementsQuality::terrain_max_resolution` and `hydrology_substeps`) and Ultra keeps the research resolution and 16 substeps (14.75 ms; it is for large budgets). A 600 s bake at High is 7500 frames: 125 s at 60 fps.
 
 ## Platforms
 
-Native (Vulkan, Metal, DX12) and wasm WebGPU. WebGL2 is unsupported: the simulation needs compute. Simulation state lives in storage buffers and published fields in write-only `rgba16float` storage textures: the wind kernels share one layout of seven storage buffers and one storage texture, the fog kernel one storage texture, inside WebGPU's default limits of 8 and 4 per stage (devices limited to the `downlevel` 4 storage buffers are not supported). GPU timestamps for the bench exist on Vulkan and DX12 only.
+Native (Vulkan, Metal, DX12) and wasm WebGPU. WebGL2 is unsupported: the simulation needs compute. Simulation state lives in storage buffers and published fields in write-only `rgba16float` storage textures: the wind kernels share one layout of seven storage buffers and one storage texture, the fog kernel one storage texture, inside WebGPU's default limits of 8 and 4 per stage (devices limited to the `downlevel` 4 storage buffers are not supported; the hydrology substep kernels bind exactly 8). The cloud kernels bind at most one storage texture and two storage buffers each, the precipitation kernel four storage buffers; the precipitation draw reads its particles in the vertex stage, which needs `DownlevelFlags::VERTEX_STORAGE` (every Vulkan, Metal, DX12 and WebGPU device has it). GPU timestamps for the bench exist on Vulkan and DX12 only.
 
 ## What it deliberately does not do
 
 - Trees, foliage, leaf colour and snow on branches: `bevy_flora` owns them.
 - Isosurface and voxel meshing: `isomesh` owns it.
 - Oceans and FFT waves.
-- Bit-deterministic GPU simulation. Astronomy, the weather scheduler and (from 0.2) lightning are deterministic and seeded; GPU results are not.
+- Bit-deterministic GPU simulation. Astronomy, the weather scheduler and lightning are deterministic and seeded; GPU results are not.
 - A Purkinje shift or other low-light colour change: exposure keeps night dark, but colour handling is left to the tonemapper.
 
 ## Compatibility
 
 | bevy_elements | bevy |
 |---|---|
-| 0.1 | 0.20 |
+| 0.1, 0.2 | 0.20 |
 
 ## Research
 
@@ -241,6 +278,8 @@ Native (Vulkan, Metal, DX12) and wasm WebGPU. WebGL2 is unsupported: the simulat
 - [Precipitation](docs/research/precipitation.md) — Marshall–Palmer drops, Garg & Nayar, Langer et al., Wang & Wade, Kanazawa & Uchida, Rasmussen et al., Tatarchuk.
 - [Clouds](docs/research/clouds.md) — Schneider 2015 and 2017 (Horizon Zero Dawn, Nubis), Hillaire 2016 and 2020, Högfeldt 2016, Patry 2021, Real-Time Rendering, Kasten & Czeplak 1980.
 - [Wetness, puddles and weathered materials](docs/research/wetness.md) — Lagarde 2013 (wet surfaces, rain), Jensen et al. 1999, Tatarchuk 2006, FAO-56; with [snow cover](docs/research/snow-cover.md) for the mesh curve.
+- [Hydrology](docs/research/hydrology.md) — Mei et al. 2007, Jákó 2011, Chentanez & Müller 2010, Kass & Miller 1990, Bates et al. 2010 / Cozzolino et al. 2020 (local-inertia pipes), FAO-56.
+- [Erosion](docs/research/erosion.md) — Mei et al. 2007, Jákó 2011, Musgrave et al. 1989, Krištof et al. 2009, Jain et al. 2024, Galin et al. 2019.
 
 ## Examples
 
@@ -252,12 +291,14 @@ Run with `cargo run --release --example <name>`. Every example takes `ELEMENTS_F
 | `terrain_tour` | The terrain presets; `ELEMENTS_PRESET=mountains`, `ELEMENTS_HOUR`, `ELEMENTS_EYE` / `ELEMENTS_LOOK` / `ELEMENTS_AGL`, `ELEMENTS_UNDERLAY=1` (a red plane under the terrain shows cracks) |
 | `external_ground` | A plain plane of your own shaded by `GroundExtension` over an `external()` terrain |
 | `day_night` | A solstice day at 45° N in two minutes; `ELEMENTS_HOUR=19.5` holds an hour |
-| `weather_tour` | Every preset for 20 s; `ELEMENTS_PRESET=Fog` holds one |
-| `storm` | A forced thunderstorm printing every strike and thunder; `ELEMENTS_HOUR=12` holds an hour, `ELEMENTS_STRIKE=1500` scripts a strike that far ahead on the last frame (for screenshots) |
+| `weather_tour` | Every preset for 20 s; `ELEMENTS_PRESET=Fog` holds one, `ELEMENTS_HOUR` holds an hour, `ELEMENTS_PITCH` / `ELEMENTS_HEADING` aim the camera (degrees) |
+| `storm` | A forced thunderstorm printing every strike and thunder; `ELEMENTS_HOUR=12` holds an hour, `ELEMENTS_STRIKE=1500` scripts a strike that far ahead on the last frame (for screenshots), `ELEMENTS_STRIKE_LEAD=3` that many frames earlier |
 | `rain` | Rain over a shelter with a blocker roof; `ELEMENTS_PRESET=Thunderstorm`, `ELEMENTS_HOUR=23` |
 | `snowfall` | The `Snow` preset (or `ELEMENTS_PRESET=Blizzard`); `ELEMENTS_HOUR` holds an hour |
 | `weathered_town` | Buildings in `WeatheredMaterial` cycling Rain then Snow, a pavilion with a `PrecipitationBlocker` roof over a sheltered (`exposure` 0) box; `ELEMENTS_PRESET`, `ELEMENTS_HOUR`, `ELEMENTS_SCALE` (clock speed, default 300), the clock keeps running because wetness and snow only build with game time |
 | `flora_wind` | `bevy_flora` trees in this crate's wind, season and rain (`--features flora`) |
+| `flood` | A V-shaped valley, a 50 m³/s `WaterSource` and rain; prints `Environment::water_depth` at a marker 100 m downstream every second; `G`/`H` double and halve the simulation speed |
+| `erosion_bake` | Mountains and `ErodeTerrain { duration_s: 600.0, rain_mm_h: 20.0 }`: `B` starts the bake, `ELEMENTS_BAKE=1` starts it at once (`ELEMENTS_BAKE_S`, `ELEMENTS_BAKE_MM_H`); for a before and after shot use `ELEMENTS_FRAMES=120` and `ELEMENTS_BAKE=1 ELEMENTS_FRAMES=7700` |
 | `bench_elements` | Per-pass GPU time; `ELEMENTS_QUALITY`, `ELEMENTS_RESOLUTION`, `ELEMENTS_PRESET`, `ELEMENTS_BLOCKERS`, `ELEMENTS_TERRAIN=hills\|mountains\|none` |
 
 ## License

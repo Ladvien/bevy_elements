@@ -153,7 +153,7 @@ pub(crate) struct BlockerGpu {
 
 impl BlockerGpu {
     /// The blocker for a box of `half_extents` placed by `transform`; `None` when degenerate.
-    fn new(half_extents: Vec3, transform: &GlobalTransform) -> Option<Self> {
+    pub(crate) fn new(half_extents: Vec3, transform: &GlobalTransform) -> Option<Self> {
         if half_extents.min_element() <= 0.0 || !half_extents.is_finite() {
             return None;
         }
@@ -174,7 +174,7 @@ impl BlockerGpu {
 
 /// The nearest [`MAX_PRECIPITATION_BLOCKERS`] of `items` to `camera`, by squared distance of
 /// the centre, ties by entity, so the set is deterministic.
-fn nearest_blockers(
+pub(crate) fn nearest_blockers(
     camera: Vec3,
     items: impl Iterator<Item = (Entity, BlockerGpu)>,
 ) -> Vec<BlockerGpu> {

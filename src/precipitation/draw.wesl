@@ -56,6 +56,12 @@ const PI: f32 = 3.14159265;
 const NEAR_FADE_START: f32 = 0.15;
 const NEAR_FADE_LENGTH: f32 = 0.35;
 const SNOW_ALPHA: f32 = 0.8;
+// A flake's image is its disc stretched by at most this many diameters along the relative
+// velocity (Deviation 17 of the research note): at most 2:1 head to tail.
+const SNOW_MAX_STRETCH: f32 = 1.0;
+// Half width, px, below which a flake's image does not shrink: a soft blob (a rain streak's is
+// half a pixel).
+const SNOW_MIN_HALF_WIDTH: f32 = 1.0;
 const SPLASH_ALPHA: f32 = 0.6;
 const SPLASH_QUAD: f32 = 1.3;
 
@@ -121,8 +127,20 @@ fn particle_vertex(
     let near = max(view.clip_from_view[3][2], 1e-3);
 
     let v_rel = p.vel - draw.camera.xyz;
+    var diameter_m: f32;
+    if kind == 0u {
+        diameter_m = drop_diameter_mm(particle_rand(ii, epoch, 0u), draw.rain.x) * 1e-3;
+    } else {
+        diameter_m = (4.0 + 4.0 * particle_rand(ii, epoch, 1u).w) * 1e-3;
+    }
+    // The world streak: the drop's path in the exposure time. A flake is a soft disc: its
+    // streak is capped at `SNOW_MAX_STRETCH` diameters, so wind does not draw it as a dash.
+    var streak = v_rel * draw.rain.z;
+    if kind == 1u {
+        streak *= min(1.0, SNOW_MAX_STRETCH * diameter_m / max(length(streak), 1e-6));
+    }
     var head = view.clip_from_world * vec4<f32>(p.pos, 1.0);
-    var tail = view.clip_from_world * vec4<f32>(p.pos - v_rel * draw.rain.z, 1.0);
+    var tail = view.clip_from_world * vec4<f32>(p.pos - streak, 1.0);
     if head.w < near && tail.w < near {
         return degenerate();
     }
@@ -134,16 +152,13 @@ fn particle_vertex(
     }
     let z = 0.5 * (head.w + tail.w);
 
-    var diameter_m: f32;
-    if kind == 0u {
-        diameter_m = drop_diameter_mm(particle_rand(ii, epoch, 0u), draw.rain.x) * 1e-3;
-    } else {
-        diameter_m = (4.0 + 4.0 * particle_rand(ii, epoch, 1u).w) * 1e-3;
-    }
-    // Half width in px: the drop's own, but at least half a pixel; opacity follows the true
-    // coverage so a sub-pixel drop fades as 1/z (Garg & Nayar 2007, Eqs. 21–22).
-    let half_width = max(0.5 * diameter_m * focal_px / z, 0.5);
-    let coverage = min(1.0, diameter_m * focal_px / z);
+    // Half width in px: the drop's own, but at least half a pixel (a flake's `SNOW_MIN_HALF_WIDTH`);
+    // opacity follows the true coverage, relative to that minimum, so a sub-pixel drop fades as
+    // 1/z (Garg & Nayar 2007, Eqs. 21–22).
+    let min_half_width = select(0.5, SNOW_MIN_HALF_WIDTH, kind == 1u);
+    let true_half_width = 0.5 * diameter_m * focal_px / z;
+    let half_width = max(true_half_width, min_half_width);
+    let coverage = min(1.0, true_half_width / min_half_width);
 
     let head_px = to_px(head, size);
     let tail_px = to_px(tail, size);
