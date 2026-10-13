@@ -1,21 +1,24 @@
 // Precipitation particles: one thread per particle in a cube around the camera. See
-// docs/research/precipitation.md ("Motion", "Blockers", "Splashes").
+// docs/research/precipitation.md ("Motion", "Blockers", "Splashes") and docs/research/dust.md
+// ("Particles").
 //
-//   activate  a parked particle that becomes active is seeded uniformly in the box
+//   activate  a parked particle that becomes active is seeded uniformly in the box (dust:
+//             exponentially in height above the ground, the haze's profile)
 //   velocity  rain: wind + (0, −v(D), 0) with D from the water-weighted Marshall–Palmer
-//             distribution; snow: wind + (0, −1, 0) + flutter
+//             distribution; snow: wind + (0, −1, 0) + flutter; dust: wind + (0, −0.05, 0)
 //   collide   the step segment against every blocker box and the ground; a hit respawns the
-//             particle at the top of the box, and a rain hit near the camera appends a splash
+//             particle at the top of the box, and a rain hit near the camera appends a splash.
+//             Dust sees no blockers and makes no splash: it respawns at a new place in the box
 //   wrap      toroidally around the camera
 
 import bevy_elements::grid::grid_taps;
 import bevy_elements::terrain::common::{TerrainParams, terrain_live};
 import bevy_elements::wind::{WindFieldParams, elements_wind};
-import bevy_elements::precipitation::common::{particle_rand, drop_diameter_mm, drop_fall_speed};
+import bevy_elements::precipitation::common::{particle_rand, drop_diameter_mm, drop_fall_speed, dust_height};
 
 struct Particle {
     pos: vec3<f32>,
-    // Bits 0–1: kind (0 rain, 1 snow, 3 parked). Bits 2–31: respawn counter.
+    // Bits 0–1: kind (0 rain, 1 snow, 2 dust, 3 parked). Bits 2–31: respawn counter.
     kind: u32,
     vel: vec3<f32>,
     // Age since the last respawn, s.
@@ -48,6 +51,10 @@ struct Params {
     rain: vec4<f32>,
     // x: flutter speed, m/s. y: snow fall speed, m/s. zw: flutter frequency range, Hz.
     snow: vec4<f32>,
+    // x: dust fall speed, m/s. y: dust height scale, m.
+    dust: vec4<f32>,
+    // x: dust count.
+    dust_counts: vec4<u32>,
     wind: WindFieldParams,
     // The terrain grid; without a live terrain the ground is the plane y = motion.w.
     terrain: TerrainParams,
@@ -63,6 +70,7 @@ struct Params {
 
 const KIND_RAIN: u32 = 0u;
 const KIND_SNOW: u32 = 1u;
+const KIND_DUST: u32 = 2u;
 const KIND_PARKED: u32 = 3u;
 const TAU: f32 = 6.2831853;
 const TILE: u32 = 64u;
@@ -126,6 +134,24 @@ fn seed_position(index: u32, epoch: u32) -> vec3<f32> {
     return vec3<f32>(xz.x, mix(bottom, top, r.y), xz.y);
 }
 
+/// A dust sprite's position: uniform over the box in the horizontal, exponential in height above
+/// the ground with the haze's scale height, truncated to the part of the box above the ground.
+fn dust_position(index: u32, epoch: u32) -> vec3<f32> {
+    let cam = params.camera.xyz;
+    let half_edge = params.motion.y;
+    let r = particle_rand(index, epoch, 4u);
+    let top = cam.y + half_edge;
+    let xz = vec2<f32>(
+        cam.x + (r.x * 2.0 - 1.0) * half_edge,
+        cam.z + (r.z * 2.0 - 1.0) * half_edge,
+    );
+    let ground = ground_at(xz);
+    let lo = max(ground, cam.y - half_edge) - ground;
+    let hi = max(top - ground, lo + 0.01);
+    let h = dust_height(r.y, lo, hi, params.dust.y);
+    return vec3<f32>(xz.x, min(ground + h, top - 0.001), xz.y);
+}
+
 fn wrap_axis(x: f32, centre: f32, half_edge: f32) -> f32 {
     let size = 2.0 * half_edge;
     let shifted = x - centre + half_edge;
@@ -159,6 +185,8 @@ fn elements_precip_sim(
             kind = KIND_RAIN;
         } else if index < params.counts.x + params.counts.y {
             kind = KIND_SNOW;
+        } else if index < params.counts.x + params.counts.y + params.dust_counts.x {
+            kind = KIND_DUST;
         }
         if kind == KIND_PARKED {
             particles[index] = Particle(pos, (epoch << 2u) | KIND_PARKED, vec3<f32>(0.0), 0.0);
@@ -166,13 +194,19 @@ fn elements_precip_sim(
             live = true;
             if (p.kind & 3u) == KIND_PARKED {
                 epoch += 1u;
-                pos = seed_position(index, epoch);
+                if kind == KIND_DUST {
+                    pos = dust_position(index, epoch);
+                } else {
+                    pos = seed_position(index, epoch);
+                }
                 life = 0.0;
             }
             let wind = elements_wind(wind_field, wind_sampler, params.wind, pos);
             if kind == KIND_RAIN {
                 let d = drop_diameter_mm(particle_rand(index, epoch, 0u), params.rain.x);
                 vel = wind + vec3<f32>(0.0, -drop_fall_speed(d), 0.0);
+            } else if kind == KIND_DUST {
+                vel = wind + vec3<f32>(0.0, -params.dust.x, 0.0);
             } else {
                 let u = particle_rand(index, epoch, 1u);
                 let frequency = mix(params.snow.z, params.snow.w, u.y);
@@ -197,7 +231,7 @@ fn elements_precip_sim(
             tile[local_index] = blockers[bi];
         }
         workgroupBarrier();
-        if live {
+        if live && kind != KIND_DUST {
             let n = min(TILE, n_blockers - t * TILE);
             for (var k = 0u; k < n; k += 1u) {
                 t_hit = min(t_hit, segment_enter(tile[k], p0, p1));
@@ -223,24 +257,29 @@ fn elements_precip_sim(
     var out_pos = p1;
     var out_life = life + dt;
     if t_hit <= 1.0 {
-        // A segment that enters from outside (t > 0) is an impact; one that starts inside a
-        // blocker or below the ground is a respawn that landed badly and makes no splash.
-        if kind == KIND_RAIN && t_hit > 0.0 {
-            let hit = mix(p0, p1, t_hit);
-            let dxz = hit.xz - cam.xz;
-            if dot(dxz, dxz) <= params.motion.z * params.motion.z {
-                let slot = atomicAdd(&splashes.counter, 1u);
-                splashes.ring[slot & 4095u] = vec4<f32>(hit.x, hit.y + SPLASH_LIFT_M, hit.z, params.motion.x);
+        if kind == KIND_DUST {
+            epoch += 1u;
+            out_pos = dust_position(index, epoch);
+        } else {
+            // A segment that enters from outside (t > 0) is an impact; one that starts inside a
+            // blocker or below the ground is a respawn that landed badly and makes no splash.
+            if kind == KIND_RAIN && t_hit > 0.0 {
+                let hit = mix(p0, p1, t_hit);
+                let dxz = hit.xz - cam.xz;
+                if dot(dxz, dxz) <= params.motion.z * params.motion.z {
+                    let slot = atomicAdd(&splashes.counter, 1u);
+                    splashes.ring[slot & 4095u] = vec4<f32>(hit.x, hit.y + SPLASH_LIFT_M, hit.z, params.motion.x);
+                }
             }
+            epoch += 1u;
+            let r = particle_rand(index, epoch, 2u);
+            // Where it would be after the rest of the step, had it re-entered at the top.
+            out_pos = vec3<f32>(
+                cam.x + (r.x * 2.0 - 1.0) * half_edge,
+                min(cam.y + half_edge + (1.0 - t_hit) * (p1.y - p0.y), cam.y + half_edge - 0.001),
+                cam.z + (r.z * 2.0 - 1.0) * half_edge,
+            );
         }
-        epoch += 1u;
-        let r = particle_rand(index, epoch, 2u);
-        // Where it would be after the rest of the step, had it re-entered at the top.
-        out_pos = vec3<f32>(
-            cam.x + (r.x * 2.0 - 1.0) * half_edge,
-            min(cam.y + half_edge + (1.0 - t_hit) * (p1.y - p0.y), cam.y + half_edge - 0.001),
-            cam.z + (r.z * 2.0 - 1.0) * half_edge,
-        );
         out_life = 0.0;
     }
     out_pos = vec3<f32>(

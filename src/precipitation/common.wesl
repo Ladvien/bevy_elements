@@ -36,3 +36,11 @@ fn drop_diameter_mm(u: vec4<f32>, lambda: f32) -> f32 {
 fn drop_fall_speed(d_mm: f32) -> f32 {
     return min(3.778 * pow(max(d_mm, 0.0), 0.67), 9.0);
 }
+
+/// Height above the ground in m of a respawning dust sprite for `u` in (0, 1): the exponential
+/// profile of scale height `scale` truncated to [lo, hi] (the part of the box above the ground),
+/// by inverse CDF: lo − H ln(1 − u (1 − e^(−(hi − lo)/H))). With lo = 0 and hi = 60 it is the
+/// note's −H ln(1 − u (1 − e^(−60/H))); `model::dust_height_m` mirrors it.
+fn dust_height(u: f32, lo: f32, hi: f32, scale: f32) -> f32 {
+    return lo - scale * log(1.0 - u * (1.0 - exp(-(hi - lo) / scale)));
+}

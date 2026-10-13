@@ -37,12 +37,19 @@ impl ExtractResource<RenderApp> for HydrologyGpu {
     }
 }
 
+/// The hydrology compute pass. Passes that read or write the layers after the substeps (`dust`)
+/// order themselves `.after(HydrologyDispatch)`.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct HydrologyDispatch;
+
+/// The hydrology kernels. The thermal pair is shared with `dust`, which dispatches it with its
+/// own uniform (the avalanche at the sand's repose angle).
 #[derive(Resource)]
-struct HydrologyPipelines {
+pub(crate) struct HydrologyPipelines {
     flux: Kernel,
     depth_erode: Kernel,
-    thermal_flux: Kernel,
-    thermal_apply: Kernel,
+    pub(crate) thermal_flux: Kernel,
+    pub(crate) thermal_apply: Kernel,
     source_map: Kernel,
     depth_readback: Kernel,
     velocity_readback: Kernel,
@@ -104,7 +111,10 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(Render, prepare.in_set(RenderSystems::PrepareBindGroups))
         .add_systems(
             RenderGraph,
-            dispatch.before(TerrainDispatch).before(camera_driver),
+            dispatch
+                .in_set(HydrologyDispatch)
+                .before(TerrainDispatch)
+                .before(camera_driver),
         );
 }
 

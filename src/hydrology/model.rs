@@ -23,6 +23,9 @@ pub(crate) const QUANTUM_M: f64 = 5e-6;
 pub(crate) const THERMAL_PERIOD: u64 = 4;
 /// Bedrock moves only above `talus + BEDROCK_EXTRA_DEG`.
 pub(crate) const BEDROCK_EXTRA_DEG: f32 = 10.0;
+/// The tangent that stands for a bedrock threshold nothing reaches (a pass that moves loose
+/// sediment only): far above any slope, and small enough that `cell · tan` stays finite.
+pub(crate) const UNREACHABLE_TAN: f32 = 1e20;
 /// Most `WaterSource`s and most `WaterSink`s uploaded.
 pub const MAX_WATER_SOURCES: usize = 64;
 /// The step the dissolve and deposit fractions are specified at, s.

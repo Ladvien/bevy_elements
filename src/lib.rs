@@ -4,6 +4,7 @@
 mod celestial;
 mod climate;
 mod clouds;
+mod dust;
 mod flash;
 #[cfg(feature = "flora")]
 mod flora;
@@ -71,6 +72,9 @@ pub use terrain::{
     TerrainGrid, TerrainMaterial, TerrainMaterialParams, TerrainPlugin, TerrainRender,
     TerrainSnapshot, TerrainSource, TerrainState,
 };
+
+// Aeolian transport.
+pub use dust::{DustPlugin, DustSettings, DustStats};
 
 // Hydrology and erosion.
 pub use hydrology::{

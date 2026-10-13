@@ -32,7 +32,7 @@ pub const GROUND_FOG_TEXELS: UVec3 = UVec3::new(128, 32, 128);
 /// Fog colour in full light, linear RGB.
 const FOG_COLOUR: Vec3 = Vec3::new(0.75, 0.80, 0.85);
 /// Colour of airborne dust, linear RGB.
-const DUST_ALBEDO: Vec3 = Vec3::new(0.76, 0.60, 0.42);
+pub(crate) const DUST_ALBEDO: Vec3 = Vec3::new(0.76, 0.60, 0.42);
 /// Ground-fog scale height in the Fog preset and otherwise, m.
 const FOG_SCALE_HEIGHT_M: f32 = 25.0;
 const HAZE_SCALE_HEIGHT_M: f32 = 60.0;
