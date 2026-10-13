@@ -7,9 +7,11 @@
 //! `ELEMENTS_RESOLUTION=WxH` (default 1920x1080), `ELEMENTS_PRESET=Thunderstorm` (default `Fog`;
 //! the precipitation passes only run in a wet preset) and `ELEMENTS_BLOCKERS=256` (spawn that
 //! many precipitation blockers around the camera). `ELEMENTS_TERRAIN=hills|mountains|none`
-//! (default `none`: the flat test scene) draws a terrain instead; its generator pass
-//! (`elements_terrain`, once at spawn) is listed but not counted in the per-frame total, and the
-//! main and depth passes it is drawn in are printed on their own line.
+//! (default `hills`): a 2 km terrain at the quality's full simulation resolution with a 50 m³/s
+//! water source, so hydrology and erosion run their full substeps every frame
+//! (`elements_hydrology`) and the terrain repacks its layers every frame (`elements_terrain`);
+//! `none` is the flat test scene with neither. Bevy's main and depth passes the scene is drawn in
+//! are printed on their own line.
 //!
 //! The timed passes are compute and do not depend on the resolution, but the GPU's clocks do: a
 //! lightly loaded GPU idles in a low power state and every pass reads several times slower. Check
@@ -25,9 +27,11 @@ use bevy::window::{PresentMode, WindowResolution};
 use bevy_elements::*;
 use common::{ExampleHarness, camera, stand_on_ground, test_scene};
 
+/// Frames before the per-pass minimum starts counting.
+const WARMUP_FRAMES: u32 = 240;
+
 /// The crate's GPU passes, by diagnostic span name.
-const PASSES: [&str; 11] = [
-    "elements_terrain",
+const PASSES: [&str; 12] = [
     "elements_wind",
     "elements_fog",
     "elements_clouds_noise",
@@ -38,6 +42,8 @@ const PASSES: [&str; 11] = [
     "elements_clouds_composite",
     "elements_precip_sim",
     "elements_precip_draw",
+    "elements_hydrology",
+    "elements_terrain",
 ];
 
 /// Bevy's own passes the terrain is drawn in, printed on a separate line.
@@ -72,6 +78,11 @@ fn main() {
             ExampleHarness,
         ))
         .insert_resource(quality)
+        // Far more simulated time than a frame can hold: every frame runs the quality's maximum.
+        .insert_resource(HydrologySettings {
+            time_scale: 1000.0,
+            ..default()
+        })
         .insert_resource(
             WorldClock::new(CivilDate::new(2026, 6, 21))
                 .at_hour(16.0)
@@ -87,22 +98,36 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut director: ResMut<WeatherDirector>,
+    quality: Res<ElementsQuality>,
 ) {
     let mut eye = commands.spawn(camera(
         Vec3::new(0.0, 30.0, 0.0),
         // Looking 20° above the horizon: about half the frame is cloud.
         Vec3::new(150.0, 91.9, 80.0),
     ));
-    match std::env::var("ELEMENTS_TERRAIN").as_deref() {
-        Ok("hills") => {
+    // A terrain at the quality's full simulation resolution with a river's worth of water, so
+    // hydrology and erosion run their full substeps every frame; `none` is the flat test scene.
+    let terrain = match std::env::var("ELEMENTS_TERRAIN").as_deref() {
+        Ok("none") => None,
+        Ok("mountains") => Some(ProceduralTerrain::mountains(42)),
+        _ => Some(ProceduralTerrain::hills(42)),
+    };
+    match terrain {
+        Some(preset) => {
             eye.insert(stand_on_ground(30.0));
-            commands.spawn(Terrain::procedural(ProceduralTerrain::hills(42)));
+            commands.spawn(
+                Terrain::procedural(preset)
+                    .with_resolution(UVec2::splat(quality.terrain_max_resolution())),
+            );
+            commands.spawn((
+                WaterSource {
+                    rate_m3_s: 50.0,
+                    radius_m: 5.0,
+                },
+                Transform::from_xyz(100.0, 0.0, 100.0),
+            ));
         }
-        Ok("mountains") => {
-            eye.insert(stand_on_ground(30.0));
-            commands.spawn(Terrain::procedural(ProceduralTerrain::mountains(42)));
-        }
-        _ => test_scene(&mut commands, &mut meshes, &mut materials),
+        None => test_scene(&mut commands, &mut meshes, &mut materials),
     }
     // PartlyCloudy is the clouds note's bench scene; `ELEMENTS_PRESET=Thunderstorm` saturates the
     // precipitation particles.
@@ -146,11 +171,14 @@ fn report(
     *frame += 1;
     // The minimum over the whole run is the full-clock cost: a pass can only read slower than
     // that, when the GPU has dropped to a low power state; the history window and the average mix
-    // both.
-    for (slot, pass) in lowest.iter_mut().zip(PASSES) {
-        let gpu = DiagnosticPath::new(format!("render/{pass}/elapsed_gpu"));
-        if let Some(now) = store.get(&gpu).and_then(|d| d.value()) {
-            *slot = if *slot > 0.0 { slot.min(now) } else { now };
+    // both. The first frames are skipped: the hydrology pass runs fewer substeps while the
+    // terrain is generated and its pipelines compile, and its minimum would read that.
+    if *frame > WARMUP_FRAMES {
+        for (slot, pass) in lowest.iter_mut().zip(PASSES) {
+            let gpu = DiagnosticPath::new(format!("render/{pass}/elapsed_gpu"));
+            if let Some(now) = store.get(&gpu).and_then(|d| d.value()) {
+                *slot = if *slot > 0.0 { slot.min(now) } else { now };
+            }
         }
     }
     // Bevy's passes are timed with the terrain only once it has spawned and been read back.
@@ -178,7 +206,8 @@ fn report(
                 let min = lowest[PASSES.iter().position(|p| *p == pass).unwrap_or(0)];
                 let mean = d.average().unwrap_or(f64::NAN);
                 // The noise volumes are generated once, in the first frames: not a per-frame cost.
-                if !pass.ends_with("_noise") && pass != "elements_terrain" {
+                // The terrain repacks every frame while hydrology runs, so it counts.
+                if !pass.ends_with("_noise") {
                     total += min;
                     if pass.starts_with("elements_clouds") {
                         clouds += min;

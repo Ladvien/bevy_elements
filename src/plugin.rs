@@ -17,6 +17,7 @@ use crate::climate::{ClimatePlugin, Weather};
 use crate::clouds::CloudPlugin;
 use crate::fog::FogPlugin;
 use crate::gpu::readback::ReadbackPlugin;
+use crate::hydrology::HydrologyPlugin;
 use crate::lightning::LightningPlugin;
 use crate::precipitation::PrecipitationPlugin;
 use crate::query::EnvironmentSnapshot;
@@ -41,6 +42,7 @@ impl PluginGroup for ElementsPlugins {
             .add(CelestialPlugin)
             .add(WindPlugin)
             .add(TerrainPlugin)
+            .add(HydrologyPlugin)
             .add(FogPlugin)
             .add(CloudPlugin)
             .add(LightningPlugin)
@@ -131,12 +133,26 @@ impl ElementsQuality {
     /// The most cells per axis the terrain's simulation grid has (`Terrain::resolution` is
     /// clamped to this and rounded down to a power of two). The hydrology and erosion kernels
     /// run on this grid, so this is the one number to lower if they do not fit their budget.
+    ///
+    /// `High` takes `Medium`'s value: hydrology and erosion at 1024² and 8 substeps cost
+    /// 1.86 ms per frame against the plan's 0.6 ms (`docs/research/hydrology.md`, Deviation 20),
+    /// and 512² with 4 substeps costs 0.26 ms. `Ultra` keeps the research resolution.
     pub fn terrain_max_resolution(self) -> u32 {
         match self {
             Self::Low => 256,
-            Self::Medium => 512,
-            Self::High => 1024,
+            Self::Medium | Self::High => 512,
             Self::Ultra => 2048,
+        }
+    }
+
+    /// The most hydrology and erosion substeps per frame (each is `HydrologySettings::step_s`
+    /// of simulated time); an erosion bake runs this many every frame. `High` takes `Medium`'s
+    /// value, as [`terrain_max_resolution`](Self::terrain_max_resolution).
+    pub fn hydrology_substeps(self) -> u32 {
+        match self {
+            Self::Low => 2,
+            Self::Medium | Self::High => 4,
+            Self::Ultra => 16,
         }
     }
 
@@ -220,6 +236,7 @@ impl Plugin for ElementsGpuCorePlugin {
         {
             crate::terrain::insert_placeholder(&mut buffers);
         }
+        load_shader_library!(app, "climate/snow.wesl");
         app.add_plugins(ReadbackPlugin).add_observer(dress_camera);
     }
 }

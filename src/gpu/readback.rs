@@ -38,6 +38,13 @@ pub(crate) struct ReadbackTick {
     due: bool,
 }
 
+impl ReadbackTick {
+    /// Whether this frame is a readback tick.
+    pub(crate) fn is_due(&self) -> bool {
+        self.due
+    }
+}
+
 /// An outstanding readback of one named field.
 #[derive(Component)]
 pub(crate) struct ReadbackField {
