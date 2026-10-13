@@ -292,6 +292,40 @@ fn next_unit(state: &mut u64) -> f32 {
     (crate::climate::mix64(*state) >> 40) as f32 / 16_777_216.0
 }
 
+/// Gusts: Poisson starts at `GUST_RATE · gustiness` per second, upwind of the camera; bands
+/// advance and expire after crossing twice the spawn distance. Returns the gust started this
+/// step, if any.
+fn advance_gusts(
+    runtime: &mut WindRuntime,
+    camera: Vec3,
+    direction: Vec2,
+    u10: f32,
+    gustiness: f32,
+    dt: f32,
+) -> Option<WindGust> {
+    let p_start = 1.0 - (-GUST_RATE * gustiness * dt).exp();
+    let started = (next_unit(&mut runtime.rng) < p_start).then(|| WindGust {
+        origin: camera.xz() - direction * GUST_SPAWN_M,
+        direction,
+        speed: GUST_SPEED * u10,
+        width: GUST_WIDTH_M,
+        strength: GUST_STRENGTH * gustiness * u10,
+    });
+    if let Some(gust) = started {
+        runtime.gusts.push((gust, 0.0));
+        if runtime.gusts.len() > MAX_GUSTS {
+            runtime.gusts.remove(0);
+        }
+    }
+    for (_, travelled) in &mut runtime.gusts {
+        *travelled += dt;
+    }
+    runtime
+        .gusts
+        .retain(|(g, t)| g.speed * *t < 2.0 * GUST_SPAWN_M + g.width);
+    started
+}
+
 #[allow(clippy::too_many_arguments)]
 fn step_wind(
     time: Res<Time<Virtual>>,
@@ -321,31 +355,12 @@ fn step_wind(
         return;
     };
 
-    // Gusts: Poisson starts, bands advance, expire after crossing 2 × the spawn distance.
     if runtime.rng == 0 {
         runtime.rng = climate.seed ^ 0x57_1D_6A_57;
     }
-    let p_start = 1.0 - (-GUST_RATE * gustiness * dt).exp();
-    if next_unit(&mut runtime.rng) < p_start {
-        let gust = WindGust {
-            origin: camera.xz() - direction * GUST_SPAWN_M,
-            direction,
-            speed: GUST_SPEED * u10,
-            width: GUST_WIDTH_M,
-            strength: GUST_STRENGTH * gustiness * u10,
-        };
+    if let Some(gust) = advance_gusts(&mut runtime, camera, direction, u10, gustiness, dt) {
         gusts.write(gust);
-        runtime.gusts.push((gust, 0.0));
-        if runtime.gusts.len() > MAX_GUSTS {
-            runtime.gusts.remove(0);
-        }
     }
-    for (_, travelled) in &mut runtime.gusts {
-        *travelled += dt;
-    }
-    runtime
-        .gusts
-        .retain(|(g, t)| g.speed * *t < 2.0 * GUST_SPAWN_M + g.width);
 
     // Window: whole-cell steps, centred horizontally, a quarter below the camera vertically.
     let size = grid.size.as_ivec3();
@@ -462,5 +477,37 @@ mod tests {
         let centre = (IVec3::new(-1, 1, 9).as_vec3() + 0.5) * WIND_CELL_M;
         assert_eq!(snap.sample(centre), Some(Vec3::new(5.0, 0.0, 0.0)));
         assert_eq!(snap.sample(Vec3::new(1000.0, 0.0, 0.0)), None);
+    }
+
+    /// Validation 5 of `docs/research/wind.md`: with gustiness 0.9 and u10 = 10 m/s a band is
+    /// 4.5 m/s strong, travels at 12 m/s, is 30 m wide and starts 200 m upwind of the camera;
+    /// the rate is 0.09 s⁻¹, so an hour holds 324 ± 72 (4σ) starts, and no band outlives its
+    /// crossing of (2 · 200 + 30) m.
+    #[test]
+    fn gusts_start_upwind_at_the_poisson_rate_and_expire_after_crossing() {
+        let mut runtime = WindRuntime {
+            rng: 0x1234_5678,
+            ..WindRuntime::default()
+        };
+        let camera = Vec3::new(100.0, 5.0, -40.0);
+        let direction = Vec2::new(3.0, 4.0).normalize();
+        let dt = 1.0 / 60.0;
+        let lifetime = (2.0 * GUST_SPAWN_M + GUST_WIDTH_M) / 12.0;
+        let mut started = 0;
+        for _ in 0..3600 * 60 {
+            if let Some(g) = advance_gusts(&mut runtime, camera, direction, 10.0, 0.9, dt) {
+                started += 1;
+                assert!((g.strength - 4.5).abs() < 1e-5);
+                assert!((g.speed - 12.0).abs() < 1e-5);
+                assert_eq!(g.width, 30.0);
+                assert!(
+                    g.origin
+                        .distance(Vec2::new(100.0, -40.0) - direction * 200.0)
+                        < 1e-4
+                );
+            }
+            assert!(runtime.gusts.iter().all(|(_, t)| *t <= lifetime + dt));
+        }
+        assert!((250..=400).contains(&started), "{started} gusts in an hour");
     }
 }
