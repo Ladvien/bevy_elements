@@ -19,6 +19,8 @@ const RIPPLE_JITTER: f32 = 0.25;
 const RIPPLE_PI: f32 = 3.141_592_65;
 const STREAK_AMPLITUDE: f32 = 0.4;
 const STREAK_SATURATION: f32 = 0.2;
+const STREAK_EDGE_LOW: f32 = 0.55;
+const STREAK_EDGE_HIGH: f32 = 0.8;
 pub(crate) const DRENCHED_MAX: f32 = 1.4;
 const STREAK_FREQUENCY_X: f32 = 8.0;
 const STREAK_FREQUENCY_Y: f32 = 0.4;
@@ -66,7 +68,10 @@ pub(crate) fn rain_streak(world: Vec3, normal: Vec3, intensity: f32, phase: f32)
                 0.5,
             ))
             .x;
-    STREAK_AMPLITUDE * saturate(intensity / STREAK_SATURATION) * smoothstep(0.55, 1.0, n) * vertical
+    STREAK_AMPLITUDE
+        * saturate(intensity / STREAK_SATURATION)
+        * smoothstep(STREAK_EDGE_LOW, STREAK_EDGE_HIGH, n)
+        * vertical
 }
 
 pub(crate) fn ripple_weights(intensity: f32) -> [f32; 4] {

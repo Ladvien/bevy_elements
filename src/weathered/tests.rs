@@ -273,6 +273,7 @@ fn rain_streaks_run_down_walls_only_while_raining() {
             assert_eq!(mirror::rain_streak(p, Vec3::Y, 1.0, 12.5), 0.0);
         }
     }
+    println!("streak coverage s>0.05: {} of 40000, peak {peak}", lit);
     assert!(peak <= 0.4 + 1e-6, "peak {peak}");
     assert!(peak > 0.15, "a rivulet is visible: peak {peak}");
     assert!(

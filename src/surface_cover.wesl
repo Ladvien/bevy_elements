@@ -52,6 +52,10 @@ const RIPPLE_PI: f32 = 3.14159265;
 /// (wetness.md, Model adopted 6, and Deviation 9).
 const STREAK_AMPLITUDE: f32 = 0.4;
 const STREAK_SATURATION: f32 = 0.2;
+/// The noise range a rivulet occupies: Perlin seldom gets above 0.6 (`n` 0.8), so the
+/// note's smoothstep(0.55, 1) never reached 1 and drew 3% contrast (measured, Deviation 9).
+const STREAK_EDGE_LOW: f32 = 0.55;
+const STREAK_EDGE_HIGH: f32 = 0.8;
 /// Wetness a rivulet adds beyond a full film: 1.4 darkens a porous surface to ×0.3, the
 /// 0.2–0.3 of Lagarde's empirical wet albedo (wetness.md, Model adopted 2).
 const DRENCHED_MAX: f32 = 1.4;
@@ -90,7 +94,7 @@ fn rain_streak(world: vec3<f32>, normal: vec3<f32>, intensity: f32, phase: f32) 
         STREAK_FREQUENCY_Y * world.y + STREAK_SPEED * phase,
         0.5,
     ));
-    return STREAK_AMPLITUDE * saturate(intensity / STREAK_SATURATION) * smoothstep(0.55, 1.0, n) * vertical;
+    return STREAK_AMPLITUDE * saturate(intensity / STREAK_SATURATION) * smoothstep(STREAK_EDGE_LOW, STREAK_EDGE_HIGH, n) * vertical;
 }
 
 /// Weights of the four ripple layers for rain intensity `f`: `saturate((f − 0.25 k) · 4)`.
