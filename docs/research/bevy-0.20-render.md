@@ -300,7 +300,7 @@ struct GroundExtension {
 
 ### MeshTag
 
-`bevy::mesh::MeshTag` (also `bevy::prelude::MeshTag`) — `bevy_mesh-0.20.0/src/components.rs:205`: `#[derive(Component, Clone, Debug, Default, Deref, DerefMut, Reflect, PartialEq, Eq)] pub struct MeshTag { #[deref] pub value: u32 }`. Per-instance, free for app use unless a `GpuComponentArrayBuffer` is on the same entity (then Bevy overwrites it). In shaders: `bevy_pbr::render::mesh_functions::get_tag(instance_index: u32) -> u32` (`bevy_pbr-0.20.0/src/render/mesh_functions.wesl:155`; the doc comment on `MeshTag` names the old `mesh_bindings::mesh[...].tag`, which is `mesh[instance_index].tag`). The vertex stage has `@builtin(instance_index)` in `Vertex.instance_index` (`render/forward_io.wesl:3`).
+`bevy::mesh::MeshTag` (also `bevy::prelude::MeshTag`) — `bevy_mesh-0.20.0/src/components.rs:205`: `#[derive(Component, Clone, Debug, Default, Deref, DerefMut, Reflect, PartialEq, Eq)] pub struct MeshTag { #[deref] pub value: u32, #[cfg(debug_assertions)] type_id: Option<TypeId> }` (`:205-218`). The second field is private and debug-only, so a struct literal does not compile: build it with `MeshTag::new(value)` (`:224`; migration guide `mesh_tag_new.md`). Per-instance, free for app use unless a `GpuComponentArrayBuffer` is on the same entity (then Bevy overwrites it). In shaders: `bevy_pbr::render::mesh_functions::get_tag(instance_index: u32) -> u32` (`bevy_pbr-0.20.0/src/render/mesh_functions.wesl:155`; the doc comment on `MeshTag` names the old `mesh_bindings::mesh[...].tag`, which is `mesh[instance_index].tag`). The vertex stage has `@builtin(instance_index)` in `Vertex.instance_index` (`render/forward_io.wesl:3`).
 
 ### Shader assets: embedded and imports (WESL)
 
