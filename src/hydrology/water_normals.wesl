@@ -19,7 +19,9 @@ struct NormalParams {
 
 // Texels of the full-resolution map: the height is a function of the texel on this lattice.
 const BASE_TEXELS: i32 = 512;
-const OCTAVE_GAIN: f32 = 0.7;
+// Height amplitude ratio per octave: 0.7 / 2, so that the *slope* (amplitude × frequency) of
+// octave o is 0.7^o of the first (the note's slope gain).
+const OCTAVE_GAIN: f32 = 0.35;
 const BASE_CELLS: f32 = 8.0;
 const FOAM_CELLS: f32 = 4.0;
 

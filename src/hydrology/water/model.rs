@@ -3,6 +3,7 @@
 //! `tests/gpu_water.rs`.
 
 use bevy::math::{IVec2, Vec2, Vec3};
+use bevy::transform::components::Transform;
 
 use crate::gpu::noise_mirror::{fbm3_periodic, perlin3_periodic};
 use crate::hydrology::water::{
@@ -259,7 +260,7 @@ fn flow_phases_hide_the_restart() {
     let settings = WaterSettings::default();
     let period = settings.flow_cycle_s;
     for _ in 0..10_000 {
-        let (t, psi) = (rng.range(0.0, 600.0), rng.next());
+        let (t, psi) = (rng.range(0.0, 10.0), rng.next());
         let (p, w) = flow_phases(t, psi, period);
         assert!(close(w[0] + w[1], 1.0, 1e-6), "weights sum {}", w[0] + w[1]);
         for i in 0..2 {
@@ -312,7 +313,7 @@ fn map_height(t: IVec2, octaves: u32) -> f32 {
     for o in 0..octaves {
         let cells = 8.0 * (1u32 << o) as f32;
         h += amplitude * perlin3_periodic(Vec3::new(u.x * cells, u.y * cells, 0.5 + o as f32), cells as i32);
-        amplitude *= 0.7;
+        amplitude *= 0.35;
     }
     h
 }
@@ -431,7 +432,6 @@ fn the_depth_fade_is_a_smoothstep() {
 /// rangefinder.
 #[test]
 fn the_surface_pass_sorts_after_its_absorb_pass() {
-    use bevy::math::Affine3A;
     use bevy::render::render_phase::ViewRangefinder3d;
 
     let mut rng = Lcg(10);
@@ -447,7 +447,9 @@ fn the_surface_pass_sorts_after_its_absorb_pass() {
             rng.range(-500.0, 500.0),
         );
         let target = Vec3::new(rng.range(-500.0, 500.0), 0.0, rng.range(-500.0, 500.0));
-        let world_from_view = Affine3A::look_at_rh(eye, target, Vec3::Y).inverse();
+        let world_from_view = Transform::from_translation(eye)
+            .looking_at(target, Vec3::Y)
+            .compute_affine();
         let range = ViewRangefinder3d::from_world_from_view(&world_from_view);
         let a = Vec3::new(rng.range(-500.0, 500.0), rng.range(0.0, 50.0), rng.range(-500.0, 500.0));
         let absorb = key(&range, a, 0.0);

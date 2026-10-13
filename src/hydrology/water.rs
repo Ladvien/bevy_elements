@@ -54,7 +54,7 @@ pub(crate) const FOAM_OCTAVES: u32 = 4;
 pub(crate) const NORMAL_RMS_SLOPE: f32 = 0.15;
 /// The factor that turns the central difference of the height field (two texels) into the slope
 /// that has [`NORMAL_RMS_SLOPE`] on mip 0, measured by `normal_gain_gives_the_cox_munk_slope`.
-pub(crate) const NORMAL_SLOPE_GAIN: f32 = 0.0;
+pub(crate) const NORMAL_SLOPE_GAIN: f32 = 4.7;
 /// The wind speed the normal map's slope belongs to, m/s.
 const MAP_WIND_MS: f32 = 4.0;
 /// The largest number of patches the pool draws (two entities each).
