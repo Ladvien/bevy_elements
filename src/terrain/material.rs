@@ -194,12 +194,12 @@ pub(super) fn update_materials(
                 continue;
             };
             let e = &material.extension;
-            if e.params != params || e.cells != state.cells || e.cloud_shadow != map {
-                if let Some(mut material) = terrain_materials.get_mut(id) {
-                    material.extension.params = params;
-                    material.extension.cells = state.cells.clone();
-                    material.extension.cloud_shadow = map.clone();
-                }
+            if (e.params != params || e.cells != state.cells || e.cloud_shadow != map)
+                && let Some(mut material) = terrain_materials.get_mut(id)
+            {
+                material.extension.params = params;
+                material.extension.cells = state.cells.clone();
+                material.extension.cloud_shadow = map.clone();
             }
         }
     }
@@ -215,12 +215,12 @@ pub(super) fn update_materials(
             continue;
         };
         let e = &material.extension;
-        if e.params != params || e.terrain != cells || e.cloud_shadow != map {
-            if let Some(mut material) = ground_materials.get_mut(id) {
-                material.extension.params = params;
-                material.extension.terrain = cells.clone();
-                material.extension.cloud_shadow = map.clone();
-            }
+        if (e.params != params || e.terrain != cells || e.cloud_shadow != map)
+            && let Some(mut material) = ground_materials.get_mut(id)
+        {
+            material.extension.params = params;
+            material.extension.terrain = cells.clone();
+            material.extension.cloud_shadow = map.clone();
         }
     }
 }

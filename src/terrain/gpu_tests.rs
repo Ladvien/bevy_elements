@@ -348,9 +348,9 @@ use crate::{PrecipitationState, Weather, WeatherDirector, WeatherPreset};
 
 /// Mean |divergence| of the wind field (1/s) over cells that are in the air with their whole
 /// stencil, 12 m above the ground, and the number of such cells.
-fn divergence_over_terrain(app: &mut App) -> (f32, usize) {
+fn divergence_over_terrain(app: &mut App, above: f32) -> (f32, usize) {
     app.world_mut()
-        .run_system_once(|env: Environment, wind: Res<WindState>| {
+        .run_system_once(move |env: Environment, wind: Res<WindState>| {
             let h = WIND_CELL_M;
             let (lo, hi) = (
                 wind.field_origin + 2.0 * h,
@@ -367,7 +367,7 @@ fn divergence_over_terrain(app: &mut App) -> (f32, usize) {
                     let Some(ground) = env.terrain_height(xz) else {
                         continue;
                     };
-                    let p = Vec3::new(xz.x, ground + 12.0, xz.y);
+                    let p = Vec3::new(xz.x, ground + above, xz.y);
                     // The whole stencil inside the window and clear of the ground.
                     let clear = [Vec2::X, -Vec2::X, Vec2::Y, -Vec2::Y].iter().all(|o| {
                         env.terrain_height(xz + *o * h)
@@ -405,31 +405,34 @@ fn divergence_over_terrain(app: &mut App) -> (f32, usize) {
 #[ignore = "needs a GPU"]
 fn wind_over_hills_stays_divergence_free_at_the_jacobi_counts() {
     let _lock = serial();
+    // One renderer for all three counts: the same field, relaxed again after each change.
+    let mut app = app(
+        Terrain::procedural(ProceduralTerrain::hills(42)).with_resolution(UVec2::splat(256)),
+        ElementsQuality::High,
+    );
+    app.update();
+    run_until(&mut app, "the height readback", |app| {
+        height_at(app, Vec2::ZERO).is_some()
+    });
     let mut results = Vec::new();
-    for iterations in [12u32, 30] {
-        let mut app = app(
-            Terrain::procedural(ProceduralTerrain::hills(42)).with_resolution(UVec2::splat(256)),
-            ElementsQuality::High,
-        );
-        app.update();
+    for iterations in [4u32, 12, 30] {
         app.world_mut().resource_mut::<WindGpu>().iterations = iterations;
-        run_until(&mut app, "the height readback", |app| {
-            height_at(app, Vec2::ZERO).is_some()
-        });
         for _ in 0..300 {
             app.update();
         }
-        let (mean, cells) = divergence_over_terrain(&mut app);
+        let (mean, cells) = divergence_over_terrain(&mut app, 12.0);
         println!(
             "{iterations} Jacobi iterations over hills: mean |div| {mean:.5} 1/s over {cells} cells"
         );
         results.push((mean, cells));
-        finish(&mut app);
     }
+    finish(&mut app);
     for (mean, cells) in &results {
         assert!(*cells > 200, "too few air cells ({cells})");
         assert!(*mean < 1e-2, "mean |div| {mean}");
     }
+    // 12 iterations are as good as 30 (within a factor of two), as on flat ground.
+    assert!(results[1].0 < 2.0 * results[2].0 + 1e-4, "{results:?}");
 }
 
 /// Validation 10: a flat terrain at 10 m makes every wind cell whose centre is below 10 m solid

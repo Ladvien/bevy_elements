@@ -578,4 +578,93 @@ mod tests {
             }
         }
     }
+
+    /// The unmorphed position of grid vertex `gi` of a patch.
+    fn grid_position(
+        config: &LodConfig,
+        patch: Patch,
+        gi: UVec2,
+        height: impl Fn(Vec2) -> f32,
+    ) -> Vec3 {
+        let step = config.node_m(patch.level) / LEAF_CELLS as f32;
+        let p = Vec2::new(patch.ix as f32, patch.iz as f32) * config.node_m(patch.level)
+            + gi.as_vec2() * step;
+        Vec3::new(p.x, height(p), p.y)
+    }
+
+    /// No pop: when a camera move swaps a patch for its four children, the patch is unmorphed
+    /// everywhere (it looks like its own grid) and the children's odd vertices are fully morphed
+    /// (they look like the patch's grid), up to the morph the camera's own step buys, so the
+    /// surface does not jump at the swap.
+    #[test]
+    fn a_patch_swapped_for_its_children_barely_moves() {
+        let tree = BoundsTree::uniform(&high(), -50.0, 80.0);
+        let config = high().derive(Some(&tree));
+        let mut rng = Rng(21);
+        let mut swaps = 0;
+        for _ in 0..400 {
+            let a = Vec3::new(
+                rng.next() * 2048.0,
+                5.0 + rng.next() * 200.0,
+                rng.next() * 2048.0,
+            );
+            let b = a + Vec3::new(rng.next() - 0.5, rng.next() - 0.5, rng.next() - 0.5) * 6.0;
+            let shift = a.distance(b);
+            let (sel_a, sel_b) = (
+                select_patches(&config, &tree, a),
+                select_patches(&config, &tree, b),
+            );
+            for (before, after, cam_before, cam_after) in
+                [(&sel_a, &sel_b, a, b), (&sel_b, &sel_a, b, a)]
+            {
+                for parent in before.iter().filter(|p| p.level > 0 && !after.contains(p)) {
+                    let children: Vec<&Patch> = after
+                        .iter()
+                        .filter(|c| {
+                            c.level + 1 == parent.level
+                                && c.ix / 2 == parent.ix
+                                && c.iz / 2 == parent.iz
+                        })
+                        .collect();
+                    if children.len() != 4 {
+                        continue;
+                    }
+                    swaps += 1;
+                    // The camera moved `shift` m since the swap boundary and the morph is
+                    // continuous, so the jump is at most the morph that distance buys.
+                    let slack = |level: u32| {
+                        let step = config.node_m(level) / LEAF_CELLS as f32;
+                        2.0 * step * shift / (config.range_m(level) - config.morph_start_m(level))
+                            + 1e-3
+                    };
+                    for gz in 0..=32 {
+                        for gx in 0..=32 {
+                            let gi = UVec2::new(gx, gz);
+                            let moved = vertex_position(&config, *parent, gi, cam_before, hill);
+                            let want = grid_position(&config, *parent, gi, hill);
+                            assert!(
+                                (moved - want).length() <= slack(parent.level),
+                                "{parent:?} is morphed at {gi}: {moved} vs {want}"
+                            );
+                        }
+                    }
+                    for child in children {
+                        for gz in 0..=32 {
+                            for gx in 0..=32 {
+                                let gi = UVec2::new(gx, gz);
+                                let moved = vertex_position(&config, *child, gi, cam_after, hill);
+                                let snapped = UVec2::new(gx & !1, gz & !1);
+                                let want = grid_position(&config, *child, snapped, hill);
+                                assert!(
+                                    (moved - want).length() <= slack(child.level),
+                                    "{child:?} vertex {gi}: {moved} vs {want} (shift {shift})"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(swaps > 20, "only {swaps} swaps were exercised");
+    }
 }

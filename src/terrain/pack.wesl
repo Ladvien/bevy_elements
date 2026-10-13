@@ -69,23 +69,29 @@ fn combine(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(min(a.x, b.x), max(a.y, b.y), max(a.z, b.z), max(a.w, b.w));
 }
 
-fn cell_bounds(c: vec2<u32>) -> vec4<f32> {
-    let v = cells[c.y * params.grid.size.x + c.x];
+fn cell_bounds(c: vec2<i32>) -> vec4<f32> {
+    let size = vec2<i32>(params.grid.size);
+    let k = clamp(c, vec2<i32>(0), size - 1);
+    let v = cells[u32(k.y) * params.grid.size.x + u32(k.x)];
     return vec4<f32>(v.x, v.x, v.x + v.z, v.z);
 }
 
-// One workgroup per 32×32-cell leaf; each of the 256 threads reduces a 2×2 block.
+// One workgroup per 32×32-cell leaf; each of the 256 threads reduces a 2×2 block plus a one-cell
+// halo (4×4 cells): a vertex on the leaf's edge is a bilinear blend with the neighbouring leaf's
+// first cell, so the leaf's bounds must cover it.
 @compute @workgroup_size(16, 16, 1)
 fn terrain_minmax(
     @builtin(workgroup_id) leaf: vec3<u32>,
     @builtin(local_invocation_id) lid: vec3<u32>,
     @builtin(local_invocation_index) index: u32,
 ) {
-    let origin = leaf.xy * 32u + lid.xy * 2u;
+    let origin = vec2<i32>(leaf.xy * 32u + lid.xy * 2u);
     var acc = cell_bounds(origin);
-    acc = combine(acc, cell_bounds(origin + vec2<u32>(1u, 0u)));
-    acc = combine(acc, cell_bounds(origin + vec2<u32>(0u, 1u)));
-    acc = combine(acc, cell_bounds(origin + vec2<u32>(1u, 1u)));
+    for (var j = -1; j <= 2; j += 1) {
+        for (var i = -1; i <= 2; i += 1) {
+            acc = combine(acc, cell_bounds(origin + vec2<i32>(i, j)));
+        }
+    }
     reduce_a[index] = acc;
     workgroupBarrier();
     for (var stride = 128u; stride > 0u; stride = stride >> 1u) {

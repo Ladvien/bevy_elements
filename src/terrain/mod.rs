@@ -151,7 +151,10 @@ pub enum TerrainRender {
     External,
 }
 
-/// The terrain. Spawn one entity with it; see the [module documentation](self) for placement.
+/// The terrain. Spawn one entity with it. It is centred on the entity's `Transform` (the grid's
+/// minimum corner is `translation.xz − extent / 2`, a stored height `h` is the world height
+/// `translation.y + h`); rotation and scale are ignored. One terrain exists at a time: a second
+/// `Terrain` entity logs a warning and is ignored.
 #[derive(Component, Clone, Debug, PartialEq)]
 #[require(Transform, Visibility)]
 pub struct Terrain {

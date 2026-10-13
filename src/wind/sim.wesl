@@ -260,10 +260,17 @@ fn divergence(@builtin(global_invocation_id) id: vec3<u32>) {
     divergence_field[i] = (dx + dy + dz) / (2.0 * cell());
 }
 
-// Pressure of a neighbour: the centre's value across a wall or the window edge (Neumann).
+// Pressure of a neighbour: the centre's value across a wall or the lid (Neumann), zero across
+// the open window edges (Dirichlet: the air leaves freely, so a terrain that blocks more of the
+// window on one side than the other leaves a solvable Poisson problem; with Neumann pressure on
+// every edge the net flux through the open edges is unbalanced and the divergence cannot be
+// projected out, wind.md Deviation 1).
 fn p_nbr(g: vec3<i32>, o: vec3<i32>, centre_p: f32) -> f32 {
     let n = g + o;
-    if !inside(n) || is_solid(n) {
+    if !inside(n) {
+        return select(0.0, centre_p, n.y >= dims().y);
+    }
+    if is_solid(n) {
         return centre_p;
     }
     return p_in[at(n)];

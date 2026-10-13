@@ -41,7 +41,7 @@ const PASSES: [&str; 11] = [
 ];
 
 /// Bevy's own passes the terrain is drawn in, printed on a separate line.
-const SCENE_PASSES: [&str; 2] = ["main_opaque_pass_3d", "prepass"];
+const SCENE_PASSES: [&str; 2] = ["main_opaque_pass_3d", "early prepass"];
 
 fn main() {
     let (width, height) = std::env::var("ELEMENTS_RESOLUTION")
@@ -153,7 +153,12 @@ fn report(
             *slot = if *slot > 0.0 { slot.min(now) } else { now };
         }
     }
-    for (slot, pass) in lowest_scene.iter_mut().zip(SCENE_PASSES) {
+    // Bevy's passes are timed with the terrain only once it has spawned and been read back.
+    for (slot, pass) in lowest_scene
+        .iter_mut()
+        .zip(SCENE_PASSES)
+        .filter(|_| *frame > 600)
+    {
         let gpu = DiagnosticPath::new(format!("render/{pass}/elapsed_gpu"));
         if let Some(now) = store.get(&gpu).and_then(|d| d.value()) {
             *slot = if *slot > 0.0 { slot.min(now) } else { now };
