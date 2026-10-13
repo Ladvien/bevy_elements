@@ -231,10 +231,12 @@ impl Sim {
 
     /// Replace the contents of a layer. The buffer keeps its identity, so bind groups stay valid.
     fn write(&mut self, handle: &Handle<ShaderBuffer>, data: &[f32]) {
-        let mut buffers = self.app.world_mut().resource_mut::<Assets<ShaderBuffer>>();
-        let buffer = buffers.get_mut(handle).expect("the layer exists");
-        buffer.clear();
-        buffer.extend_from_slice(data);
+        {
+            let mut buffers = self.app.world_mut().resource_mut::<Assets<ShaderBuffer>>();
+            let mut buffer = buffers.get_mut(handle).expect("the layer exists");
+            buffer.clear();
+            buffer.extend_from_slice(data);
+        }
         // One frame to upload it.
         self.app.update();
     }
@@ -343,50 +345,81 @@ fn gpu_hydrology_conserves_water() {
     sim.finish();
 }
 
-/// Validation 2: the open boundary loses water and never gains it; closed conserves it.
-#[test]
-#[ignore = "needs a GPU"]
-fn an_open_boundary_loses_water_and_never_gains_it() {
-    let _lock = serial();
-    let n = 256usize;
-    let mut config = Config::new(tank(256, 2.0));
-    config.hydrology.boundary = HydrologyBoundary::Open;
+/// Run a 1 m column of radius 8 cells on a 128 m plane sloping `slope` toward −X, 3000 substeps
+/// in chunks of 250: the volume after each chunk, the highest depth seen and the stats volume.
+fn column_run(slope: f32, boundary: HydrologyBoundary) -> (Vec<f64>, f32, f64) {
+    let n = 64usize;
+    let mut config = Config::new(tank(64, 2.0));
+    config.hydrology.boundary = boundary;
     let mut sim = Sim::new(config);
     let cells = n * n;
     let mut water = vec![0.0f32; cells];
+    let mut bed = vec![0.0f32; cells];
     for j in 0..n {
         for i in 0..n {
-            let r = (((i as f32 - 127.5).powi(2)) + ((j as f32 - 127.5).powi(2))).sqrt();
+            let r = (((i as f32 - 31.5).powi(2)) + ((j as f32 - 31.5).powi(2))).sqrt();
+            bed[j * n + i] = slope * (i as f32 * 2.0 + 1.0);
             if r <= 8.0 {
                 water[j * n + i] = 1.0;
             }
         }
     }
-    let v0 = sum(&water);
-    let water_handle = sim.terrain.water.clone();
+    let (bedrock, water_handle) = (sim.terrain.bedrock.clone(), sim.terrain.water.clone());
+    sim.write(&bedrock, &bed);
     sim.write(&water_handle, &water);
-    let mut previous = v0;
+    let mut volumes = vec![sum(&water)];
     let mut highest = 1.0f32;
     for _ in 0..12 {
         sim.run_substeps(250);
         let after = sim.read_f32(&water_handle, cells);
-        let v = sum(&after);
         highest = highest.max(after.iter().copied().fold(0.0, f32::max));
-        assert!(
-            v <= previous + 1e-6 * v0,
-            "the volume rose from {previous} to {v}"
-        );
-        previous = v;
+        volumes.push(sum(&after));
     }
-    println!("open boundary: V {previous:.3} of {v0}, highest depth {highest}");
-    assert!(previous < v0, "no water left through the open edge");
-    assert!(highest <= 1.001, "a cell rose to {highest} m");
-    let stats = sim.stats();
-    println!(
-        "open boundary: stats volume {:.3}, lost {:.3}",
-        stats.volume_m3, stats.lost_m3
-    );
+    // The depth readback agrees with the buffer (m³ with 4 m² cells).
+    sim.frames(60);
+    let stats = sim.stats().volume_m3;
     sim.finish();
+    (volumes, highest, stats)
+}
+
+/// Validation 2: the open boundary loses water and never gains it; closed conserves it.
+#[test]
+#[ignore = "needs a GPU"]
+fn an_open_boundary_loses_water_and_never_gains_it() {
+    let _lock = serial();
+    // Flat bed, open: the column spreads, nothing rises above its initial depth and the volume
+    // never grows.
+    let (flat, highest, _) = column_run(0.0, HydrologyBoundary::Open);
+    println!("open flat: V {:.3} of {}, highest depth {highest}", flat[12], flat[0]);
+    for pair in flat.windows(2) {
+        assert!(
+            pair[1] <= pair[0] + 1e-6 * flat[0],
+            "the volume rose from {} to {}",
+            pair[0],
+            pair[1]
+        );
+    }
+    assert!(highest <= 1.001, "a cell rose to {highest} m");
+    // A 5 % slope toward −X carries the column to the open edge within the run (on a flat bed
+    // the spreading sheet is too thin and slow to get there in 60 s).
+    let (sloped, _, stats) = column_run(0.05, HydrologyBoundary::Open);
+    println!(
+        "open slope: V {:.3} of {}, stats volume {stats:.3} m³",
+        sloped[12], sloped[0]
+    );
+    for pair in sloped.windows(2) {
+        assert!(pair[1] <= pair[0] + 1e-6 * sloped[0]);
+    }
+    assert!(
+        sloped[12] < 0.9 * sloped[0],
+        "little water left through the open edge: {}",
+        sloped[12]
+    );
+    assert!((stats - sloped[12] * 4.0).abs() < 0.01 * sloped[12] * 4.0);
+    // The same slope, closed: everything stays.
+    let (closed, _, _) = column_run(0.05, HydrologyBoundary::Closed);
+    println!("closed slope: V {:.6} of {}", closed[12], closed[0]);
+    assert!((closed[12] / closed[0] - 1.0).abs() < 1e-5);
 }
 
 /// Validation 3: rain on a deep tank arrives in full, in quanta; cold air makes it snow; a blocker
@@ -397,46 +430,51 @@ fn rain_is_delivered_exactly_in_quanta() {
     let _lock = serial();
     let n = 64usize;
     let cells = n * n;
+    let mean_gain = |after: &[f32]| (sum(after) - 2.0 * cells as f64) / cells as f64;
     let mut config = Config::new(tank(64, 2.0));
     config.preset = WeatherPreset::Rain;
     config.mm_h = 4.0;
-    // A 20 × 20 m roof at 5 m over the centre.
-    config.blockers = vec![(Vec3::new(0.0, 5.0, 0.0), Vec3::new(10.0, 0.5, 10.0))];
     let mut sim = Sim::new(config);
     let water = sim.terrain.water.clone();
     sim.write(&water, &vec![2.0f32; cells]);
     let ran = sim.run_substeps(1800);
     let after = sim.read_f32(&water, cells);
-    // The sheltered cells are those whose centre lies under the roof: |x|, |z| < 10 m.
-    let mut open = Vec::new();
-    let mut sheltered = Vec::new();
-    for j in 0..n {
-        for i in 0..n {
-            let x = (i as f32 + 0.5 - 32.0) * 2.0;
-            let z = (j as f32 + 0.5 - 32.0) * 2.0;
-            let d = f64::from(after[j * n + i]) - 2.0;
-            if x.abs() < 9.0 && z.abs() < 9.0 {
-                sheltered.push(d);
-            } else if x.abs() > 11.0 || z.abs() > 11.0 {
-                open.push(d);
-            }
-        }
-    }
-    let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
     let ideal = ran as f64 * f64::from(STEP_S) * 4.0 / 3.6e6;
     println!(
-        "rain: {ran} substeps, open gain {:.3e} (ideal {ideal:.3e}), sheltered gain {:.3e}",
-        mean(&open),
-        mean(&sheltered)
+        "rain: {ran} substeps, mean gain {:.3e} (ideal {ideal:.3e})",
+        mean_gain(&after)
     );
+    // Within one quantum of the ideal: the plain per-substep f32 sum gains exactly 0.
     assert!(
-        mean(&open) >= ideal - 5e-6 - 1e-7 && mean(&open) <= ideal + 1e-6,
-        "open gain {} vs ideal {ideal}",
-        mean(&open)
+        mean_gain(&after) >= ideal - 5e-6 - 1e-7 && mean_gain(&after) <= ideal + 1e-6,
+        "gain {} vs ideal {ideal}",
+        mean_gain(&after)
     );
+    sim.finish();
+
+    // A roof over half of the tank (|x| < 32 m): no rain under it. The water spreads sideways, so
+    // the volume is what counts: half of the ideal.
+    let mut roofed = Config::new(tank(64, 2.0));
+    roofed.preset = WeatherPreset::Rain;
+    roofed.mm_h = 4.0;
+    roofed.blockers = vec![(Vec3::new(0.0, 5.0, 0.0), Vec3::new(32.0, 0.5, 64.0))];
+    let mut sim = Sim::new(roofed);
+    let water = sim.terrain.water.clone();
+    sim.write(&water, &vec![2.0f32; cells]);
+    let ran = sim.run_substeps(1800);
+    let map = sim.read_vec2(&sim.terrain.source_map.clone(), cells);
+    let shaded = map.iter().filter(|m| m[1] == 0.0).count();
+    let after = sim.read_f32(&water, cells);
+    let ideal = 0.5 * ran as f64 * f64::from(STEP_S) * 4.0 / 3.6e6;
+    println!(
+        "roof: {shaded} shaded cells, mean gain {:.3e} (half the ideal {ideal:.3e})",
+        mean_gain(&after)
+    );
+    assert_eq!(shaded, 32 * 64, "the roof shades half of the cells");
     assert!(
-        sheltered.iter().all(|d| d.abs() < 1e-9),
-        "rain fell under the roof"
+        mean_gain(&after) >= ideal - 5e-6 - 1e-7 && mean_gain(&after) <= ideal + 1e-6,
+        "gain {} vs half the ideal {ideal}",
+        mean_gain(&after)
     );
     sim.finish();
 
@@ -786,13 +824,21 @@ fn a_flood_reaches_the_marker_and_stays() {
     let n = 256usize;
     let cells = n * n;
     let mut config = Config::new(tank(256, 2.0));
-    config.hydrology = HydrologySettings::default();
+    // The default settings, held until the valley is in the bedrock layer.
+    config.hydrology = HydrologySettings {
+        time_scale: 0.0,
+        ..default()
+    };
+    // The hydrology note's flood is water only: bare bedrock at 3 m/s would otherwise be carved
+    // at the capacity rate (see the `flood` example).
+    config.erosion.enabled = false;
     config.preset = WeatherPreset::Rain;
     config.mm_h = 4.0;
     config.sources = vec![(Vec2::new(-200.0, 0.0), 50.0, 5.0)];
     let mut sim = Sim::new(config);
     let bedrock = sim.terrain.bedrock.clone();
     sim.write(&bedrock, &valley(n, 2.0));
+    sim.set_time_scale(1.0);
     let marker = Vec2::new(-100.0, 0.0);
     let mut samples: Vec<Option<f32>> = Vec::new();
     for frame in 0..(120 * 60) {

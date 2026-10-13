@@ -542,7 +542,9 @@ fn run_hydrology(
     if runtime.bake.is_none()
         && let Some(request) = runtime.queue.pop_front()
     {
-        let total = (f64::from(request.duration_s.max(0.0)) / f64::from(step_s)).ceil() as u64;
+        // `step_s` is an f32, so 600 s / 0.02 s is 30 000.0007: allow a thousandth of a step.
+        let steps = f64::from(request.duration_s.max(0.0)) / f64::from(step_s);
+        let total = (steps - 1e-3).ceil().max(0.0) as u64;
         let done_at = runtime.scheduled + total;
         if total == 0 {
             baked.write(TerrainBaked {
