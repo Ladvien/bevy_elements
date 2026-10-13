@@ -4,10 +4,10 @@
 //! `cargo run --release --example erosion_bake`
 //!
 //! Press `B` to start the bake; the progress is printed every second and `TerrainBaked` ends it
-//! (62.5 s at 60 fps with the default `High` quality: 8 substeps of 20 ms per frame). For
-//! unattended runs set `ELEMENTS_BAKE=1` to start it at once, `ELEMENTS_FRAMES` to the frame to
-//! stop at and `ELEMENTS_SHOT` for the screenshot as in the other examples: a "before" shot is
-//! `ELEMENTS_FRAMES=120`, an "after" shot is `ELEMENTS_BAKE=1 ELEMENTS_FRAMES=3900`.
+//! (125 s at 60 fps with the default `High` quality: 4 substeps of 20 ms per frame, 7500 frames).
+//! For unattended runs set `ELEMENTS_BAKE=1` to start it at once, `ELEMENTS_FRAMES` to the frame
+//! to stop at and `ELEMENTS_SHOT` for the screenshot as in the other examples: a "before" shot is
+//! `ELEMENTS_FRAMES=120`, an "after" shot is `ELEMENTS_BAKE=1 ELEMENTS_FRAMES=7700`.
 //! `ELEMENTS_BAKE_S` and `ELEMENTS_BAKE_MM_H` override the duration and the rain.
 
 mod common;

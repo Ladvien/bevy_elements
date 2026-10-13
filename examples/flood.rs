@@ -6,8 +6,8 @@
 //! The valley runs along +X (1 % bed slope, side walls 1:5). The depth reads `None` until the
 //! first water readback, `0.000` while the front is on its way, and settles near 1.4 m. Keys: `G`
 //! doubles the simulation speed (`HydrologySettings::time_scale`), `H` halves it. For unattended
-//! runs set `ELEMENTS_FRAMES` (and `ELEMENTS_SHOT`) as in the other examples; the flood needs
-//! about 3000 frames to reach the marker at the default speed.
+//! runs set `ELEMENTS_FRAMES` (and `ELEMENTS_SHOT`) as in the other examples; the flood reaches
+//! the marker after about 36 s (2200 frames).
 
 mod common;
 
@@ -39,6 +39,12 @@ fn main() {
             ..WorldClock::new(CivilDate::new(2026, 4, 2)).at_hour(15.0)
         })
         .insert_resource(Climate::temperate())
+        // Water only: the river would carve its bare bedrock by up to 8 m in 120 s (the plan's
+        // capacity constants), which is the `erosion_bake` example's subject.
+        .insert_resource(ErosionSettings {
+            enabled: false,
+            ..default()
+        })
         .add_systems(Startup, setup)
         .add_systems(
             Update,
@@ -137,7 +143,9 @@ fn print_depth(
     }
     *last = second;
     let depth = env.water_depth(Vec2::new(MARKER_X, 0.0));
-    let speed = env.water_velocity(Vec2::new(MARKER_X, 0.0)).map(Vec2::length);
+    let speed = env
+        .water_velocity(Vec2::new(MARKER_X, 0.0))
+        .map(Vec2::length);
     println!(
         "t = {:>4} s (simulated {:>6.1} s)  water_depth(marker) = {}  speed = {}  lost {:.0} m³",
         second,

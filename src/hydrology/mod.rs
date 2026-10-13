@@ -196,6 +196,10 @@ pub struct HydrologyStats {
     pub lost_m3: f64,
     /// A bake is running.
     pub baking: bool,
+    /// Substeps that were scheduled but could not be recorded (a pipeline or buffer was not
+    /// ready on the render side that frame). Zero in normal running; their rain and evaporation
+    /// are lost with them.
+    pub dropped: u64,
 }
 
 /// The depth readback: `Environment::water_depth` answers from it.
@@ -231,9 +235,9 @@ impl WaterDepthSnapshot {
 
 impl WaterVelocitySnapshot {
     pub(crate) fn velocity_at(&self, p: Vec2) -> Option<Vec2> {
-        self.grid.contains(p).then(|| {
-            Vec2::new(self.grid.sample(&self.u, p), self.grid.sample(&self.v, p))
-        })
+        self.grid
+            .contains(p)
+            .then(|| Vec2::new(self.grid.sample(&self.u, p), self.grid.sample(&self.v, p)))
     }
 }
 
@@ -420,7 +424,11 @@ fn ensure_hydrology(
     let depth_cells = u64::from(size.x / ds) * u64::from(size.y / ds);
     let velocity_cells = u64::from(size.x / 2) * u64::from(size.y / 2);
     let readback = ReadbackBuffers {
-        depth: zeroed_buffer(&mut buffers, "elements_hydrology_depth_readback", depth_cells * 4),
+        depth: zeroed_buffer(
+            &mut buffers,
+            "elements_hydrology_depth_readback",
+            depth_cells * 4,
+        ),
         velocity: zeroed_buffer(
             &mut buffers,
             "elements_hydrology_velocity_readback",
@@ -481,12 +489,16 @@ fn collect_sources(
         all.truncate(MAX_WATER_SOURCES);
         (all.into_iter().map(|(_, p, r, q)| (p, r, q)).collect(), cut)
     }
-    let (mut entries, cut_sources) = take(sources.iter().map(|(e, s, t)| {
-        (e, t.translation().xz(), s.radius_m, s.rate_m3_s)
-    }));
-    let (sink_entries, cut_sinks) = take(sinks.iter().map(|(e, s, t)| {
-        (e, t.translation().xz(), s.radius_m, -s.rate_m3_s)
-    }));
+    let (mut entries, cut_sources) = take(
+        sources
+            .iter()
+            .map(|(e, s, t)| (e, t.translation().xz(), s.radius_m, s.rate_m3_s)),
+    );
+    let (sink_entries, cut_sinks) = take(
+        sinks
+            .iter()
+            .map(|(e, s, t)| (e, t.translation().xz(), s.radius_m, -s.rate_m3_s)),
+    );
     entries.extend(sink_entries);
     (entries, cut_sources || cut_sinks)
 }
@@ -527,6 +539,7 @@ fn run_hydrology(
     let dropped = gpu.dropped.load(Ordering::Relaxed);
     stats.substeps = executed;
     stats.simulated_s = executed as f64 * f64::from(step_s);
+    stats.dropped = dropped;
 
     // Finish a bake whose last substep has been recorded; start the next one.
     if let Some(bake) = runtime.bake
@@ -595,7 +608,9 @@ fn run_hydrology(
     }
 
     // This frame's substeps: the bake's, or the real-time schedule's.
-    let ready = gpu.ready.load(Ordering::Relaxed) && terrain.is_live() && terrain_gpu.generated.load(Ordering::Relaxed);
+    let ready = gpu.ready.load(Ordering::Relaxed)
+        && terrain.is_live()
+        && terrain_gpu.generated.load(Ordering::Relaxed);
     let max = quality.hydrology_substeps();
     let n = if !ready {
         0
@@ -635,12 +650,7 @@ fn run_hydrology(
         } else {
             f64::from(1.0 - weather.snow_fraction())
         };
-        let source_rate: f64 = runtime
-            .inputs
-            .entries
-            .iter()
-            .map(|e| f64::from(e.2))
-            .sum();
+        let source_rate: f64 = runtime.inputs.entries.iter().map(|e| f64::from(e.2)).sum();
         runtime.input_m3 +=
             seconds * (rain_rate * liquid * area - evap_rate * runtime.wet_area_m2 + source_rate);
         quanta
@@ -650,7 +660,9 @@ fn run_hydrology(
 
     let cell = grid.cell_m;
     let tan_talus = erosion.talus_deg.to_radians().tan();
-    let tan_bedrock = (erosion.talus_deg + model::BEDROCK_EXTRA_DEG).to_radians().tan();
+    let tan_bedrock = (erosion.talus_deg + model::BEDROCK_EXTRA_DEG)
+        .to_radians()
+        .tan();
     gpu.params = HydroParams {
         origin: grid.origin,
         cell,

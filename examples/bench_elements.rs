@@ -6,7 +6,10 @@
 //! elsewhere. Set `ELEMENTS_QUALITY=low|medium|high|ultra` (default high),
 //! `ELEMENTS_RESOLUTION=WxH` (default 1920x1080), `ELEMENTS_PRESET=Thunderstorm` (default `Fog`;
 //! the precipitation passes only run in a wet preset) and `ELEMENTS_BLOCKERS=256` (spawn that
-//! many precipitation blockers around the camera).
+//! many precipitation blockers around the camera). A 2 km hills terrain with a 50 m³/s water
+//! source runs hydrology and erosion at the quality's terrain resolution and its full substeps
+//! per frame (`elements_hydrology`, plus the terrain's own pack passes as `elements_terrain`);
+//! `ELEMENTS_TERRAIN=off` leaves it out.
 //!
 //! The timed passes are compute and do not depend on the resolution, but the GPU's clocks do: a
 //! lightly loaded GPU idles in a low power state and every pass reads several times slower. Check
@@ -22,8 +25,11 @@ use bevy::window::{PresentMode, WindowResolution};
 use bevy_elements::*;
 use common::{ExampleHarness, camera, test_scene};
 
+/// Frames before the per-pass minimum starts counting.
+const WARMUP_FRAMES: u32 = 240;
+
 /// The crate's GPU passes, by diagnostic span name.
-const PASSES: [&str; 10] = [
+const PASSES: [&str; 12] = [
     "elements_wind",
     "elements_fog",
     "elements_clouds_noise",
@@ -34,6 +40,8 @@ const PASSES: [&str; 10] = [
     "elements_clouds_composite",
     "elements_precip_sim",
     "elements_precip_draw",
+    "elements_hydrology",
+    "elements_terrain",
 ];
 
 fn main() {
@@ -65,6 +73,11 @@ fn main() {
             ExampleHarness,
         ))
         .insert_resource(quality)
+        // Far more simulated time than a frame can hold: every frame runs the quality's maximum.
+        .insert_resource(HydrologySettings {
+            time_scale: 1000.0,
+            ..default()
+        })
         .insert_resource(
             WorldClock::new(CivilDate::new(2026, 6, 21))
                 .at_hour(16.0)
@@ -80,6 +93,7 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut director: ResMut<WeatherDirector>,
+    quality: Res<ElementsQuality>,
 ) {
     commands.spawn(camera(
         Vec3::new(0.0, 30.0, 0.0),
@@ -98,6 +112,20 @@ fn setup(
         })
         .unwrap_or(WeatherPreset::PartlyCloudy);
     director.force(preset, std::time::Duration::ZERO);
+    if std::env::var("ELEMENTS_TERRAIN").as_deref() != Ok("off") {
+        // The quality's full terrain resolution, with a river's worth of water.
+        commands.spawn(
+            Terrain::procedural(ProceduralTerrain::hills(42))
+                .with_resolution(UVec2::splat(quality.terrain_max_resolution())),
+        );
+        commands.spawn((
+            WaterSource {
+                rate_m3_s: 50.0,
+                radius_m: 5.0,
+            },
+            Transform::from_xyz(100.0, 0.0, 100.0),
+        ));
+    }
     // Roofs scattered through the particle box: each particle tests every uploaded blocker.
     let blockers: usize = std::env::var("ELEMENTS_BLOCKERS")
         .ok()
@@ -128,11 +156,14 @@ fn report(
     *frame += 1;
     // The minimum over the whole run is the full-clock cost: a pass can only read slower than
     // that, when the GPU has dropped to a low power state; the history window and the average mix
-    // both.
-    for (slot, pass) in lowest.iter_mut().zip(PASSES) {
-        let gpu = DiagnosticPath::new(format!("render/{pass}/elapsed_gpu"));
-        if let Some(now) = store.get(&gpu).and_then(|d| d.value()) {
-            *slot = if *slot > 0.0 { slot.min(now) } else { now };
+    // both. The first frames are skipped: the hydrology pass runs fewer substeps while the
+    // terrain is generated and its pipelines compile, and its minimum would read that.
+    if *frame > WARMUP_FRAMES {
+        for (slot, pass) in lowest.iter_mut().zip(PASSES) {
+            let gpu = DiagnosticPath::new(format!("render/{pass}/elapsed_gpu"));
+            if let Some(now) = store.get(&gpu).and_then(|d| d.value()) {
+                *slot = if *slot > 0.0 { slot.min(now) } else { now };
+            }
         }
     }
     if !(*frame).is_multiple_of(120) {

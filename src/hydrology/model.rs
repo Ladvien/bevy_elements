@@ -82,7 +82,9 @@ impl Scheduler {
     pub(crate) fn step(&mut self, real_dt_s: f64, time_scale: f32, step_s: f32, max: u32) -> u32 {
         let step = f64::from(step_s);
         self.backlog_s += real_dt_s * f64::from(time_scale);
-        let n = (self.backlog_s / step + 0.5).floor().clamp(0.0, f64::from(max));
+        let n = (self.backlog_s / step + 0.5)
+            .floor()
+            .clamp(0.0, f64::from(max));
         self.backlog_s -= n * step;
         self.backlog_s = self.backlog_s.min(f64::from(max) * step);
         n as u32
@@ -281,8 +283,15 @@ pub(crate) fn thermal_moves(
         .iter()
         .zip(&eb)
         .map(|(e, eb)| {
-            (if sum_e > 0.0 { from_sediment * e / sum_e } else { 0.0 })
-                + (if sum_eb > 0.0 { from_bedrock * eb / sum_eb } else { 0.0 })
+            (if sum_e > 0.0 {
+                from_sediment * e / sum_e
+            } else {
+                0.0
+            }) + (if sum_eb > 0.0 {
+                from_bedrock * eb / sum_eb
+            } else {
+                0.0
+            })
         })
         .collect();
     (from_sediment, from_bedrock, q)
@@ -397,7 +406,8 @@ mod tests {
             matches!(first_delivery, Some(226..=227)),
             "first quantum at {first_delivery:?}"
         );
-        let ideal = rate * 0.02 * 1_000_000.0;
+        // The step is an f32 setting, so the account is exact for that value of it.
+        let ideal = rate * f64::from(0.02_f32) * 1_000_000.0;
         assert!(
             (delivered + acc.pending_m() - ideal).abs() < 1e-12,
             "delivered {delivered} + pending {} vs {ideal}",
@@ -463,7 +473,10 @@ mod tests {
         let after = exchange(cell, c, k, k);
         assert!((after.suspended - 0.03 * c).abs() < 1e-6, "{after:?}");
         assert!((cell.sediment - after.sediment - after.suspended).abs() < 1e-6);
-        assert_eq!(after.bedrock, 10.0, "bedrock untouched while sediment lasts");
+        assert_eq!(
+            after.bedrock, 10.0,
+            "bedrock untouched while sediment lasts"
+        );
         // Sediment exhausted: the rest comes from bedrock.
         let bare = exchange(
             CellSolids {
