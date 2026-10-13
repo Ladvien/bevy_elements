@@ -155,7 +155,21 @@ fn bed_transmittance(depth: f32) -> vec3<f32> {
     if n <= 1.0 || depth <= 0.0 || lights.n_directional_lights == 0u {
         return vec3<f32>(1.0);
     }
-    let mu = clamp(lights.directional_lights[0].direction_to_light.y, 0.05, 1.0);
+    // The brightest directional light is the sun (the moon is a second light).
+    var brightest = 0.0;
+    var up = 0.0;
+    for (var i = 0u; i < lights.n_directional_lights; i += 1u) {
+        let c = lights.directional_lights[i].color;
+        let luminance = c.r + c.g + c.b;
+        if luminance > brightest {
+            brightest = luminance;
+            up = lights.directional_lights[i].direction_to_light.y;
+        }
+    }
+    if brightest <= 0.0 {
+        return vec3<f32>(1.0);
+    }
+    let mu = clamp(up, 0.05, 1.0);
     let mu_r = sqrt(max(1.0 - (1.0 - mu * mu) / (n * n), 0.01));
     return exp(-material.absorption.xyz * depth / mu_r);
 }
