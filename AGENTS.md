@@ -66,6 +66,8 @@ No system is implemented without its `docs/research/<system>.md`, committed firs
 - **Pressure projection with open window edges needs Dirichlet pressure there**: with Neumann on every edge a terrain that blocks one side of the wind window more than the other leaves unprojectable divergence (2.8×10⁻² s⁻¹ over hills, independent of the Jacobi count).
 - **`ShaderBuffer::with_size` buffers keep their main-world asset** with `RenderAssetUsages::default()`: replace its `data` to rewrite the GPU copy; `RENDER_WORLD`-only buffers cannot be edited from the main world.
 - **Particle and splash buffers** are read back in tests through `PrecipitationState` (`tests/gpu_precipitation.rs`); one test process builds one renderer at a time, so the GPU tests share a lock.
+- **Pixel comparisons need `DebandDither::Disabled`**: the tonemapping dither depends on the pixel position, so two cubes with identical materials differ by a level. A render-target `Image` read back with `Readback` needs `TextureUsages::COPY_SRC` added to its descriptor (`Image::new_target_texture` has none), else the render world quits on a validation error (`tests/gpu_weathered.rs`).
+- **A material's storage buffers all count against the fragment stage's eight** (Bevy uses five with an atmosphere camera): `WeatheredExtension` binds one, `ElementsGlobals` (80 B, shared, rewritten in place from `update_globals` with `RenderAssetUsages::default()` so no bind group is re-prepared).
 
 ## Build and test
 
