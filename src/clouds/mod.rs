@@ -288,6 +288,11 @@ pub(crate) struct CloudGpu {
 #[extract_app(RenderApp)]
 pub(crate) struct CloudView;
 
+/// The system that moves [`CloudWeatherMap`] and [`CloudShadows`] and fills the GPU uniforms;
+/// consumers of the maps' origins order themselves after it.
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct CloudGpuUpdate;
+
 /// Main-world state of the cloud simulation.
 #[derive(Resource, Default)]
 struct CloudRuntime {
@@ -349,7 +354,10 @@ impl Plugin for CloudPlugin {
                         update_layer,
                         advance_drift,
                         update_views,
-                        update_gpu,
+                        // The march reads this frame's `LightningFlash`.
+                        update_gpu
+                            .after(crate::lightning::write_flash)
+                            .in_set(CloudGpuUpdate),
                     )
                         .chain()
                         .in_set(ElementsSystems::Simulation),

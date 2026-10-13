@@ -79,7 +79,7 @@ fn advance_bolts(
 
 /// Publish the brightest flash this frame as [`LightningFlash`]: its channel top at the cloud
 /// base, `Φ·e / 4π` candela; intensity 0 when nothing is flashing.
-fn write_flash(bolts: Query<&ActiveBolt>, mut flash: ResMut<LightningFlash>) {
+pub(crate) fn write_flash(bolts: Query<&ActiveBolt>, mut flash: ResMut<LightningFlash>) {
     let brightest = bolts
         .iter()
         .filter(|b| b.mean > 0.0)

@@ -3,18 +3,23 @@
 
 mod gpu;
 
+use bevy::asset::RenderAssetUsages;
 use bevy::asset::embedded_asset;
 use bevy::camera::Exposure;
 use bevy::light::FogVolume;
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
-use bevy::render::render_resource::ShaderType;
+use bevy::render::render_resource::{Extent3d, ShaderType, TextureDimension, TextureFormat};
 
 use crate::celestial::{CelestialFrame, SunState, scene_illuminance, sky_dimming};
 use crate::climate::{Weather, WeatherDirector, WeatherPreset};
-use crate::clouds::CloudShadows;
+use crate::clouds::{CloudShadows, CloudWeatherMap};
 use crate::gpu::grid::storage_volume;
 use crate::plugin::{ElementsCamera, ElementsSystems, ElementsView, ensure_gpu_core};
+use crate::precipitation::model::{
+    marshall_palmer_lambda, precipitation_split, rain_extinction, snow_extinction,
+    water_weighted_fall_speed,
+};
 
 /// Koschmieder's constant for a 2 % contrast threshold: extinction = 3.912 / visibility.
 pub const KOSCHMIEDER: f32 = 3.912;
@@ -118,12 +123,19 @@ pub(crate) struct FogParams {
     extent: Vec4,
     shape: Vec4,
     size: UVec4,
+    /// x: precipitation extinction σ_p, m⁻¹. y: shaft slant per m/s of wind, s/m. z: weather map
+    /// extent, m. w: map precipitation at full coverage (`g_nom`).
+    precip: Vec4,
+    /// xy: wind at 10 m, m/s. zw: weather map origin, world XZ, m.
+    slant: Vec4,
 }
 
 /// The density texture and this frame's kernel parameters; extracted every frame.
 #[derive(Resource, Clone)]
 pub(crate) struct FogGpu {
     pub texture: Handle<Image>,
+    /// The precipitation map the shaft term samples (`precipitation_map`).
+    pub weather_map: Handle<Image>,
     pub params: FogParams,
     pub active: bool,
 }
@@ -132,6 +144,8 @@ pub(crate) struct FogGpu {
 struct FogRuntime {
     scale_height: f32,
     wind_offset: Vec2,
+    /// A 1 × 1 map with full precipitation everywhere: the shaft term without clouds.
+    neutral_map: Handle<Image>,
 }
 
 impl Default for FogRuntime {
@@ -139,6 +153,7 @@ impl Default for FogRuntime {
         Self {
             scale_height: HAZE_SCALE_HEIGHT_M,
             wind_offset: Vec2::ZERO,
+            neutral_map: Handle::default(),
         }
     }
 }
@@ -154,14 +169,30 @@ impl Plugin for FogPlugin {
             .add_systems(Startup, spawn_volume)
             .add_systems(
                 Update,
-                (update_volume, update_distance_fog).in_set(ElementsSystems::Simulation),
+                (
+                    // The clouds move the weather map's origin there; the fog kernel samples it.
+                    update_volume.after(crate::clouds::CloudGpuUpdate),
+                    update_distance_fog,
+                )
+                    .in_set(ElementsSystems::Simulation),
             );
         gpu::plugin(app);
     }
 }
 
-fn spawn_volume(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+fn spawn_volume(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    mut runtime: ResMut<FogRuntime>,
+) {
     let texture = storage_volume(&mut images, GROUND_FOG_TEXELS);
+    runtime.neutral_map = images.add(Image::new_fill(
+        Extent3d::default(),
+        TextureDimension::D2,
+        &[0, 255, 0, 255],
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::RENDER_WORLD,
+    ));
     commands.spawn((
         Name::new("Ground fog"),
         GroundFog,
@@ -176,6 +207,7 @@ fn spawn_volume(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     ));
     commands.insert_resource(FogGpu {
         texture,
+        weather_map: Handle::default(),
         params: FogParams::default(),
         active: false,
     });
@@ -191,6 +223,7 @@ fn update_volume(
     clock: Res<crate::celestial::WorldClock>,
     mut runtime: ResMut<FogRuntime>,
     gpu: Option<ResMut<FogGpu>>,
+    cloud_map: Option<Res<CloudWeatherMap>>,
     mut volumes: Query<(&mut FogVolume, &mut Transform), With<GroundFog>>,
 ) {
     let Some(mut gpu) = gpu else {
@@ -227,7 +260,19 @@ fn update_volume(
     *transform = Transform::from_translation(centre).with_scale(GROUND_FOG_EXTENT);
 
     let dust = weather.dust.clamp(0.0, 1.0);
-    let albedo = FOG_ALBEDO + (DUST_SINGLE_SCATTER - FOG_ALBEDO) * dust;
+    // Precipitation takes its share of the visibility's extinction as shafts (see
+    // `docs/research/precipitation.md`); water and ice do not absorb, so that share scatters
+    // with albedo 1.
+    let snow_fraction = weather.snow_fraction();
+    let split = precipitation_split(
+        weather.visibility_m,
+        weather.precipitation_mm_h,
+        snow_fraction,
+    );
+    let precipitation_share =
+        split.precipitation / (MEAN_NOISE_FACTOR * split.haze + split.precipitation).max(1e-9);
+    let haze_albedo = FOG_ALBEDO + (DUST_SINGLE_SCATTER - FOG_ALBEDO) * dust;
+    let albedo = haze_albedo + (1.0 - haze_albedo) * precipitation_share;
     volume.absorption = 1.0 - albedo;
     volume.scattering = albedo;
     volume.light_intensity = volume_light_compensation(
@@ -242,9 +287,23 @@ fn update_volume(
         dust,
     );
 
+    // Rain falls slanted by the wind: per m of height the shaft shifts by `slant · wind`, with
+    // `slant` the extinction-weighted mean of 1 / fall speed (snow falls at 1 m/s).
+    let snow_rate = weather.precipitation_mm_h * snow_fraction;
+    let rain_rate = weather.precipitation_mm_h - snow_rate;
+    let (rain_sigma, snow_sigma) = (rain_extinction(rain_rate), snow_extinction(snow_rate));
+    let slant = if split.precipitation > 0.0 {
+        let rain_speed = water_weighted_fall_speed(marshall_palmer_lambda(rain_rate));
+        (rain_sigma / rain_speed + snow_sigma) / (rain_sigma + snow_sigma)
+    } else {
+        0.0
+    };
+    let (map, map_origin, map_extent) =
+        precipitation_map(cloud_map.as_deref(), &runtime.neutral_map);
+    gpu.weather_map = map;
     gpu.params = FogParams {
         origin: (centre - GROUND_FOG_EXTENT * 0.5).extend(1.0 / FBM2_MAX),
-        extent: GROUND_FOG_EXTENT.extend(extinction_for_visibility(weather.visibility_m)),
+        extent: GROUND_FOG_EXTENT.extend(split.haze),
         shape: Vec4::new(
             runtime.scale_height,
             ground,
@@ -252,8 +311,29 @@ fn update_volume(
             runtime.wind_offset.y,
         ),
         size: GROUND_FOG_TEXELS.extend(0),
+        precip: Vec4::new(
+            split.precipitation,
+            slant,
+            map_extent,
+            (weather.precipitation_mm_h / 25.0).clamp(0.0, 1.0),
+        ),
+        slant: Vec4::new(wind.x, wind.y, map_origin.x, map_origin.y),
     };
     gpu.active = true;
+}
+
+/// The map whose green channel is the precipitation at full coverage under cloud, with the world
+/// XZ of its minimum corner and its extent in m: the clouds' weather map, so rain shafts fall
+/// only under precipitating cloud. With `CloudPlugin` disabled it is the neutral 1 × 1 map
+/// (green = 1 everywhere), which reduces the shaft term to its noise.
+fn precipitation_map(
+    clouds: Option<&CloudWeatherMap>,
+    neutral: &Handle<Image>,
+) -> (Handle<Image>, Vec2, f32) {
+    match clouds {
+        Some(map) => (map.map.clone(), map.origin, map.extent),
+        None => (neutral.clone(), Vec2::ZERO, 1.0),
+    }
 }
 
 fn update_distance_fog(
@@ -330,5 +410,67 @@ mod tests {
         assert!((fog_hue(45.0, 1.0) - DUST_ALBEDO).length() < 1e-6);
         assert_eq!(fog_hue(0.0, 0.0), FOG_COLOUR * DUSK_TINT);
         assert_eq!(fog_hue(-20.0, 0.0), FOG_COLOUR);
+    }
+
+    /// CPU transliteration of `fog_density` in `density.wesl` with the neutral weather map
+    /// (g = 1): the haze term and the shaft term at `p`, with the noise passed through `fbm`.
+    fn kernel(params: &FogParams, p: Vec3, wind_offset: Vec2) -> (f32, f32) {
+        use crate::gpu::noise_mirror::fbm3;
+        let unit = |n: f32| (0.5 + 0.5 * n * params.origin.w).clamp(0.0, 1.0);
+        let h = (p.y - params.shape.y).max(0.0);
+        let q = (p - Vec3::new(wind_offset.x, 0.0, wind_offset.y)) / 80.0;
+        let haze = params.extent.w * (-h / params.shape.x).exp() * (0.6 + 0.4 * unit(fbm3(q, 2)));
+        let y_ref = params.origin.y + 0.5 * params.extent.y;
+        let x_ref = p.xz() + params.slant.xy() * params.precip.y * (p.y - y_ref);
+        let coverage = (1.0 / params.precip.w.max(1e-4)).clamp(0.0, 1.0);
+        let qs = Vec3::new(
+            (x_ref.x - wind_offset.x) / 120.0,
+            0.37,
+            (x_ref.y - wind_offset.y) / 120.0,
+        );
+        let s = coverage * (0.4 + 1.2 * unit(fbm3(qs, 2)));
+        (haze, params.precip.x * s)
+    }
+
+    /// Validation 8 of `docs/research/precipitation.md`: forced Rain at 4 mm/h with the neutral
+    /// map. The slab mean of the density 60 m above the ground is
+    /// `e^−1 · 0.8 · σ_haze + σ_p` = 7.68e-4; the shaft factor has mean 1; the shaft optical depth
+    /// over the volume's 120 m height is σ_p · 120 = 0.065.
+    #[test]
+    fn the_kernel_with_the_shaft_term_matches_the_note() {
+        use crate::gpu::noise_mirror::samples;
+        let split = precipitation_split(3000.0, 4.0, 0.0);
+        let params = FogParams {
+            origin: Vec3::new(-120.0, 0.0, -120.0).extend(1.0 / FBM2_MAX),
+            extent: GROUND_FOG_EXTENT.extend(split.haze),
+            shape: Vec4::new(HAZE_SCALE_HEIGHT_M, 0.0, 0.0, 0.0),
+            size: GROUND_FOG_TEXELS.extend(0),
+            precip: Vec4::new(split.precipitation, 0.0, 1.0, 4.0 / 25.0),
+            slant: Vec4::ZERO,
+        };
+        let n = 100_000;
+        let (mut total, mut shaft_factor) = (0.0_f64, 0.0_f64);
+        for p in samples(n, 20_000.0) {
+            let p = Vec3::new(p.x, 60.0, p.z);
+            let (haze, shafts) = kernel(&params, p, Vec2::ZERO);
+            total += f64::from(haze + shafts);
+            shaft_factor += f64::from(shafts / split.precipitation);
+        }
+        let (total, shaft_factor) = (total / n as f64, shaft_factor / n as f64);
+        let expected = (-1.0_f64).exp() * 0.8 * 7.598e-4 + 5.442e-4;
+        println!(
+            "slab mean {total:.4e} (expected {expected:.4e}), shaft factor mean {shaft_factor:.4}"
+        );
+        assert!((expected - 7.68e-4).abs() < 1e-6, "{expected}");
+        assert!(
+            (total / expected - 1.0).abs() < 0.03,
+            "{total:e} vs {expected:e}"
+        );
+        assert!(
+            (shaft_factor - 1.0).abs() < 0.02,
+            "shaft factor mean {shaft_factor}"
+        );
+        let optical_depth = f64::from(split.precipitation) * 120.0;
+        assert!((optical_depth - 0.065).abs() < 0.0005, "{optical_depth}");
     }
 }
