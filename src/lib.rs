@@ -16,6 +16,7 @@ mod precipitation;
 mod query;
 mod terrain;
 mod wind;
+mod weathered;
 
 // Plugin group, system sets, camera, quality.
 pub use plugin::{ElementsCamera, ElementsPlugins, ElementsQuality, ElementsSystems};
@@ -81,3 +82,9 @@ pub use hydrology::{
 // `bevy_flora` integration.
 #[cfg(feature = "flora")]
 pub use flora::{ElementsFloraPlugin, FLORA_FULL_WIND_MS};
+
+// Weathered materials.
+pub use weathered::{
+    ElementsGlobals, SNOW_ALBEDO, SNOW_ROUGHNESS, WeatheredExtension, WeatheredMaterial,
+    WeatheredPlugin,
+};
