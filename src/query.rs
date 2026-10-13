@@ -7,6 +7,7 @@ use bevy::prelude::*;
 
 use crate::celestial::{SunState, WorldClock};
 use crate::climate::Weather;
+use crate::terrain::{TerrainLeaves, TerrainSnapshot};
 use crate::wind::{WindSnapshot, WindState};
 
 /// CPU copies of GPU simulation state, filled by the throttled readback
@@ -17,6 +18,10 @@ pub struct EnvironmentSnapshot {
     pub(crate) wind: Option<WindSnapshot>,
     /// Mean direct cloud transmittance around the camera at the last readback, 0–1.
     pub(crate) cloud_transmittance: Option<f32>,
+    /// The terrain surface heights at the last readback, if a terrain exists.
+    pub(crate) terrain: Option<TerrainSnapshot>,
+    /// The terrain's leaf-patch bounds at the last readback.
+    pub(crate) terrain_leaves: Option<TerrainLeaves>,
     /// Real time of the last completed readback.
     pub(crate) updated_at: Option<Duration>,
 }
@@ -72,6 +77,16 @@ impl Environment<'_> {
             .as_ref()
             .and_then(|w| w.sample(position))
             .unwrap_or_else(|| self.wind.prevailing_velocity())
+    }
+
+    /// World height of the terrain surface (bedrock + sediment) at `position` (world XZ), m.
+    /// `None` outside the terrain, when there is none, and before the first readback; the
+    /// value is the surface at the last readback, up to one readback interval old.
+    pub fn terrain_height(&self, position: Vec2) -> Option<f32> {
+        self.snapshot
+            .terrain
+            .as_ref()
+            .and_then(|t| t.height(position))
     }
 
     /// Real time since the snapshot was last filled; `Duration::MAX` before the first readback.

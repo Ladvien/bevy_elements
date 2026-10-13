@@ -20,6 +20,7 @@ use crate::gpu::readback::ReadbackPlugin;
 use crate::lightning::LightningPlugin;
 use crate::precipitation::PrecipitationPlugin;
 use crate::query::EnvironmentSnapshot;
+use crate::terrain::TerrainPlugin;
 use crate::wind::{WindPlugin, WindState};
 
 /// Every domain plugin that exists in this version, in dependency order.
@@ -39,6 +40,7 @@ impl PluginGroup for ElementsPlugins {
             .add(ClimatePlugin)
             .add(CelestialPlugin)
             .add(WindPlugin)
+            .add(TerrainPlugin)
             .add(FogPlugin)
             .add(CloudPlugin)
             .add(LightningPlugin)
@@ -123,6 +125,18 @@ impl ElementsQuality {
             Self::Low | Self::Medium => 10,
             Self::High => 12,
             Self::Ultra => 40,
+        }
+    }
+
+    /// The most cells per axis the terrain's simulation grid has (`Terrain::resolution` is
+    /// clamped to this and rounded down to a power of two). The hydrology and erosion kernels
+    /// run on this grid, so this is the one number to lower if they do not fit their budget.
+    pub fn terrain_max_resolution(self) -> u32 {
+        match self {
+            Self::Low => 256,
+            Self::Medium => 512,
+            Self::High => 1024,
+            Self::Ultra => 2048,
         }
     }
 

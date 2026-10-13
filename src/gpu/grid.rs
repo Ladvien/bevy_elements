@@ -21,6 +21,20 @@ pub(crate) fn storage_buffer<T: bytemuck::NoUninit>(
     buffers.add(buffer)
 }
 
+/// A GPU-only storage buffer of `bytes` zero bytes, created on the GPU with no CPU copy (large
+/// simulation layers would otherwise need a zeroed `Vec` as big as they are). Same usages as
+/// [`storage_buffer`].
+pub(crate) fn zeroed_buffer(
+    buffers: &mut Assets<ShaderBuffer>,
+    label: &'static str,
+    bytes: u64,
+) -> Handle<ShaderBuffer> {
+    let mut buffer = ShaderBuffer::with_size(bytes, RenderAssetUsages::RENDER_WORLD);
+    buffer.label = label.into();
+    buffer.buffer_usage = BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST;
+    buffers.add(buffer)
+}
+
 /// A 3D `rgba16float` texture written by a compute kernel (write-only storage) and sampled by
 /// shaders with a linear, repeating sampler. Starts zeroed.
 pub(crate) fn storage_volume(images: &mut Assets<Image>, size: UVec3) -> Handle<Image> {
