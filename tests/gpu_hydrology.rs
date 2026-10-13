@@ -506,3 +506,366 @@ fn a_sink_removes_its_rate_and_a_source_adds_it() {
     assert_eq!(sum(&sim.read_f32(&water, cells)), 0.0);
     sim.finish();
 }
+
+/// A smooth 40 m-relief height field with a few scales, deterministic.
+fn smooth_field(n: usize) -> Vec<f32> {
+    let tau = std::f32::consts::TAU;
+    let mut field = Vec::with_capacity(n * n);
+    for j in 0..n {
+        for i in 0..n {
+            let (x, y) = (i as f32, j as f32);
+            let h = 20.0
+                + 12.0 * (tau * x / 128.0).sin()
+                + 8.0 * (tau * y / 96.0 + 1.0).cos()
+                + 5.0 * (tau * (x + y) / 64.0).sin();
+            field.push(h);
+        }
+    }
+    field
+}
+
+/// Wait for the first `TerrainBaked`, counting the frames; returns them.
+fn bake_frames(sim: &mut Sim) -> usize {
+    let mut frames = 0;
+    sim.run_until("the bake", |app| {
+        frames += 1;
+        !app.world().resource::<Baked>().0.is_empty()
+    });
+    frames
+}
+
+/// Erosion validation 1: a closed bake keeps every unit of solid.
+#[test]
+#[ignore = "needs a GPU"]
+fn gpu_erosion_conserves_mass() {
+    let _lock = serial();
+    let n = 256usize;
+    let cells = n * n;
+    let l2 = 4.0f64;
+    let mut sim = Sim::new(Config::new(tank(256, 2.0)));
+    let bed0 = smooth_field(n);
+    let sed0 = vec![0.5f32; cells];
+    let (bedrock, sediment, suspended, water) = (
+        sim.terrain.bedrock.clone(),
+        sim.terrain.sediment.clone(),
+        sim.terrain.suspended.clone(),
+        sim.terrain.water.clone(),
+    );
+    sim.write(&bedrock, &bed0);
+    sim.write(&sediment, &sed0);
+    let m0 = (sum(&bed0) + sum(&sed0)) * l2;
+    sim.app.world_mut().write_message(ErodeTerrain {
+        duration_s: 100.0,
+        rain_mm_h: 20.0,
+    });
+    // Halfway through, the water carries something.
+    sim.run_until("2500 substeps", |app| {
+        app.world().resource::<HydrologyStats>().substeps >= 2500
+    });
+    let mid = sim.read_f32(&suspended, cells);
+    let mid_max = mid.iter().copied().fold(0.0, f32::max);
+    let frames = bake_frames(&mut sim);
+    sim.settle();
+    let bed = sim.read_f32(&bedrock, cells);
+    let sed = sim.read_f32(&sediment, cells);
+    let susp = sim.read_f32(&suspended, cells);
+    let wat = sim.read_f32(&water, cells);
+    let m1 = (sum(&bed) + sum(&sed) + sum(&susp)) * l2;
+    let moved: f64 = bed
+        .iter()
+        .zip(&sed)
+        .zip(bed0.iter().zip(&sed0))
+        .map(|((b, s), (b0, s0))| f64::from((b + s) - (b0 + s0)).abs())
+        .sum::<f64>()
+        * l2
+        / 2.0;
+    let rel = (m1 / m0 - 1.0).abs();
+    let datum_free = (m1 - m0).abs();
+    let min_susp = susp.iter().copied().fold(f32::INFINITY, f32::min);
+    let min_sed = sed.iter().copied().fold(f32::INFINITY, f32::min);
+    let min_wat = wat.iter().copied().fold(f32::INFINITY, f32::min);
+    let max_susp = susp.iter().copied().fold(0.0, f32::max);
+    println!(
+        "erosion mass: {} substeps, M {m1:.4} / {m0:.4} (rel {rel:.2e}), |ΔM| {datum_free:.3e} m³ of {moved:.1} m³ moved ({:.2e}), min s {min_susp:e}, min Bs {min_sed:e}, min d {min_wat:e}, max s {mid_max:.4}/{max_susp:.4}",
+        sim.stats().substeps,
+        datum_free / moved
+    );
+    let _ = frames;
+    assert!(rel <= 5e-3, "the plan's 0.5 %: {rel}");
+    assert!(moved > 100.0, "nothing eroded: {moved} m³ moved");
+    assert!(
+        datum_free <= 1e-3 * moved,
+        "|ΔM| {datum_free} above 0.1 % of the moved mass {moved}"
+    );
+    assert!(min_susp >= 0.0 && min_sed >= 0.0 && min_wat >= 0.0);
+    assert!(mid_max > 0.0, "the water never carried any sediment");
+    sim.finish();
+}
+
+/// The steepest of the eight downhill neighbour slopes of a cell, degrees.
+fn steepest_deg(surface: &[f32], n: usize, i: usize, j: usize, l: f32) -> f32 {
+    let mut best = 0.0f32;
+    for dj in -1i32..=1 {
+        for di in -1i32..=1 {
+            if di == 0 && dj == 0 {
+                continue;
+            }
+            let (x, y) = (i as i32 + di, j as i32 + dj);
+            if x < 0 || y < 0 || x >= n as i32 || y >= n as i32 {
+                continue;
+            }
+            let dist = l * ((di * di + dj * dj) as f32).sqrt();
+            let drop = surface[j * n + i] - surface[y as usize * n + x as usize];
+            best = best.max((drop / dist).atan().to_degrees());
+        }
+    }
+    best
+}
+
+/// The central-difference slope of the terrain shader's normal, degrees.
+fn central_deg(surface: &[f32], n: usize, i: usize, j: usize, l: f32) -> f32 {
+    let at = |x: usize, y: usize| surface[y.min(n - 1) * n + x.min(n - 1)];
+    let gx = (at(i + 1, j) - at(i.saturating_sub(1), j)) / (2.0 * l);
+    let gz = (at(i, j + 1) - at(i, j.saturating_sub(1))) / (2.0 * l);
+    (gx * gx + gz * gz).sqrt().atan().to_degrees()
+}
+
+fn percentile(values: &mut [f32], p: f64) -> f32 {
+    values.sort_by(f32::total_cmp);
+    values[((values.len() - 1) as f64 * p).round() as usize]
+}
+
+/// A cone of base radius 12 cells and slope tan 60° (41.6 m high) at the grid centre.
+fn cone(n: usize) -> Vec<f32> {
+    let mut field = vec![0.0f32; n * n];
+    for j in 0..n {
+        for i in 0..n {
+            let r = (((i as f32 - 127.5).powi(2)) + ((j as f32 - 127.5).powi(2))).sqrt() * 2.0;
+            field[j * n + i] = (24.0 - r).max(0.0) * 60.0f32.to_radians().tan();
+        }
+    }
+    field
+}
+
+/// Erosion validation 2: a sediment cone relaxes to the talus angle, a bedrock cone to 45°.
+#[test]
+#[ignore = "needs a GPU"]
+fn gpu_thermal_respects_talus() {
+    let _lock = serial();
+    let n = 256usize;
+    let cells = n * n;
+    let heap = cone(n);
+    let zero = vec![0.0f32; cells];
+    for sediment_cone in [true, false] {
+        let mut sim = Sim::new(Config::new(tank(256, 2.0)));
+        let (bedrock, sediment) = (sim.terrain.bedrock.clone(), sim.terrain.sediment.clone());
+        if sediment_cone {
+            sim.write(&bedrock, &zero);
+            sim.write(&sediment, &heap);
+        } else {
+            sim.write(&bedrock, &heap);
+            sim.write(&sediment, &zero);
+        }
+        let total0 = sum(&heap);
+        // No rain, no sources: 4000 substeps are 1000 thermal passes.
+        sim.app.world_mut().write_message(ErodeTerrain {
+            duration_s: 80.0,
+            rain_mm_h: 0.0,
+        });
+        bake_frames(&mut sim);
+        sim.settle();
+        let bed = sim.read_f32(&bedrock, cells);
+        let sed = sim.read_f32(&sediment, cells);
+        let surface: Vec<f32> = bed.iter().zip(&sed).map(|(b, s)| b + s).collect();
+        let drift = (sum(&surface) / total0 - 1.0).abs();
+        let footprint: Vec<(usize, usize)> = (0..n)
+            .flat_map(|j| (0..n).map(move |i| (i, j)))
+            .filter(|&(i, j)| surface[j * n + i] > 0.01)
+            .collect();
+        let mut steepest: Vec<f32> = footprint
+            .iter()
+            .map(|&(i, j)| steepest_deg(&surface, n, i, j, 2.0))
+            .collect();
+        let mut central: Vec<f32> = footprint
+            .iter()
+            .map(|&(i, j)| central_deg(&surface, n, i, j, 2.0))
+            .collect();
+        let max_steep = steepest.iter().copied().fold(0.0, f32::max);
+        let p99_steep = percentile(&mut steepest, 0.99);
+        let p99_central = percentile(&mut central, 0.99);
+        println!(
+            "thermal ({}): steepest p99 {p99_steep:.2}° max {max_steep:.2}°, central p99 {p99_central:.2}°, drift {drift:.2e}, footprint {} cells, {} substeps",
+            if sediment_cone { "sediment" } else { "bedrock" },
+            footprint.len(),
+            sim.stats().substeps
+        );
+        assert!(drift <= 1e-5, "solid drift {drift}");
+        if sediment_cone {
+            assert!(p99_steep <= 37.0, "p99 {p99_steep}° above talus + 2°");
+            assert!(max_steep <= 37.5, "max {max_steep}°");
+        } else {
+            assert!(
+                (44.0..=47.0).contains(&p99_central),
+                "a bedrock cone ends near 45°: {p99_central}°"
+            );
+        }
+        sim.finish();
+    }
+}
+
+/// Erosion validation 6: a bake runs 3750 frames of 8 substeps for 600 s, ignores the weather's
+/// rain, and then says so.
+#[test]
+#[ignore = "needs a GPU"]
+fn a_bake_runs_its_duration_and_ignores_the_weather() {
+    let _lock = serial();
+    let n = 256usize;
+    let cells = n * n;
+    let mut config = Config::new(tank(256, 2.0));
+    // A thunderstorm's 25 mm/h would fill the tank if the bake did not replace it.
+    config.preset = WeatherPreset::Thunderstorm;
+    config.mm_h = 25.0;
+    config.erosion.enabled = false;
+    let mut sim = Sim::new(config);
+    sim.app.world_mut().write_message(ErodeTerrain {
+        duration_s: 600.0,
+        rain_mm_h: 0.0,
+    });
+    let frames = bake_frames(&mut sim);
+    sim.settle();
+    let stats = sim.stats();
+    let water = sim.terrain.water.clone();
+    let after = sim.read_f32(&water, cells);
+    println!(
+        "bake: {frames} frames, {} substeps, {:.2} s simulated, water {:e} m³",
+        stats.substeps,
+        stats.simulated_s,
+        sum(&after)
+    );
+    assert!(
+        (3749..=3758).contains(&frames),
+        "{frames} frames for 3750 of 8 substeps"
+    );
+    assert_eq!(stats.substeps, 30_000);
+    assert!((stats.simulated_s - 600.0).abs() < 0.021, "{}", stats.simulated_s);
+    assert_eq!(sum(&after), 0.0, "weather rain fell during the bake");
+    assert!(!stats.baking);
+    // A second bake after the first runs the same again.
+    sim.app.world_mut().write_message(ErodeTerrain {
+        duration_s: 1.0,
+        rain_mm_h: 20.0,
+    });
+    sim.app.world_mut().write_message(ErodeTerrain {
+        duration_s: 2.0,
+        rain_mm_h: 20.0,
+    });
+    sim.run_until("two more bakes", |app| app.world().resource::<Baked>().0.len() == 3);
+    let baked = sim.app.world().resource::<Baked>().0.clone();
+    assert_eq!(baked, vec![600.0, 1.0, 2.0], "queued bakes run in order");
+    sim.finish();
+}
+
+/// The valley of `examples/flood.rs`: V-shaped, running along +X at a 1 % bed slope.
+fn valley(n: usize, cell: f32) -> Vec<f32> {
+    let mut bed = Vec::with_capacity(n * n);
+    for j in 0..n {
+        for i in 0..n {
+            let x = (i as f32 + 0.5 - n as f32 * 0.5) * cell;
+            let z = (j as f32 + 0.5 - n as f32 * 0.5) * cell;
+            bed.push(0.01 * (n as f32 * cell * 0.5 - x) + 0.2 * z.abs());
+        }
+    }
+    bed
+}
+
+/// Hydrology validation 6 and 12: the `flood` expectation and the readback.
+#[test]
+#[ignore = "needs a GPU"]
+fn a_flood_reaches_the_marker_and_stays() {
+    let _lock = serial();
+    let n = 256usize;
+    let cells = n * n;
+    let mut config = Config::new(tank(256, 2.0));
+    config.hydrology = HydrologySettings::default();
+    config.preset = WeatherPreset::Rain;
+    config.mm_h = 4.0;
+    config.sources = vec![(Vec2::new(-200.0, 0.0), 50.0, 5.0)];
+    let mut sim = Sim::new(config);
+    let bedrock = sim.terrain.bedrock.clone();
+    sim.write(&bedrock, &valley(n, 2.0));
+    let marker = Vec2::new(-100.0, 0.0);
+    let mut samples: Vec<Option<f32>> = Vec::new();
+    for frame in 0..(120 * 60) {
+        sim.app.update();
+        if frame % 60 == 0 {
+            samples.push(sim.water_depth(marker));
+        }
+    }
+    let line: Vec<String> = samples
+        .iter()
+        .map(|d| d.map_or("-".into(), |d| format!("{d:.2}")))
+        .collect();
+    println!("flood depth at the marker per second: {}", line.join(" "));
+    assert_eq!(samples[0], None, "a depth before the first readback");
+    let first_some = samples.iter().position(Option::is_some).expect("a readback");
+    assert!(first_some <= 1, "first Some at {first_some} s");
+    let first_wet = samples
+        .iter()
+        .position(|d| d.is_some_and(|d| d > 0.5))
+        .expect("the flood never reached 0.5 m");
+    assert!(
+        first_wet as f32 <= 100.0 / 2.5 + 2.0,
+        "arrival at {first_wet} s"
+    );
+    for (t, d) in samples.iter().enumerate().take(first_wet) {
+        assert!(
+            d.is_none_or(|d| d < 1e-3 || t + 1 >= first_wet),
+            "water at {t} s before the front"
+        );
+    }
+    for (t, d) in samples.iter().enumerate().skip(first_wet) {
+        assert!(d.is_some_and(|d| d >= 0.5), "depth {d:?} at {t} s after the crossing");
+    }
+
+    // Readback: hold, let two intervals pass, compare with the buffer.
+    sim.set_time_scale(0.0);
+    sim.settle();
+    sim.frames(60);
+    let water = sim.terrain.water.clone();
+    let depth = sim.read_f32(&water, cells);
+    let grid = sim.app.world().resource::<TerrainState>().grid;
+    let snapshot = sim.water_depth(marker).expect("a readback");
+    let g = (marker - grid.origin) / grid.cell_m - 0.5;
+    let (i0, j0) = (g.x.floor() as usize, g.y.floor() as usize);
+    let (wx, wy) = (g.x - g.x.floor(), g.y - g.y.floor());
+    let at = |i: usize, j: usize| depth[j * n + i];
+    let want = (at(i0, j0) * (1.0 - wx) + at(i0 + 1, j0) * wx) * (1.0 - wy)
+        + (at(i0, j0 + 1) * (1.0 - wx) + at(i0 + 1, j0 + 1) * wx) * wy;
+    println!("readback: snapshot {snapshot:.4} m, buffer {want:.4} m");
+    assert!((snapshot - want).abs() < 1e-3, "{snapshot} vs {want}");
+
+    // Velocity at the marker against Q / A_wet of the same section.
+    let velocity = sim
+        .app
+        .world_mut()
+        .run_system_once(move |env: Environment| env.water_velocity(marker))
+        .expect("the query runs")
+        .expect("a velocity readback");
+    let area: f64 = [i0, i0 + 1]
+        .iter()
+        .map(|i| (0..n).map(|j| f64::from(at(*i, j))).sum::<f64>() * 2.0)
+        .sum::<f64>()
+        / 2.0;
+    let expected = 50.0 / area;
+    println!(
+        "velocity at the marker {velocity:?}, Q/A = {expected:.2} m/s over {area:.1} m² (stats lost {:.0} m³)",
+        sim.stats().lost_m3
+    );
+    assert!(
+        (velocity.x as f64 - expected).abs() <= 0.35 * expected,
+        "{} vs {expected}",
+        velocity.x
+    );
+    assert!(velocity.y.abs() < 0.2 * velocity.x.abs());
+    sim.finish();
+}
