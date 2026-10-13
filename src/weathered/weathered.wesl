@@ -60,7 +60,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var wet = g.weather.x * exposure;
     let rain = g.weather.z * exposure;
     if rain > 0.0 {
-        wet = max(wet, rain_streak(in.world_position.xyz, n, rain, g.wind.z));
+        wet = wet + rain_streak(in.world_position.xyz, n, rain, g.wind.z);
     }
     let snow = mesh_snow_cover(g.weather.y, n.y) * exposure;
     if wet > 0.0 || snow > 0.0 {

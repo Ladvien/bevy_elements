@@ -37,7 +37,7 @@ fn fixed_preset() -> Option<WeatherPreset> {
 fn main() {
     let clock = WorldClock::new(CivilDate::new(2026, 4, 15))
         .at_hour(env_f64("ELEMENTS_HOUR").unwrap_or(13.0))
-        .with_time_scale(env_f64("ELEMENTS_SCALE").unwrap_or(300.0));
+        .with_time_scale(env_f64("ELEMENTS_SCALE").unwrap_or(300.0) as f32);
     let mut app = App::new();
     app.add_plugins((DefaultPlugins, ElementsPlugins, ExampleHarness))
         .insert_resource(clock)

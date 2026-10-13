@@ -48,8 +48,13 @@ const RIPPLE_RADIUS_M: f32 = 0.2;
 /// Largest offset of a ring's centre from its cell centre, in cells.
 const RIPPLE_JITTER: f32 = 0.25;
 const RIPPLE_PI: f32 = 3.14159265;
-/// Rain streak amplitude and noise scales (wetness.md, Model adopted 6).
-const STREAK_AMPLITUDE: f32 = 0.6;
+/// Rain streak amplitude, the rain intensity at which a wall streams fully, and the noise scales
+/// (wetness.md, Model adopted 6, and Deviation 9).
+const STREAK_AMPLITUDE: f32 = 0.4;
+const STREAK_SATURATION: f32 = 0.2;
+/// Wetness a rivulet adds beyond a full film: 1.4 darkens a porous surface to ×0.3, the
+/// 0.2–0.3 of Lagarde's empirical wet albedo (wetness.md, Model adopted 2).
+const DRENCHED_MAX: f32 = 1.4;
 const STREAK_FREQUENCY_X: f32 = 8.0;
 const STREAK_FREQUENCY_Y: f32 = 0.4;
 const STREAK_SPEED: f32 = 0.5;
@@ -68,10 +73,10 @@ fn mesh_snow_cover(snow: f32, normal_y: f32) -> f32 {
     return snow * smoothstep(lo, lo + 0.2, normal_y);
 }
 
-/// Wetness a rain streak adds to a vertical face: `0.6 · f · s · (1 − n_y²)` with `s` a noise
-/// stretched down the wall that flows with `phase`. `world` is the fragment's position, `normal`
-/// its geometric world normal, `intensity` the rain intensity `f`. The noise lattice repeats every
-/// 4096 units, so a `phase` wrapped at 8192 s is seamless.
+/// Wetness a rain streak adds on top of a vertical face's film: `0.4 · min(1, f / 0.2) · s ·
+/// (1 − n_y²)` with `s` a noise stretched down the wall that flows with `phase`. `world` is the
+/// fragment's position, `normal` its geometric world normal, `intensity` the rain intensity `f`.
+/// The noise lattice repeats every 4096 units, so a `phase` wrapped at 8192 s is seamless.
 fn rain_streak(world: vec3<f32>, normal: vec3<f32>, intensity: f32, phase: f32) -> f32 {
     let vertical = 1.0 - normal.y * normal.y;
     let horizontal = length(normal.xz);
@@ -85,7 +90,7 @@ fn rain_streak(world: vec3<f32>, normal: vec3<f32>, intensity: f32, phase: f32) 
         STREAK_FREQUENCY_Y * world.y + STREAK_SPEED * phase,
         0.5,
     ));
-    return STREAK_AMPLITUDE * intensity * smoothstep(0.55, 1.0, n) * vertical;
+    return STREAK_AMPLITUDE * saturate(intensity / STREAK_SATURATION) * smoothstep(0.55, 1.0, n) * vertical;
 }
 
 /// Weights of the four ripple layers for rain intensity `f`: `saturate((f − 0.25 k) · 4)`.
@@ -151,10 +156,10 @@ fn weather_surface(
     ripple: vec2<f32>,
 ) -> WeatheredSurface {
     var s = WeatheredSurface(base_color, roughness, metallic, reflectance, normal);
-    let wet = max(wetness, puddle);
+    let wet = min(max(wetness, puddle), DRENCHED_MAX);
     if wet > 0.0 {
         s.base_color = base_color * (1.0 - WET_ALBEDO_LOSS * wet * porosity(roughness, metallic));
-        s.roughness = mix(roughness, min(roughness, WET_ROUGHNESS), wet);
+        s.roughness = mix(roughness, min(roughness, WET_ROUGHNESS), saturate(wet));
     }
     if puddle > 0.0 {
         s.roughness = mix(s.roughness, PUDDLE_ROUGHNESS, puddle);

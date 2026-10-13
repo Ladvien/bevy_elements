@@ -221,8 +221,8 @@ fn ripples_follow_lagardes_layers() {
     close(model::ripple_phases(0.0)[1], (0.2 * 1.6_f32).fract(), 1e-6, "TimeAdd");
 }
 
-/// Wetness Model 6: streaks live on vertical faces, scale with the rain, stay under
-/// `0.6 · f` and wrap seamlessly.
+/// Wetness Model 6 and Deviation 9: streaks live on vertical faces, scale with the rain up to the
+/// 4 mm/h that makes a wall stream fully, stay under 0.4 and wrap seamlessly.
 #[test]
 fn rain_streaks_run_down_walls_only_while_raining() {
     let wall = Vec3::X;
@@ -234,19 +234,21 @@ fn rain_streaks_run_down_walls_only_while_raining() {
             let s = mirror::rain_streak(p, wall, 1.0, 12.5);
             peak = peak.max(s);
             lit += usize::from(s > 0.05);
-            // The same wall in half the rain has half the streak.
+            // Half the saturating intensity has half the streak; any more rain, the same.
             close(
-                mirror::rain_streak(p, wall, 0.5, 12.5),
+                mirror::rain_streak(p, wall, 0.1, 12.5),
                 0.5 * s,
                 1e-6,
-                "linear in f",
+                "linear in f below 0.2",
             );
+            assert_eq!(mirror::rain_streak(p, wall, 0.2, 12.5), s, "saturated at 0.2");
             assert_eq!(mirror::rain_streak(p, wall, 0.0, 12.5), 0.0);
             // A roof or a floor gets none.
             assert_eq!(mirror::rain_streak(p, Vec3::Y, 1.0, 12.5), 0.0);
         }
     }
-    assert!(peak <= 0.6 + 1e-6, "peak {peak}");
+    assert!(peak <= 0.4 + 1e-6, "peak {peak}");
+    assert!(peak > 0.15, "a rivulet is visible: peak {peak}");
     assert!(
         lit > 0 && lit < 200 * 200 / 2,
         "streaks cover part of a wall: {lit}"
@@ -329,4 +331,16 @@ fn the_extension_binds_one_fragment_storage_buffer_at_101() {
         "{body}"
     );
     assert!(body.contains("#[uniform(100)]"));
+}
+
+/// Deviation 9: a rivulet on a soaked wall is drenched, 1.4 of film, which darkens a porous
+/// surface to ×0.3 (Lagarde's 0.2–0.3) and cannot gloss past the film's roughness.
+#[test]
+fn a_drenched_surface_is_darker_than_a_wet_one() {
+    let base = Vec3::new(0.6, 0.4, 0.2);
+    let s = surface(base, 0.9, 0.0, mirror::DRENCHED_MAX, 0.0, 0.0);
+    close(s.base_color.x / base.x, 0.3, 1e-6, "drenched albedo ×0.3");
+    close(s.roughness, 0.1, 1e-6, "drenched roughness");
+    // Past the cap nothing changes.
+    assert_eq!(surface(base, 0.9, 0.0, 3.0, 0.0, 0.0), s);
 }
