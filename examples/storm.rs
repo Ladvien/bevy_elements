@@ -8,6 +8,8 @@
 //!   scripted strike hits that many metres ahead of the camera on the last frame
 //!   (`ELEMENTS_FRAMES`, default 600), so `ELEMENTS_SHOT` lands on the first stroke.
 //!   `ELEMENTS_STRIKE=0` keeps the fixed time step and scripts no strike (a calm control).
+//!   `ELEMENTS_STRIKE_LEAD=6` scripts the strike that many frames before the last one, so the
+//!   shot lands inside the flash rather than on its first frame.
 
 mod common;
 
@@ -41,6 +43,10 @@ fn main() {
         .ok()
         .and_then(|n| n.parse().ok())
         .unwrap_or(600);
+    let lead: u32 = std::env::var("ELEMENTS_STRIKE_LEAD")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0);
     let mut director = WeatherDirector::default();
     director.force(WeatherPreset::Thunderstorm, Duration::ZERO);
     let mut app = App::new();
@@ -60,7 +66,7 @@ fn main() {
         )))
         .insert_resource(ScriptedStrike {
             distance_m,
-            on_frame: frames,
+            on_frame: frames.saturating_sub(lead).max(1),
             frame: 0,
         })
         .add_systems(Update, script.before(ElementsSystems::Clock));

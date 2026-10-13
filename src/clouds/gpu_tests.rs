@@ -24,7 +24,10 @@ use super::{CloudDebug, CloudGpu, CloudQuality, CloudWeatherMap};
 use crate::climate::{WeatherDirector, WeatherPreset};
 use crate::flash::LightningFlash;
 use crate::gpu::noise_mirror::{cloud_base_texel, cloud_detail_texel};
-use crate::{CivilDate, ElementsCamera, ElementsPlugins, ElementsQuality, WorldClock};
+use crate::{
+    CivilDate, ElementsCamera, ElementsPlugins, ElementsQuality, LightningPlugin,
+    PrecipitationPlugin, WorldClock,
+};
 
 #[derive(Clone)]
 struct Case {
@@ -60,7 +63,13 @@ struct Target(Handle<Image>);
 
 fn app(case: Case) -> App {
     let mut app = App::new();
-    app.add_plugins((support::headless_plugins(), ElementsPlugins))
+    // Clouds alone: random strikes would overwrite the tests' own `LightningFlash`, and rain
+    // streaks would change the scene pixels the composite tests compare.
+    let plugins = ElementsPlugins
+        .build()
+        .disable::<LightningPlugin>()
+        .disable::<PrecipitationPlugin>();
+    app.add_plugins((support::headless_plugins(), plugins))
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
             1.0 / 60.0,
         )))
@@ -155,6 +164,23 @@ fn history_texture(app: &mut App, index: usize) -> (Vec<[f32; 4]>, UVec2) {
         size.y as usize,
     );
     (rgba16(&bytes), size)
+}
+
+/// Both history textures as they were in the same frame: this frame's and the previous one's.
+fn history_pair(app: &mut App) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
+    let gpu: CloudGpu = app.world().resource::<CloudGpu>().clone();
+    let view = gpu.view.expect("the view textures exist");
+    let (row, rows) = (view.size.x as usize * 8, view.size.y as usize);
+    let mut both = support::read_textures(
+        app,
+        vec![
+            (view.history[0].clone(), row, rows),
+            (view.history[1].clone(), row, rows),
+        ],
+    );
+    let b = rgba16(&both.pop().expect("two textures"));
+    let a = rgba16(&both.pop().expect("two textures"));
+    (a, b)
 }
 
 fn rgba16(bytes: &[u8]) -> Vec<[f32; 4]> {
@@ -539,8 +565,7 @@ fn a_still_camera_gives_a_steady_history() {
         let mut app = app(case);
         let window = CloudQuality::of(quality).window as usize;
         run(&mut app, 40 + 6 * window);
-        let (a, _) = history_texture(&mut app, 0);
-        let (b, _) = history_texture(&mut app, 1);
+        let (a, b) = history_pair(&mut app);
         finish(&mut app);
         let mean = a.iter().map(|t| luminance(*t)).sum::<f32>() / a.len() as f32;
         let rms = (a
