@@ -7,7 +7,11 @@
 //! first water readback, `0.000` while the front is on its way, and settles near 1.4 m. Keys: `G`
 //! doubles the simulation speed (`HydrologySettings::time_scale`), `H` halves it. For unattended
 //! runs set `ELEMENTS_FRAMES` (and `ELEMENTS_SHOT`) as in the other examples; the flood reaches
-//! the marker after about 36 s (2200 frames).
+//! the marker after about 36 s (2200 frames). `ELEMENTS_PRESET=Clear` replaces the forced rain.
+//!
+//! The water is drawn by `WaterPlugin` (`docs/research/water-rendering.md`): absorbing and tinted
+//! over the bed, ripples advected along the flow, and foam where the flow is faster than 1.5 m/s
+//! (the whole flood channel here) and at the waterline.
 
 mod common;
 
@@ -118,7 +122,16 @@ fn setup(
         Vec3::new(-165.0, 14.0, 30.0),
         Vec3::new(-150.0, 0.0, 0.0),
     ));
-    director.force(WeatherPreset::Rain, Duration::ZERO);
+    // Rain by default; `ELEMENTS_PRESET=Clear` (any preset name) shows the water under another sky.
+    let preset = std::env::var("ELEMENTS_PRESET")
+        .ok()
+        .and_then(|name| {
+            WeatherPreset::ALL
+                .into_iter()
+                .find(|p| format!("{p:?}").eq_ignore_ascii_case(&name))
+        })
+        .unwrap_or(WeatherPreset::Rain);
+    director.force(preset, Duration::ZERO);
 }
 
 fn speed_keys(keys: Res<ButtonInput<KeyCode>>, mut settings: ResMut<HydrologySettings>) {

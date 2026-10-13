@@ -101,6 +101,7 @@ fn init_pipelines(mut commands: Commands, assets: Res<AssetServer>, cache: Res<P
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prepare(
     mut commands: Commands,
     state: Option<Res<WaterState>>,

@@ -424,8 +424,8 @@ fn the_depth_fade_is_a_smoothstep() {
     assert!(close(edge_alpha(0.0165), 0.5, 1e-6));
     assert_eq!(edge_alpha(0.03), 1.0);
     assert_eq!(edge_alpha(1.0), 1.0);
-    // The shader discards below the lowest depth: no fade value there is ever shown.
-    assert!(0.002 < DISCARD_DEPTH);
+    // The shader discards below the lowest depth: whatever fade value lies there is never shown.
+    assert_eq!(edge_alpha(0.002), 0.0);
 }
 
 /// Validation 10: the surface item of a patch sorts after its absorb item, in Bevy's own
