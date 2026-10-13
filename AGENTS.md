@@ -48,6 +48,8 @@ No system is implemented without its `docs/research/<system>.md`, committed firs
 - **Pipelines compile asynchronously.** A kernel that is not ready yet skips the frame; anything read back meanwhile is zeros. GPU state is published as live (`WindGpu::live`) only after the first real dispatch. Tests use `RenderPlugin { synchronous_pipeline_compilation: true }`.
 - **`FogVolume`s are extracted regardless of `Visibility`.** Switch one off with `density_factor = 0`.
 - **`FogVolume` light attenuation uses the bounding-sphere radius.** Every sample's light is attenuated by `exp(−density · R)`: keep volumes small or compensate with `light_intensity` (`fog::volume_light_compensation`).
+- **Bevy's atmosphere is lit by every `DirectionalLight`'s `color · illuminance`.** Dimming the sun light for cloud shadow also darkens the sky, the aerial perspective and the environment map; there is no per-light opt-out, so a fill light would scatter in the sky too. The cloud composite restores the sky with `sky_gain` (`src/clouds/composite.wesl`).
+- **`AmbientLight` diffuse is shaded by `F_AB(1, NdotV).x` ≈ 0.452** (`pbr_ambient.wesl:18`): divide the wanted radiance by it. It is uniform over normals, so it cannot shade tops brighter than sides.
 - **`DistanceFog::color` is added after exposure**, so it is a display-referred value: scale it by the camera's `Exposure::exposure()`.
 - **Bevy's default `GlobalAmbientLight` is a constant 80 cd/m²**, which a night exposure lifts to white; `ElementsCamera` zeroes the per-camera `AmbientLight`.
 - **Shaders are WESL.** `embedded://bevy_elements/noise.wesl` is importable as `bevy_elements::noise`; shared libraries are loaded with `load_shader_library!`.

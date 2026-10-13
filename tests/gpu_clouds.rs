@@ -119,13 +119,20 @@ fn shadow_transmittance(app: &mut App) -> Vec<f32> {
         .collect()
 }
 
-/// The sun's light factor `0.25 + 0.75 T̄` as the lights currently carry it.
-fn sun_factor(app: &mut App) -> f32 {
+/// The sun's direct light as a fraction of the clear value, `T̄`, as the light currently carries
+/// it, and the horizontal illuminance the camera's ambient light gives, lx.
+fn sun_light(app: &mut App) -> (f32, f32) {
     let mut lights = app
         .world_mut()
         .query_filtered::<&DirectionalLight, With<Sun>>();
     let light = lights.single(app.world()).expect("one sun");
-    light.illuminance / lux::RAW_SUNLIGHT
+    let direct = light.illuminance / lux::RAW_SUNLIGHT;
+    let mut ambient = app
+        .world_mut()
+        .query_filtered::<&AmbientLight, With<ElementsCamera>>();
+    let ambient = ambient.single(app.world()).expect("one camera");
+    // Bevy shows a diffuse surface `albedo · L · 0.452` under an ambient light (`F_AB(1, NdotV).x`).
+    (direct, ambient.brightness * 0.452 * std::f32::consts::PI)
 }
 
 /// A mean over the 9×9 texels around 64 deterministic texel positions, the light factor a
@@ -215,7 +222,7 @@ fn the_weather_map_holds_the_requested_sky_fraction() {
 }
 
 /// Validation 11 (a)–(e) and the light-factor wiring: the shadow map's coverage, the camera
-/// factor `0.25 + 0.75 T̄` per weather, and the sun light it dims.
+/// factor `0.25 + 0.75 T̄` per weather, the sun's beam `T̄` and the ambient light that is the rest.
 #[test]
 #[ignore = "needs a GPU"]
 fn the_shadow_map_and_the_sun_factor_follow_the_clouds() {
@@ -229,7 +236,7 @@ fn the_shadow_map_and_the_sun_factor_follow_the_clouds() {
         run(app, 420);
         let t = shadow_transmittance(app);
         let camera = app.world().resource::<CloudShadows>().camera_transmittance;
-        let sun = sun_factor(app);
+        let sun = sun_light(app);
         (t, camera, sun)
     };
 
@@ -259,16 +266,33 @@ fn the_shadow_map_and_the_sun_factor_follow_the_clouds() {
     println!("Thunderstorm: factor {storm_factor:.3}");
     assert!((0.25..=0.30).contains(&storm_factor), "{storm_factor}");
 
-    // The lights carry the factor the readback gave (the `0.25 + 0.75 T̄` of the camera).
-    for (camera, sun) in [(clear_camera, clear_sun), (overcast_camera, overcast_sun)] {
+    // The sun's beam carries the camera transmittance the readback gave.
+    for (camera, (direct, _)) in [(clear_camera, clear_sun), (overcast_camera, overcast_sun)] {
         assert!(
-            (sun - (0.25 + 0.75 * camera)).abs() < 5e-3,
-            "sun factor {sun} for camera transmittance {camera}"
+            (direct - camera).abs() < 5e-3,
+            "sun beam {direct} for camera transmittance {camera}"
         );
     }
-    let ratio = overcast_sun / clear_sun;
-    println!("sun light overcast / clear = {ratio:.3}");
-    assert!(ratio <= 0.4, "{ratio}");
+    // The ambient light is the rest of the factor, `0.25 · (1 − T̄)` of the clear-sky horizontal
+    // illuminance: at noon in June (sun at 68°) between 0.2 and 0.25 of `RAW_SUNLIGHT` under
+    // overcast, next to nothing in the clear.
+    let overcast_ambient = overcast_sun.1 / lux::RAW_SUNLIGHT;
+    println!(
+        "ambient overcast {overcast_ambient:.3}, clear {:.4}",
+        clear_sun.1 / lux::RAW_SUNLIGHT
+    );
+    assert!(
+        (0.2..=0.25).contains(&overcast_ambient),
+        "overcast ambient {overcast_ambient}"
+    );
+    assert!(
+        clear_sun.1 < 0.05 * overcast_sun.1,
+        "clear ambient {}",
+        clear_sun.1
+    );
+    let ratio = overcast_sun.0 / clear_sun.0;
+    println!("sun beam overcast / clear = {ratio:.3}");
+    assert!(ratio <= 0.05, "{ratio}");
 
     // (d) The mean transmittance falls by at least 0.1 per step with the cover.
     let mut means = Vec::new();

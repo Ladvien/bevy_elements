@@ -26,7 +26,10 @@ use bevy::render::render_resource::{
 use bevy::render::storage::ShaderBuffer;
 use bevy::shader::load_shader_library;
 
-use crate::celestial::{CelestialFrame, SunState, scene_illuminance};
+use crate::celestial::{
+    CelestialFrame, CloudLight, MOON_TINT, SunState, beam_transmittance, cloud_ambient,
+    scene_illuminance, sky_gain,
+};
 use crate::climate::Weather;
 use crate::flash::LightningFlash;
 use crate::gpu::grid::storage_buffer;
@@ -134,8 +137,9 @@ pub struct CloudShadows {
     /// the sun is lower than −4°.
     pub light_direction: Vec3,
     /// Mean direct transmittance over about 70 m around the camera, 0–1, smoothed over 1 s of
-    /// real time. Before the first GPU readback it is `1 − cover^3.4`, which makes the sun's
-    /// light factor `0.25 + 0.75 · T` equal the cover-only estimate of the weather.
+    /// real time. Before the first GPU readback it is `1 − cover^3.4`, the cover-only estimate of
+    /// the weather. The sun's and moon's `DirectionalLight` carry `T̄` of their clear-sky
+    /// illuminance and the camera's `AmbientLight` the diffuse remainder `0.25 · (1 − T̄)`.
     pub camera_transmittance: f32,
 }
 
@@ -216,11 +220,15 @@ const DRIFT_WRAP_M: f64 = 524_288_000.0;
 /// Cloud drift is this multiple of the 10 m wind: the wind at cloud height (log-law 1.86 at
 /// 1.5 km, 1.94 at the layer top) rounded up as the plan says.
 const DRIFT_WIND_FACTOR: f64 = 2.0;
-/// The moon's light colour (the `Moon` light's own tint).
-const MOON_TINT: Vec3 = Vec3::new(0.88, 0.92, 1.0);
 /// Sun altitude, degrees, below which the clouds are lit by the moon; the sun's light fades
 /// out over the degree above it (the layer keeps the sun to −3.1° at 9.5 km, the dip).
 const SUN_HANDOVER_DEG: f32 = -4.0;
+/// Albedo of the ground the diffuse light reflects up into the air, for the in-scatter source.
+const GROUND_ALBEDO: f32 = 0.3;
+/// In-scatter source of the air per unit radiance of the ambient sky: isotropic scattering lights
+/// the air with the scalar irradiance over 4π, `E (1 + ρ) / 4π` for the downward irradiance
+/// `E = π L` of the sky and the ground albedo `ρ`, which is `L (1 + ρ) / 4`.
+const AIRLIGHT_PER_SKY_RADIANCE: f32 = (1.0 + GROUND_ALBEDO) / 4.0;
 /// Smoothing time of the camera transmittance, s of real time.
 const CAMERA_TRANSMITTANCE_TAU_S: f32 = 1.0;
 
@@ -231,6 +239,9 @@ pub(crate) struct CloudParams {
     pub camera: Vec4,
     /// x: atmosphere outer radius, m. y: aerial LUT range, m. z: aerial LUT slices.
     pub atmo: Vec4,
+    /// x: gain on the sky pixels of the composite (`celestial::sky_gain`). yzw: radiance of the
+    /// air lit by the cloud-scattered diffuse light (`celestial::cloud_ambient`), cd/m².
+    pub sky: Vec4,
     /// x: base altitude, m. y: top altitude, m. z: cloud type. w: cover.
     pub layer: Vec4,
     /// xyz: unit direction toward the light.
@@ -624,8 +635,8 @@ fn update_gpu(
     // Diffuse sky light: the metered illuminance before cloud dimming, all of it diffuse in
     // twilight and 15 % of it at high sun.
     let sky_share = 1.0 + (0.15 - 1.0) * smoothstep(-2.0, 10.0, sun.altitude_deg);
-    let ambient =
-        sky_share * scene_illuminance(&sun, frame.moon_lux, 1.0) / (2.0 * std::f32::consts::PI);
+    let ambient = sky_share * scene_illuminance(&sun, frame.moon_lux, CloudLight::CLEAR)
+        / (2.0 * std::f32::consts::PI);
 
     let weather_texel = WEATHER_EXTENT_M / WEATHER_TEXELS as f32;
     let shadow_texel = SHADOW_EXTENT_M / SHADOW_TEXELS as f32;
@@ -666,9 +677,13 @@ fn update_gpu(
     let wind = weather.wind_direction.normalize_or(Vec2::X);
 
     gpu.active = true;
+    let cloud = CloudLight::from_beam(shadows.camera_transmittance);
+    let (diffuse_colour, diffuse_brightness) = cloud_ambient(&sun, frame.moon_lux, cloud);
+    let airlight = diffuse_colour * (diffuse_brightness * AIRLIGHT_PER_SKY_RADIANCE);
     gpu.params = CloudParams {
         camera: camera.extend(inner),
         atmo: Vec4::new(outer, 32_000.0, 32.0, 0.0),
+        sky: Vec4::new(sky_gain(&sun, cloud), airlight.x, airlight.y, airlight.z),
         layer: Vec4::new(
             layer.base_m,
             layer.top_m,
@@ -729,7 +744,7 @@ fn apply_debug(debug: Option<Res<CloudDebug>>, mut gpu: ResMut<CloudGpu>) {
 }
 
 /// The camera transmittance the lights are dimmed by: the readback, smoothed over a second;
-/// until the first readback `1 − cover^3.4`, which makes `0.25 + 0.75 T` the cover-only factor.
+/// until the first readback `1 − cover^3.4`, the cover-only beam.
 fn smooth_camera_transmittance(
     time: Res<Time<Real>>,
     weather: Res<Weather>,
@@ -741,7 +756,7 @@ fn smooth_camera_transmittance(
     };
     match snapshot.cloud_transmittance {
         None => {
-            shadows.camera_transmittance = 1.0 - weather.cloud_cover.clamp(0.0, 1.0).powf(3.4);
+            shadows.camera_transmittance = beam_transmittance(weather.cloud_cover);
         }
         Some(measured) => {
             let k = 1.0 - (-time.delta_secs() / CAMERA_TRANSMITTANCE_TAU_S).exp();

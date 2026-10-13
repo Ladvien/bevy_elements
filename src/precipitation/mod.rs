@@ -21,7 +21,7 @@ use bevy::render::storage::ShaderBuffer;
 use bevy::shader::load_shader_library;
 
 use crate::LightningFlash;
-use crate::celestial::{CelestialFrame, Moon, Sun, SunState, scene_illuminance, sky_dimming};
+use crate::celestial::{CelestialFrame, Moon, Sun, SunState, cloud_light, scene_illuminance};
 use crate::climate::Weather;
 use crate::clouds::CloudShadows;
 use crate::fog::extinction_for_visibility;
@@ -361,7 +361,8 @@ fn update_precipitation(
     };
 
     // Light the particles with what the scene is lit with: the lights' own illuminance for the
-    // direct part, and the rest of the scene illuminance as sky light.
+    // direct part (the beam, `E · T̄`), and the rest of the scene illuminance (the sky and the
+    // cloud-scattered diffuse light) as sky light.
     let direct = |sun_light: bool| {
         lights
             .iter()
@@ -373,7 +374,7 @@ fn update_precipitation(
     let total = scene_illuminance(
         &sun,
         frame.moon_lux,
-        sky_dimming(weather.cloud_cover, shadows.as_deref()),
+        cloud_light(weather.cloud_cover, shadows.as_deref()),
     );
     let e_sky = (total
         - e_sun * sun.altitude_deg.to_radians().sin().max(0.0)

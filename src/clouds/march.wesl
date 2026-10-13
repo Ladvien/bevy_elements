@@ -31,6 +31,16 @@ const CONE_TAN: f32 = 0.1;
 const AMBIENT_BOTTOM: f32 = 0.2;
 /// Distance at which cloud extinction starts to fade toward the march limit, m.
 const FADE_START_M: f32 = 16000.0;
+/// Path length through the layer beyond `FADE_START_M` over which the far field builds up to its
+/// mean cover (1 − 1/e of it at this length), m: a few cloud widths, so that under full cover
+/// the sky does not show through.
+const FAR_LENGTH_M: f32 = 4000.0;
+/// Optical depth toward the light of the far cloud the veil is lit like, at cover 0 and at cover
+/// 1: about a mean free path in for cumulus, the column depth of the model stratus at overcast.
+const FAR_TAU_CLEAR: f32 = 1.5;
+const FAR_TAU_OVERCAST: f32 = 6.0;
+/// Ray elevation (sine) below the horizon over which the far veil fades out.
+const HORIZON_BAND: f32 = 0.03;
 
 fn medium_at(h: f32, xz: vec2<f32>, detail: bool) -> Medium {
     return cloud_medium(h, xz, detail, params, base_tex, detail_tex, weather_tex, smp_repeat);
@@ -59,6 +69,65 @@ fn light_optical_depth(off: vec3<f32>, l: vec3<f32>, cam: vec3<f32>) -> f32 {
     return tau;
 }
 
+/// Radiance of cloud lit by `sun` through a light path of optical depth `tau_l`, seen at angle
+/// `cos_t` to the light: three octaves of multiple scattering (weight a^n, light-path extinction
+/// b^n, phase g c^n) and the ambient source `ambient` (the gradient already applied).
+fn cloud_scatter(sun: vec3<f32>, tau_l: f32, cos_t: f32, powder_weight: f32, ambient: f32) -> vec3<f32> {
+    let powder = mix(1.0, 1.0 - exp(-2.0 * tau_l), powder_weight);
+    return sun * (
+        powder * exp(-tau_l) * phase_octave(cos_t, 1.0)
+        + 0.5 * exp(-0.5 * tau_l) * phase_octave(cos_t, 0.5)
+        + 0.25 * exp(-0.25 * tau_l) * phase_octave(cos_t, 0.25)
+    ) + vec3<f32>(ambient);
+}
+
+/// Aerial perspective from the camera to `depth` along `dir` (through the screen position `uv`):
+/// the transmittance of the air (rgb) and its in-scatter (rgb of the second return). In-scatter
+/// is Bevy's aerial-view LUT, lit by the sun light that carries the beam only, plus the air lit
+/// by the cloud-scattered diffuse light, `(1 − T) · L` for the uniform sky radiance `L`
+/// (Deviation 25 of the research note).
+struct Aerial {
+    transmittance: vec3<f32>,
+    in_scatter: vec3<f32>,
+}
+
+fn aerial_perspective(uv: vec2<f32>, dir: vec3<f32>, depth: f32, o_r: f32) -> Aerial {
+    let slices = params.atmo.z;
+    let range = params.atmo.y;
+    let slice = clamp(depth / range - 0.5 / slices, 0.0, 1.0);
+    let lut = textureSampleLevel(aerial_lut, smp_clamp, vec3<f32>(uv, slice), 0.0);
+    let r_d = sqrt(max(o_r * o_r + 2.0 * o_r * depth * dir.y + depth * depth, 1.0));
+    let mu_d = (o_r * dir.y + depth) / r_d;
+    let t_cam = sample_transmittance(transmittance_lut, smp_clamp, o_r, dir.y, params);
+    let t_far = sample_transmittance(transmittance_lut, smp_clamp, r_d, mu_d, params);
+    let t_ap = min(t_cam / max(t_far, vec3<f32>(1e-6)), vec3<f32>(1.0));
+    let beam = exp(lut.rgb) * clamp(depth / (range / slices), 0.0, 1.0);
+    return Aerial(t_ap, beam + (vec3<f32>(1.0) - t_ap) * params.sky.yzw);
+}
+
+/// The cloud beyond the march and its fade: a uniform veil of the layer's mean cover over the
+/// path through the layer past `FADE_START_M`, lit like a cloud side one light mean free path in
+/// and seen through the air to the end of the march. Premultiplied exposed radiance (rgb) and
+/// transmittance (a). Under full cover the horizon keeps the cloud; at cover 0.05 it stays
+/// clear sky. Smooth in the ray, so it cannot alias (Deviation 26 of the research note).
+fn far_veil(uv: vec2<f32>, dir: vec3<f32>, shell: vec2<f32>, o_r: f32) -> vec4<f32> {
+    let length = shell.y - max(shell.x, FADE_START_M);
+    let above = smoothstep(-HORIZON_BAND, 0.0, dir.y);
+    let a = params.layer.w * (1.0 - exp(-max(length, 0.0) / FAR_LENGTH_M)) * above;
+    if a <= 0.0 {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
+    let l = params.light.xyz;
+    let h_mid = 0.5 * (params.layer.x + params.layer.y);
+    let sun = light_at(transmittance_lut, smp_clamp, h_mid, l.y, params);
+    let cos_t = dot(dir, l);
+    let ambient = params.light_e.w * (AMBIENT_BOTTOM + (1.0 - AMBIENT_BOTTOM) * 0.5);
+    let tau_l = mix(FAR_TAU_CLEAR, FAR_TAU_OVERCAST, params.layer.w);
+    let radiance = cloud_scatter(sun, tau_l, cos_t, clamp(0.5 - 0.5 * cos_t, 0.0, 1.0), ambient);
+    let air = aerial_perspective(uv, dir, max(shell.x, MAX_MARCH_M), o_r);
+    return vec4<f32>(a * (radiance * air.transmittance + air.in_scatter) * view.exposure, 1.0 - a);
+}
+
 @compute @workgroup_size(8, 8, 1)
 fn cloud_march(@builtin(global_invocation_id) id: vec3<u32>) {
     let low = params.sizes.zw;
@@ -81,7 +150,7 @@ fn cloud_march(@builtin(global_invocation_id) id: vec3<u32>) {
     let t0 = shell.x;
     let t1 = min(shell.y, MAX_MARCH_M);
     if t1 <= t0 {
-        textureStore(march_out, vec2<i32>(id.xy), vec4<f32>(0.0, 0.0, 0.0, 1.0));
+        textureStore(march_out, vec2<i32>(id.xy), far_veil(uv, dir, shell, o_r));
         return;
     }
 
@@ -171,15 +240,14 @@ fn cloud_march(@builtin(global_invocation_id) id: vec3<u32>) {
         let mu_s = (dot(off.xz, l.xz) + (big_r + cam.y + off.y) * l.y) / (big_r + h);
         let sun = light_at(transmittance_lut, smp_clamp, h, mu_s, params);
         let tau_l = light_optical_depth(off, l, cam);
-        let powder = mix(1.0, 1.0 - exp(-2.0 * tau_l), powder_weight);
-        // Three octaves of multiple scattering: weight a^n, light-path extinction b^n, phase g c^n.
-        var scatter = sun * (
-            powder * exp(-tau_l) * phase_octave(cos_t, 1.0)
-            + 0.5 * exp(-0.5 * tau_l) * phase_octave(cos_t, 0.5)
-            + 0.25 * exp(-0.25 * tau_l) * phase_octave(cos_t, 0.25)
-        );
         let f = (h - h_b) / (h_t - h_b);
-        scatter += vec3<f32>(ambient * (AMBIENT_BOTTOM + (1.0 - AMBIENT_BOTTOM) * f));
+        var scatter = cloud_scatter(
+            sun,
+            tau_l,
+            cos_t,
+            powder_weight,
+            ambient * (AMBIENT_BOTTOM + (1.0 - AMBIENT_BOTTOM) * f),
+        );
         if params.flash.w > 0.0 {
             let d = length(cam + off - params.flash.xyz);
             let source = params.flash.w / (4.0 * PI * max(d * d, 2500.0))
@@ -194,25 +262,18 @@ fn cloud_march(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     if depth_weight <= 0.0 {
-        textureStore(march_out, vec2<i32>(id.xy), vec4<f32>(0.0, 0.0, 0.0, 1.0));
+        textureStore(march_out, vec2<i32>(id.xy), far_veil(uv, dir, shell, o_r));
         return;
     }
 
     // Aerial perspective at the mean cloud depth, then the fade into haze.
     let depth = depth_sum / depth_weight;
     let fade = smoothstep(20000.0, 32000.0, depth);
-    let slices = params.atmo.z;
-    let range = params.atmo.y;
-    let slice = clamp(depth / range - 0.5 / slices, 0.0, 1.0);
-    let aerial = textureSampleLevel(aerial_lut, smp_clamp, vec3<f32>(uv, slice), 0.0);
-    let in_scatter = exp(aerial.rgb) * clamp(depth / (range / slices), 0.0, 1.0);
-    let r_d = sqrt(max(o_r * o_r + 2.0 * o_r * depth * dir.y + depth * depth, 1.0));
-    let mu_d = (o_r * dir.y + depth) / r_d;
-    let t_cam = sample_transmittance(transmittance_lut, smp_clamp, o_r, dir.y, params);
-    let t_far = sample_transmittance(transmittance_lut, smp_clamp, r_d, mu_d, params);
-    let t_ap = min(t_cam / max(t_far, vec3<f32>(1e-6)), vec3<f32>(1.0));
+    let air = aerial_perspective(uv, dir, depth, o_r);
 
-    let rgb = (1.0 - fade) * (radiance * t_ap + in_scatter * (1.0 - transmittance));
+    let rgb = (1.0 - fade) * (radiance * air.transmittance + air.in_scatter * (1.0 - transmittance));
     let alpha = 1.0 - (1.0 - fade) * (1.0 - transmittance);
-    textureStore(march_out, vec2<i32>(id.xy), vec4<f32>(rgb * view.exposure, alpha));
+    // The far field behind it: the cloud in front covers it by `1 − alpha`.
+    let veil = far_veil(uv, dir, shell, o_r);
+    textureStore(march_out, vec2<i32>(id.xy), vec4<f32>(rgb * view.exposure + alpha * veil.rgb, alpha * veil.a));
 }

@@ -471,14 +471,15 @@ fn the_composite_leaves_nearer_surfaces_and_clear_sky_untouched() {
 
     let a = rgba16(bits(&with));
     let b = rgba16(bits(&without));
-    // Camera pitch 20°, vertical field of view 45°: the wall (up to 31° elevation) fills the
-    // rows below about the screen's 36 % mark counted from the top.
+    // Camera pitch 20°, vertical field of view 45°: the wall (elevation −0.2° to 31°) fills the
+    // rows from about the screen's 36 % mark counted from the top down to row 58; the rows
+    // below it see the sky under the horizon, which the composite lifts with the sky gain.
     let mut wall_identical = 0;
     let mut sky_changed = 0;
     for y in 0..64 {
         for x in 0..64 {
             let (pa, pb) = (a[y * 64 + x], b[y * 64 + x]);
-            if y > 40 {
+            if (41..59).contains(&y) {
                 // The volumetric fog jitters every frame: equal up to a half-float step or two.
                 let delta = (0..4).map(|c| (pa[c] - pb[c]).abs()).fold(0.0, f32::max);
                 assert!(

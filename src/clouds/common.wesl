@@ -12,6 +12,9 @@ struct CloudParams {
     camera: vec4<f32>,
     /// x: atmosphere outer radius, m. y: aerial-view LUT range, m. z: aerial-view LUT slices.
     atmo: vec4<f32>,
+    /// x: gain on the sky pixels of the composite. yzw: radiance of the air lit by the
+    /// cloud-scattered diffuse light, cd/m².
+    sky: vec4<f32>,
     /// x: layer base altitude, m. y: layer top altitude, m. z: cloud type 0–1. w: cloud cover.
     layer: vec4<f32>,
     /// xyz: unit vector toward the light (sun, or moon at night).

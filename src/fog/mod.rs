@@ -11,7 +11,7 @@ use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, ShaderType, TextureDimension, TextureFormat};
 
-use crate::celestial::{CelestialFrame, SunState, scene_illuminance, sky_dimming};
+use crate::celestial::{CelestialFrame, SunState, cloud_light, dusk_tint, scene_illuminance};
 use crate::climate::{Weather, WeatherDirector, WeatherPreset};
 use crate::clouds::{CloudShadows, CloudWeatherMap};
 use crate::gpu::grid::storage_volume;
@@ -31,12 +31,6 @@ pub const GROUND_FOG_EXTENT: Vec3 = Vec3::new(240.0, 120.0, 240.0);
 pub const GROUND_FOG_TEXELS: UVec3 = UVec3::new(128, 32, 128);
 /// Fog colour in full light, linear RGB.
 const FOG_COLOUR: Vec3 = Vec3::new(0.75, 0.80, 0.85);
-/// Tint the fog takes as the sun nears the horizon.
-const DUSK_TINT: Vec3 = Vec3::new(1.0, 0.55, 0.3);
-/// Sun altitude below which the dusk tint starts, degrees.
-const DUSK_ONSET_DEG: f32 = 10.0;
-/// Sun depression at which the dusk tint has faded out, degrees (end of civil twilight).
-const CIVIL_TWILIGHT_DEG: f32 = 6.0;
 /// Colour of airborne dust, linear RGB.
 const DUST_ALBEDO: Vec3 = Vec3::new(0.76, 0.60, 0.42);
 /// Ground-fog scale height in the Fog preset and otherwise, m.
@@ -79,15 +73,9 @@ pub fn distance_fog_falloff(visibility_m: f32) -> FogFalloff {
 }
 
 /// Linear-RGB fog colour before brightness: the fog hue, tinted toward sunset orange as the sun
-/// drops below 10°, fully at the horizon, fading out by the end of civil twilight (−6°) so
-/// moonlit fog is not orange; and toward dust as `dust` rises.
+/// drops below 10° (`celestial::dusk_tint`); and toward dust as `dust` rises.
 pub fn fog_hue(sun_altitude_deg: f32, dust: f32) -> Vec3 {
-    let dusk = if sun_altitude_deg >= 0.0 {
-        (1.0 - sun_altitude_deg / DUSK_ONSET_DEG).clamp(0.0, 1.0)
-    } else {
-        (1.0 + sun_altitude_deg / CIVIL_TWILIGHT_DEG).clamp(0.0, 1.0)
-    };
-    let tinted = FOG_COLOUR * Vec3::ONE.lerp(DUSK_TINT, dusk);
+    let tinted = FOG_COLOUR * dusk_tint(sun_altitude_deg);
     tinted.lerp(DUST_ALBEDO, dust.clamp(0.0, 1.0))
 }
 
@@ -350,7 +338,7 @@ fn update_distance_fog(
     let luminance = scene_illuminance(
         &sun,
         frame.moon_lux,
-        sky_dimming(weather.cloud_cover, shadows.as_deref()),
+        cloud_light(weather.cloud_cover, shadows.as_deref()),
     ) / std::f32::consts::PI;
     let hue = fog_hue(sun.altitude_deg, weather.dust);
     for (mut fog, exposure) in &mut cameras {
@@ -408,7 +396,7 @@ mod tests {
         let dusk = fog_hue(5.0, 0.0) / FOG_COLOUR;
         assert!((dusk - Vec3::new(1.0, 0.775, 0.65)).length() < 1e-5);
         assert!((fog_hue(45.0, 1.0) - DUST_ALBEDO).length() < 1e-6);
-        assert_eq!(fog_hue(0.0, 0.0), FOG_COLOUR * DUSK_TINT);
+        assert_eq!(fog_hue(0.0, 0.0), FOG_COLOUR * crate::celestial::DUSK_TINT);
         assert_eq!(fog_hue(-20.0, 0.0), FOG_COLOUR);
     }
 

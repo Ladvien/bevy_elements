@@ -11,6 +11,10 @@ import bevy_elements::clouds::common::{CloudParams, ray_dir, scene_distance, she
 @group(0) @binding(2) var history: texture_2d<f32>;
 @group(0) @binding(3) var depth_tex: texture_depth_2d;
 
+/// Transmittances below this are an opaque cloud; above the second the sky is really in view.
+const OPAQUE_BELOW: f32 = 0.02;
+const SKY_ABOVE: f32 = 0.2;
+
 @fragment
 fn cloud_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     // Debug mode 4: the composite adds nothing (the tests render the same frame without it).
@@ -28,5 +32,13 @@ fn cloud_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
             return vec4<f32>(0.0, 0.0, 0.0, 1.0);
         }
     }
-    return textureLoad(history, pixel, 0);
+    var cloud = textureLoad(history, pixel, 0);
+    if depth <= 0.0 {
+        // The sky: Bevy's atmosphere is lit by the sun light, which carries only the beam
+        // `T̄` under cloud, but the sky above the cloud is not dimmed by the cloud below it.
+        // The march stops at a transmittance of 0.01, so the gain ramps in above that: an
+        // opaque cloud must not amplify the sky behind it.
+        cloud.a *= mix(1.0, params.sky.x, smoothstep(OPAQUE_BELOW, SKY_ABOVE, cloud.a));
+    }
+    return cloud;
 }

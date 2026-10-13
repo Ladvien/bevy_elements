@@ -4,7 +4,7 @@
 // See docs/research/clouds.md ("Temporal reprojection").
 
 import bevy_render::view::View;
-import bevy_elements::clouds::common::{CloudParams, MAX_MARCH_M, ray_dir, shell_range, slot_offset};
+import bevy_elements::clouds::common::{CloudParams, ray_dir, shell_range, slot_offset};
 
 /// Mirrors Bevy's `PreviousViewData`.
 struct PreviousView {
@@ -48,7 +48,7 @@ fn cloud_resolve(@builtin(global_invocation_id) id: vec3<u32>) {
     let dir = ray_dir(uv, view.world_from_clip, cam);
     let big_r = params.camera.w;
     let shell = shell_range(big_r + cam.y, dir.y, params.layer.x, params.layer.y, big_r);
-    if min(shell.y, MAX_MARCH_M) <= shell.x {
+    if shell.y <= shell.x {
         textureStore(history_out, vec2<i32>(id.xy), vec4<f32>(0.0, 0.0, 0.0, 1.0));
         return;
     }

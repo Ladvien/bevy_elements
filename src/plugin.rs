@@ -236,7 +236,8 @@ fn dress_camera(
         DistanceFog::default(),
         Exposure::SUNLIGHT,
         // Sky light comes from the atmosphere's environment map; Bevy's default ambient is a
-        // constant 80 cd/m² that the night exposure would lift to white.
+        // constant 80 cd/m² that the night exposure would lift to white. Starts dark; the
+        // celestial systems drive it with the cloud-scattered diffuse light.
         AmbientLight {
             brightness: 0.0,
             ..default()

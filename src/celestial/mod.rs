@@ -100,7 +100,7 @@ impl Plugin for CelestialPlugin {
             .add_systems(Startup, spawn_lights)
             .add_systems(
                 Update,
-                (update_sky, auto_exposure)
+                (update_sky, update_ambient, auto_exposure)
                     .chain()
                     .in_set(ElementsSystems::Celestial),
             );
@@ -116,6 +116,10 @@ const SUN_OFF_DEG: f32 = -2.0;
 const MOON_OFF_DEG: f32 = -0.5;
 /// Moon shadows are drawn only when the sun is lower than this, degrees (civil twilight).
 const MOON_SHADOWS_BELOW_SUN_DEG: f32 = -6.0;
+
+/// The moon light's colour, the tint of the moon's share of the sky's diffuse light and of the
+/// moonlit cloud.
+pub(crate) const MOON_TINT: Vec3 = Vec3::new(0.88, 0.92, 1.0);
 
 /// How far the sun's shadow cascades reach, m. Volumetric fog takes its sunlight through the
 /// shadow map, so beyond the last cascade fog gets no light at all and turns into a dark band
@@ -146,7 +150,7 @@ fn spawn_lights(mut commands: Commands) {
         DirectionalLight {
             illuminance: 0.0,
             shadow_maps_enabled: false,
-            color: Color::srgb(0.88, 0.92, 1.0),
+            color: Color::srgb(MOON_TINT.x, MOON_TINT.y, MOON_TINT.z),
             ..default()
         },
         SunDisk::OFF,
@@ -159,19 +163,82 @@ fn enu_to_world(v: [f64; 3]) -> Vec3 {
     Vec3::new(v[0] as f32, v[2] as f32, -v[1] as f32)
 }
 
-/// Fraction of clear-sky solar irradiance reaching the ground under fractional cloud cover
-/// (Kasten & Czeplak 1980, Solar Energy 24: 177): `1 − 0.75·cover^3.4`.
-pub(crate) fn cloud_transmission(cover: f32) -> f32 {
-    1.0 - 0.75 * cover.clamp(0.0, 1.0).powf(3.4)
+/// Fraction of the clear-sky global irradiance that remains under complete overcast: Kasten &
+/// Czeplak (1980, Solar Energy 24: 177) `G = G_clear · (1 − 0.75 · N^3.4)` at `N = 1`. With the
+/// beam gone, all of it is diffuse (`D/G = 0.3 + 0.7 N² = 1` at `N = 1`).
+pub(crate) const OVERCAST_DIFFUSE: f32 = 0.25;
+
+/// Mean direct transmittance of the sun's beam when only the cover is known: the cloud shadow
+/// map's mean at the camera before its first readback is `1 − cover^3.4`, the exponent of
+/// Kasten & Czeplak's global-irradiance fit.
+pub(crate) fn beam_transmittance(cover: f32) -> f32 {
+    1.0 - cover.clamp(0.0, 1.0).powf(3.4)
 }
 
-/// Factor on the sun's and moon's light: with the cloud shadow map, the Kasten & Czeplak overcast
-/// floor with the obscuration measured, `0.25 + 0.75 · T̄` (T̄ the camera's mean direct
-/// transmittance); without [`CloudShadows`], the cover-only [`cloud_transmission`].
-pub(crate) fn sky_dimming(cover: f32, shadows: Option<&CloudShadows>) -> f32 {
-    match shadows {
-        Some(shadows) => 0.25 + 0.75 * shadows.camera_transmittance.clamp(0.0, 1.0),
-        None => cloud_transmission(cover),
+/// How cloud divides the light of the sun and the moon, as fractions of their clear-sky
+/// illuminance.
+///
+/// A point of the ground is either lit by the beam or shut off from it by cloud, so the mean beam
+/// is the transmittance `T̄` of the cloud shadow map; where the beam is cut the ground has the
+/// overcast remainder [`OVERCAST_DIFFUSE`], all of it light the cloud scatters. Hence
+/// `direct = T̄` and `diffuse = 0.25 · (1 − T̄)`: `total = 0.25 + 0.75 · T̄`, which is Kasten &
+/// Czeplak's `1 − 0.75 · N^3.4` when `T̄ = 1 − N^3.4`. `direct` goes to the `DirectionalLight`s
+/// (which cast shadows and feed Bevy's atmosphere, so the sky light follows it too) and
+/// `diffuse` to the camera's `AmbientLight`. `total` is what the exposure meters.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct CloudLight {
+    /// Share of the clear-sky illuminance that still arrives as a beam, 0–1.
+    pub direct: f32,
+    /// Share of it that cloud scatters into the sky's diffuse light, 0–0.25.
+    pub diffuse: f32,
+}
+
+impl CloudLight {
+    /// No cloud: everything direct.
+    pub(crate) const CLEAR: Self = Self {
+        direct: 1.0,
+        diffuse: 0.0,
+    };
+
+    /// The split for a mean beam transmittance `beam` (clamped to 0–1).
+    pub(crate) fn from_beam(beam: f32) -> Self {
+        let direct = beam.clamp(0.0, 1.0);
+        Self {
+            direct,
+            diffuse: OVERCAST_DIFFUSE * (1.0 - direct),
+        }
+    }
+
+    /// Direct plus diffuse: the factor on the clear-sky illuminance.
+    pub(crate) fn total(self) -> f32 {
+        self.direct + self.diffuse
+    }
+}
+
+/// The light split under the current cloud: with the cloud shadow map, its mean transmittance at
+/// the camera (measured); without [`CloudShadows`], the cover-only [`beam_transmittance`].
+pub(crate) fn cloud_light(cover: f32, shadows: Option<&CloudShadows>) -> CloudLight {
+    CloudLight::from_beam(shadows.map_or_else(
+        || beam_transmittance(cover),
+        |shadows| shadows.camera_transmittance,
+    ))
+}
+
+/// Smallest beam fraction [`sky_gain`] divides by.
+const MIN_SKY_BEAM: f32 = 0.001;
+
+/// The factor that keeps the sky's brightness where it was. Bevy's atmosphere is lit by the
+/// sun's `DirectionalLight`, which under cloud carries only the beam `T̄`, so the sky dome (and
+/// the sun disc in a gap) would dim to `T̄` of its clear value with the shadow the camera stands
+/// in, and go black under full cloud. The clouds compose the sky pixels with `total / T̄`, which
+/// restores the dome to the total factor `0.25 + 0.75 T̄` it has always had (a limit of the
+/// change, not physics: the sky above a cloud layer is not dimmed by it at all [INFERENCE]).
+/// 1 when the sun's light is off (the moon's sky and the stars are not rescaled).
+pub(crate) fn sky_gain(state: &SunState, cloud: CloudLight) -> f32 {
+    if state.altitude_deg > SUN_OFF_DEG {
+        cloud.total() / cloud.direct.max(MIN_SKY_BEAM)
+    } else {
+        1.0
     }
 }
 
@@ -244,17 +311,21 @@ pub(crate) fn update_sky(
         moon_lux,
     };
 
-    let clouds = sky_dimming(weather.cloud_cover, shadows.as_deref());
+    let cloud = cloud_light(weather.cloud_cover, shadows.as_deref());
     for (mut transform, mut light, is_sun, is_moon) in &mut lights {
         if is_sun {
             *transform = light_transform(sun_dir);
             let up = state.altitude_deg > SUN_OFF_DEG;
-            light.illuminance = if up { lux::RAW_SUNLIGHT * clouds } else { 0.0 };
+            light.illuminance = if up {
+                lux::RAW_SUNLIGHT * cloud.direct
+            } else {
+                0.0
+            };
             set_shadows(&mut light, up);
         } else if is_moon {
             *transform = light_transform(moon_dir);
             let up = state.moon_altitude_deg > MOON_OFF_DEG;
-            light.illuminance = if up { moon_lux * clouds } else { 0.0 };
+            light.illuminance = if up { moon_lux * cloud.direct } else { 0.0 };
             set_shadows(
                 &mut light,
                 up && state.altitude_deg < MOON_SHADOWS_BELOW_SUN_DEG,
@@ -275,18 +346,107 @@ const EXPOSURE_TAU_S: f32 = 1.5;
 /// Illuminance floor so a moonless night still has a finite exposure, lx.
 const ILLUMINANCE_FLOOR_LUX: f32 = 0.0005;
 
-/// Horizontal illuminance from the sun and the moon, direct plus sky, lx: each body's
+/// Clear-sky horizontal illuminance of the sun and of the moon, direct plus sky, lx: each body's
 /// illuminance outside the atmosphere times the USNO total-illuminance factor at its refracted
-/// altitude (which carries twilight), dimmed by cloud, plus a floor.
-pub(crate) fn scene_illuminance(state: &SunState, moon_lux: f32, clouds: f32) -> f32 {
+/// altitude (which carries twilight).
+fn clear_sky_illuminance(state: &SunState, moon_lux: f32) -> (f32, f32) {
     let factor = |true_altitude: f32| {
         let h = f64::from(true_altitude);
         let apparent = h + astro::refraction_deg(h, REFRACTION_PRESSURE_MBAR, REFRACTION_TEMP_C);
         astro::horizontal_illuminance_factor(apparent) as f32
     };
-    let sun = lux::RAW_SUNLIGHT * factor(state.altitude_deg);
-    let moon = moon_lux * factor(state.moon_altitude_deg);
-    (sun + moon) * clouds + ILLUMINANCE_FLOOR_LUX
+    (
+        lux::RAW_SUNLIGHT * factor(state.altitude_deg),
+        moon_lux * factor(state.moon_altitude_deg),
+    )
+}
+
+/// Horizontal illuminance from the sun and the moon, direct plus sky, lx: the clear-sky
+/// illuminance of [`clear_sky_illuminance`] times the cloud's total ([`CloudLight::total`]: the
+/// beam and its diffuse remainder together), plus a floor.
+pub(crate) fn scene_illuminance(state: &SunState, moon_lux: f32, cloud: CloudLight) -> f32 {
+    let (sun, moon) = clear_sky_illuminance(state, moon_lux);
+    (sun + moon) * cloud.total() + ILLUMINANCE_FLOOR_LUX
+}
+
+/// Colour of the sun's light toward the end of the day: white above `DUSK_ONSET_DEG`, tinted
+/// toward sunset orange as the sun drops, fully at the horizon, fading out by the end of civil
+/// twilight (−6°) so moonlit air is not orange.
+pub(crate) fn dusk_tint(sun_altitude_deg: f32) -> Vec3 {
+    let dusk = if sun_altitude_deg >= 0.0 {
+        (1.0 - sun_altitude_deg / DUSK_ONSET_DEG).clamp(0.0, 1.0)
+    } else {
+        (1.0 + sun_altitude_deg / CIVIL_TWILIGHT_DEG).clamp(0.0, 1.0)
+    };
+    Vec3::ONE.lerp(DUSK_TINT, dusk)
+}
+
+/// Tint the light takes as the sun nears the horizon.
+pub(crate) const DUSK_TINT: Vec3 = Vec3::new(1.0, 0.55, 0.3);
+/// Sun altitude below which the dusk tint starts, degrees.
+const DUSK_ONSET_DEG: f32 = 10.0;
+/// Sun depression at which the dusk tint has faded out, degrees (end of civil twilight).
+const CIVIL_TWILIGHT_DEG: f32 = 6.0;
+
+/// The cloud-scattered share of the light as sky radiance: the colour (luminance 1) and the
+/// brightness in cd/m² of a uniform sky whose horizontal illuminance is the sun's and the
+/// moon's `diffuse` share of their clear-sky illuminance (`E = π · L`). Only a body whose
+/// `DirectionalLight` is on contributes, so a night with no moon stays dark whatever the cloud.
+/// The colour is the light of the two bodies, the sun's reddening toward the horizon
+/// ([`dusk_tint`]) and the moon's tint, weighted by their illuminance.
+pub(crate) fn cloud_ambient(state: &SunState, moon_lux: f32, cloud: CloudLight) -> (Vec3, f32) {
+    let (sun, moon) = clear_sky_illuminance(state, moon_lux);
+    let sun = if state.altitude_deg > SUN_OFF_DEG {
+        sun * cloud.diffuse
+    } else {
+        0.0
+    };
+    let moon = if state.moon_altitude_deg > MOON_OFF_DEG {
+        moon * cloud.diffuse
+    } else {
+        0.0
+    };
+    let lux = sun + moon;
+    if lux <= 0.0 {
+        return (Vec3::ONE, 0.0);
+    }
+    let mixed = (dusk_tint(state.altitude_deg) * sun + MOON_TINT * moon) / lux;
+    let luminance = mixed.dot(LUMINANCE_WEIGHTS);
+    (mixed / luminance, lux / std::f32::consts::PI)
+}
+
+/// Rec. 709 luminance weights of linear RGB.
+const LUMINANCE_WEIGHTS: Vec3 = Vec3::new(0.2126, 0.7152, 0.0722);
+
+/// What Bevy's `ambient_light()` makes of a uniform radiance `L`: a diffuse surface shows
+/// `albedo · L · s` with `s = F_ab.x` of `F_AB(1.0, NdotV)` (`EnvBRDFApprox(diffuse_color, ..)`,
+/// `bevy_pbr-0.20.0/src/render/pbr_ambient.wesl:18`, `pbr_lighting.wesl:527-544`). At perceptual
+/// roughness 1 the polynomial is `r = (0, 0.015, 0.468, −0.018)`, `a004 = 0.015` for every
+/// `NdotV`, `s = 0.468 − 1.04 · 0.015 = 0.452`, not the Lambertian 1. The ambient light is
+/// scaled up by `1/s` so a horizontal surface receives the illuminance `π L` that
+/// [`cloud_ambient`] computed.
+const BEVY_AMBIENT_DIFFUSE_SCALE: f32 = 0.452;
+
+/// Give every [`ElementsCamera`] the cloud-scattered light as its `AmbientLight`: Bevy's
+/// per-camera ambient is a uniform sky radiance in cd/m² that casts no shadow, which is what
+/// the diffuse remainder under cloud is.
+fn update_ambient(
+    weather: Res<Weather>,
+    state: Res<SunState>,
+    frame: Res<CelestialFrame>,
+    shadows: Option<Res<CloudShadows>>,
+    mut cameras: Query<&mut AmbientLight, With<ElementsCamera>>,
+) {
+    let cloud = cloud_light(weather.cloud_cover, shadows.as_deref());
+    let (colour, radiance) = cloud_ambient(&state, frame.moon_lux, cloud);
+    let brightness = radiance / BEVY_AMBIENT_DIFFUSE_SCALE;
+    let colour = Color::linear_rgb(colour.x, colour.y, colour.z);
+    for mut ambient in &mut cameras {
+        if ambient.brightness != brightness || ambient.color != colour {
+            ambient.brightness = brightness;
+            ambient.color = colour;
+        }
+    }
 }
 
 /// Peak luminance of the display the exposure targets, cd/m² (an SDR monitor).
@@ -342,7 +502,7 @@ fn auto_exposure(
     let target = ev100_for(scene_illuminance(
         &state,
         frame.moon_lux,
-        sky_dimming(weather.cloud_cover, shadows.as_deref()),
+        cloud_light(weather.cloud_cover, shadows.as_deref()),
     ));
     let k = 1.0 - (-time.delta_secs() / EXPOSURE_TAU_S).exp();
     for (entity, camera, mut exposure) in &mut cameras {
@@ -370,7 +530,10 @@ mod tests {
             moon_altitude_deg: -10.0,
             ..default()
         };
-        assert!((ev100_for(scene_illuminance(&zenith_sun, 0.0, 1.0)) - 13.3360).abs() < 1e-3);
+        assert!(
+            (ev100_for(scene_illuminance(&zenith_sun, 0.0, CloudLight::CLEAR)) - 13.3360).abs()
+                < 1e-3
+        );
         let full_moon = SunState {
             altitude_deg: -30.0,
             moon_altitude_deg: 90.0,
@@ -379,7 +542,7 @@ mod tests {
         let ev = ev100_for(scene_illuminance(
             &full_moon,
             astro::FULL_MOON_LUX as f32,
-            1.0,
+            CloudLight::CLEAR,
         ));
         assert!((ev - -2.2353).abs() < 1e-3, "{ev}");
         let dark = SunState {
@@ -387,26 +550,58 @@ mod tests {
             moon_altitude_deg: -30.0,
             ..default()
         };
-        assert!((ev100_for(scene_illuminance(&dark, 0.0, 1.0)) - -4.7465).abs() < 1e-3);
+        assert!(
+            (ev100_for(scene_illuminance(&dark, 0.0, CloudLight::CLEAR)) - -4.7465).abs() < 1e-3
+        );
         // Sunrise and civil twilight keep the sky's light (USNO), so dawn is not metered as night.
         let sunrise = SunState {
             altitude_deg: 0.0,
             moon_altitude_deg: -30.0,
             ..default()
         };
-        assert!((ev100_for(scene_illuminance(&sunrise, 0.0, 1.0)) - 6.4780).abs() < 1e-3);
+        assert!(
+            (ev100_for(scene_illuminance(&sunrise, 0.0, CloudLight::CLEAR)) - 6.4780).abs() < 1e-3
+        );
         let civil = SunState {
             altitude_deg: -6.0,
             moon_altitude_deg: -30.0,
             ..default()
         };
-        assert!((ev100_for(scene_illuminance(&civil, 0.0, 1.0)) - 0.8567).abs() < 2e-3);
+        assert!(
+            (ev100_for(scene_illuminance(&civil, 0.0, CloudLight::CLEAR)) - 0.8567).abs() < 2e-3
+        );
     }
 
     #[test]
-    fn overcast_passes_a_quarter_of_the_sun() {
-        assert_eq!(cloud_transmission(0.0), 1.0);
-        assert!((cloud_transmission(1.0) - 0.25).abs() < 1e-6);
+    fn overcast_passes_a_quarter_of_the_sun_all_of_it_diffuse() {
+        // Kasten & Czeplak: 1 − 0.75 N^3.4 is 1 for a clear sky and 0.25 under complete overcast.
+        let clear = cloud_light(0.0, None);
+        assert_eq!(clear, CloudLight::CLEAR);
+        assert_eq!(clear.total(), 1.0);
+        let overcast = cloud_light(1.0, None);
+        assert_eq!(overcast.direct, 0.0);
+        assert!((overcast.diffuse - 0.25).abs() < 1e-6);
+        assert!((overcast.total() - 0.25).abs() < 1e-6);
+        for c in [0.05f32, 0.3, 0.5, 0.8, 0.95] {
+            let kc = 1.0 - 0.75 * c.powf(3.4);
+            assert!(
+                (cloud_light(c, None).total() - kc).abs() < 1e-6,
+                "cover {c}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_total_follows_the_beam_linearly_and_the_diffuse_share_is_what_the_beam_lost() {
+        for t in [0.0f32, 0.1, 0.5, 0.9, 1.0] {
+            let light = CloudLight::from_beam(t);
+            assert_eq!(light.direct, t);
+            assert!((light.total() - (0.25 + 0.75 * t)).abs() < 1e-6);
+            assert!((light.diffuse - 0.25 * (1.0 - t)).abs() < 1e-6);
+        }
+        // Out-of-range transmittances are clamped.
+        assert_eq!(CloudLight::from_beam(-1.0), CloudLight::from_beam(0.0));
+        assert_eq!(CloudLight::from_beam(2.0), CloudLight::CLEAR);
     }
 
     fn shadows(camera_transmittance: f32) -> CloudShadows {
@@ -477,11 +672,11 @@ mod tests {
         );
         let moon_hour = moon_hour.unwrap_or(0.0);
 
-        for (t, factor) in [(1.0, 1.0), (0.5, 0.625), (0.0, 0.25)] {
+        for (t, direct, total) in [(1.0, 1.0, 1.0), (0.5, 0.5, 0.625), (0.0, 0.0, 0.25)] {
             let (state, _, sun_lux, _) = run_sky(12.0, cover, Some(shadows(t)));
             assert!(state.altitude_deg > SUN_OFF_DEG);
             assert!(
-                close(sun_lux, lux::RAW_SUNLIGHT * factor),
+                close(sun_lux, lux::RAW_SUNLIGHT * direct),
                 "sun T={t}: {sun_lux}"
             );
 
@@ -489,33 +684,159 @@ mod tests {
             assert!(state.moon_altitude_deg > MOON_OFF_DEG);
             assert!(frame.moon_lux > 0.0);
             assert!(
-                close(moon_lux, frame.moon_lux * factor),
+                close(moon_lux, frame.moon_lux * direct),
                 "moon T={t}: {moon_lux}"
             );
 
+            // The metered total is what it was before the split: clear × (0.25 + 0.75 T̄).
             let dimmed = scene_illuminance(
                 &state,
                 frame.moon_lux,
-                sky_dimming(cover, Some(&shadows(t))),
+                cloud_light(cover, Some(&shadows(t))),
             );
-            let open = scene_illuminance(&state, frame.moon_lux, 1.0) - ILLUMINANCE_FLOOR_LUX;
-            assert!(close(dimmed, open * factor + ILLUMINANCE_FLOOR_LUX));
+            let open = scene_illuminance(&state, frame.moon_lux, CloudLight::CLEAR)
+                - ILLUMINANCE_FLOOR_LUX;
+            assert!(close(dimmed, open * total + ILLUMINANCE_FLOOR_LUX));
         }
 
-        // Without the cloud shadow map the cover-only factor stays.
+        // Without the cloud shadow map the cover-only beam stays.
         let (_, _, sun_lux, _) = run_sky(12.0, cover, None);
         assert!(close(
             sun_lux,
-            lux::RAW_SUNLIGHT * cloud_transmission(cover)
+            lux::RAW_SUNLIGHT * beam_transmittance(cover)
         ));
         let (_, frame, _, moon_lux) = run_sky(moon_hour, cover, None);
-        assert!(close(moon_lux, frame.moon_lux * cloud_transmission(cover)));
+        assert!(close(moon_lux, frame.moon_lux * beam_transmittance(cover)));
 
-        // Before the first readback the camera transmittance is `1 − cover^3.4`: same factor.
+        // Before the first readback the camera transmittance is `1 − cover^3.4`: same split.
         for c in [0.0f32, 0.3, 0.7, 1.0] {
-            let s = shadows(1.0 - c.powf(3.4));
-            assert!((sky_dimming(c, Some(&s)) - cloud_transmission(c)).abs() < 1e-6);
-            assert_eq!(sky_dimming(c, None), cloud_transmission(c));
+            let s = shadows(beam_transmittance(c));
+            assert_eq!(cloud_light(c, Some(&s)), cloud_light(c, None));
         }
+    }
+
+    #[test]
+    fn the_ambient_carries_the_diffuse_share_and_nothing_at_night() {
+        let noon = SunState {
+            altitude_deg: 90.0,
+            moon_altitude_deg: -30.0,
+            ..default()
+        };
+        let clear_noon = scene_illuminance(&noon, 0.0, CloudLight::CLEAR) - ILLUMINANCE_FLOOR_LUX;
+        // Cover 0: all direct, no ambient.
+        let (_, brightness) = cloud_ambient(&noon, 0.0, CloudLight::CLEAR);
+        assert_eq!(brightness, 0.0);
+        // Beam gone: no direct light, a quarter of the clear illuminance as uniform sky radiance
+        // (E = π L), and the total the exposure meters is what it was.
+        let storm = CloudLight::from_beam(0.0);
+        let (colour, brightness) = cloud_ambient(&noon, 0.0, storm);
+        assert!(close(brightness * std::f32::consts::PI, 0.25 * clear_noon));
+        assert!((colour.dot(LUMINANCE_WEIGHTS) - 1.0).abs() < 1e-5);
+        let direct = lux::RAW_SUNLIGHT * storm.direct;
+        assert_eq!(direct, 0.0);
+        let total = scene_illuminance(&noon, 0.0, storm);
+        assert!(close(total, 0.25 * clear_noon + ILLUMINANCE_FLOOR_LUX));
+        // Halfway: the ambient is a quarter of the lost beam.
+        let half = CloudLight::from_beam(0.5);
+        let (_, brightness) = cloud_ambient(&noon, 0.0, half);
+        assert!(close(brightness * std::f32::consts::PI, 0.125 * clear_noon));
+
+        // A night with no moon stays dark under any cloud; the moon's diffuse share is lit.
+        let dark = SunState {
+            altitude_deg: -30.0,
+            moon_altitude_deg: -30.0,
+            ..default()
+        };
+        for t in [0.0, 0.5, 1.0] {
+            let (_, brightness) = cloud_ambient(&dark, 0.0, CloudLight::from_beam(t));
+            assert_eq!(brightness, 0.0, "T = {t}");
+            let (_, brightness) = cloud_ambient(&dark, 0.3, CloudLight::from_beam(t));
+            assert_eq!(brightness, 0.0, "a moon below the horizon, T = {t}");
+        }
+        let moonlit = SunState {
+            altitude_deg: -30.0,
+            moon_altitude_deg: 60.0,
+            ..default()
+        };
+        let (colour, brightness) = cloud_ambient(&moonlit, 0.3, storm);
+        assert!(brightness > 0.0);
+        assert!(colour.z > colour.x, "moonlight is blue: {colour}");
+        // The sun on the horizon reddens the ambient.
+        let sunrise = SunState {
+            altitude_deg: 0.0,
+            moon_altitude_deg: -30.0,
+            ..default()
+        };
+        let (colour, _) = cloud_ambient(&sunrise, 0.0, storm);
+        assert!(colour.x > colour.y && colour.y > colour.z, "{colour}");
+    }
+
+    #[test]
+    fn the_ambient_system_drives_every_elements_camera() {
+        let mut world = World::new();
+        world.insert_resource(Weather {
+            cloud_cover: 1.0,
+            ..default()
+        });
+        world.insert_resource(SunState {
+            altitude_deg: 90.0,
+            moon_altitude_deg: -30.0,
+            ..default()
+        });
+        world.insert_resource(CelestialFrame::default());
+        world.insert_resource(shadows(0.0));
+        let camera = world
+            .spawn((
+                ElementsCamera::default(),
+                AmbientLight {
+                    brightness: 0.0,
+                    ..default()
+                },
+            ))
+            .id();
+        let other = world
+            .spawn(AmbientLight {
+                brightness: 0.0,
+                ..default()
+            })
+            .id();
+        assert!(world.run_system_once(update_ambient).is_ok());
+        let brightness_of = |entity| {
+            world
+                .get::<AmbientLight>(entity)
+                .map_or(f32::NAN, |ambient| ambient.brightness)
+        };
+        assert!(brightness_of(camera) > 1000.0, "{}", brightness_of(camera));
+        assert_eq!(brightness_of(other), 0.0);
+    }
+
+    #[test]
+    fn the_sky_gain_restores_the_dome_to_the_total_factor_by_day_only() {
+        let noon = SunState {
+            altitude_deg: 60.0,
+            moon_altitude_deg: -30.0,
+            ..default()
+        };
+        assert_eq!(sky_gain(&noon, CloudLight::CLEAR), 1.0);
+        // The dome is lit by the beam `T̄`; times the gain it is the total `0.25 + 0.75 T̄`.
+        for t in [0.01f32, 0.3, 0.5, 0.9] {
+            let light = CloudLight::from_beam(t);
+            assert!(
+                (t * sky_gain(&noon, light) - light.total()).abs() < 1e-6,
+                "{t}"
+            );
+        }
+        // Bounded where the beam is gone.
+        assert_eq!(
+            sky_gain(&noon, CloudLight::from_beam(0.0)),
+            0.25 / MIN_SKY_BEAM
+        );
+        // With the sun's light off the moon's sky and the stars are not rescaled.
+        let night = SunState {
+            altitude_deg: -30.0,
+            moon_altitude_deg: 60.0,
+            ..default()
+        };
+        assert_eq!(sky_gain(&night, CloudLight::from_beam(0.2)), 1.0);
     }
 }

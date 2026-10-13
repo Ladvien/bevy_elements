@@ -3,8 +3,9 @@
 //
 //     uv = (P.xz − l.xz · P.y / l.y − origin) / extent,   T = map(uv).r  (1 outside the map)
 //
-// The sun light already carries the factor 0.25 + 0.75 · T̄ for the camera; the pixel is scaled by
-// the ratio of its own factor to the camera's.
+// The camera's sun light and ambient light together carry the factor 0.25 + 0.75 · T̄ (the beam
+// T̄, the cloud-scattered rest 0.25 · (1 − T̄)); the pixel is scaled by the ratio of its own
+// factor to the camera's.
 
 import bevy_pbr::render::{
     pbr_fragment::pbr_input_from_standard_material,
