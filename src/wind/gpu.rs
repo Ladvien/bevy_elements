@@ -132,7 +132,13 @@ fn prepare(
         commands.remove_resource::<WindBindGroups>();
         return;
     };
-    uniform.0.set(grid.params);
+    let mut params = grid.params;
+    // Until the kernels have run once the buffers hold nothing: keep initialising every cell to
+    // the forcing target, whichever frame the pipelines first become ready on.
+    if !grid.live.load(std::sync::atomic::Ordering::Relaxed) {
+        params.origin.w = 1;
+    }
+    uniform.0.set(params);
     uniform.0.write_buffer(&device, &queue);
     let layout = cache.get_bind_group_layout(&kernel.layout);
     let make = |v_in: &bevy::render::render_resource::Buffer,
@@ -208,4 +214,5 @@ fn dispatch(
     run(PROJECT, &bg[0][0]);
     run(PUBLISH, &bg[1][0]);
     span.end(&mut pass);
+    grid.live.store(true, std::sync::atomic::Ordering::Relaxed);
 }

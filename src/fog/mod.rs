@@ -21,9 +21,6 @@ pub const KOSCHMIEDER: f32 = 3.912;
 pub const GROUND_FOG_EXTENT: Vec3 = Vec3::new(800.0, 120.0, 800.0);
 /// Texels of the ground-fog density texture.
 pub const GROUND_FOG_TEXELS: UVec3 = UVec3::new(128, 32, 128);
-/// Extinction per channel relative to green (the channel that defines visibility): the plan's
-/// (0.35, 0.40, 0.45) extinction hue, normalised so green extinguishes at σ_V.
-const EXTINCTION_HUE: Vec3 = Vec3::new(1.243, 1.0, 0.789);
 /// Fog colour in full light, linear RGB.
 const FOG_COLOUR: Vec3 = Vec3::new(0.75, 0.80, 0.85);
 /// Tint the fog takes as the sun nears the horizon.
@@ -40,6 +37,9 @@ const SCALE_HEIGHT_TAU_S: f32 = 600.0;
 /// Single-scattering albedo of fog droplets and of dust.
 const FOG_ALBEDO: f32 = 0.95;
 const DUST_SINGLE_SCATTER: f32 = 0.9;
+/// Largest |n| of the 2-octave `fbm3`, measured over 10⁵ points by
+/// `the_kernel_normalisation_constants_match_the_noise`; maps the noise onto f ∈ [0, 1].
+pub(crate) const FBM2_MAX: f32 = 0.522;
 /// Noise offsets wrap at this many metres to keep f32 precision.
 const OFFSET_WRAP_M: f32 = 80.0 * 4096.0;
 
@@ -52,11 +52,12 @@ pub fn extinction_for_visibility(visibility_m: f32) -> f32 {
     KOSCHMIEDER / visibility_m.max(1.0)
 }
 
-/// Distance fog for a visibility: per-channel extinction σ_V·(1.243, 1, 0.789), so green reaches
-/// 2 % transmittance at exactly `visibility_m`, with in-scattering at the same rates so a fully
+/// Distance fog for a visibility: grey extinction σ_V in every channel (fog, haze and dust
+/// extinguish independently of wavelength), so every colour reaches 2 % transmittance at exactly
+/// `visibility_m`; in-scattering at the same rate, so scene and fog weights sum to 1 and a fully
 /// fogged pixel takes the fog colour.
 pub fn distance_fog_falloff(visibility_m: f32) -> FogFalloff {
-    let k = EXTINCTION_HUE * extinction_for_visibility(visibility_m);
+    let k = Vec3::splat(extinction_for_visibility(visibility_m));
     FogFalloff::Atmospheric {
         extinction: k,
         inscattering: k,
@@ -194,7 +195,7 @@ fn update_volume(
     );
 
     gpu.params = FogParams {
-        origin: (centre - GROUND_FOG_EXTENT * 0.5).extend(0.0),
+        origin: (centre - GROUND_FOG_EXTENT * 0.5).extend(1.0 / FBM2_MAX),
         extent: GROUND_FOG_EXTENT.extend(extinction_for_visibility(weather.visibility_m)),
         shape: Vec4::new(
             runtime.scale_height,
@@ -236,15 +237,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn green_reaches_two_percent_at_the_visibility() {
-        let FogFalloff::Atmospheric { extinction, .. } = distance_fog_falloff(300.0) else {
+    fn every_channel_reaches_two_percent_at_the_visibility_and_energy_is_conserved() {
+        let FogFalloff::Atmospheric {
+            extinction,
+            inscattering,
+        } = distance_fog_falloff(300.0)
+        else {
             unreachable!("distance fog is always atmospheric");
         };
-        assert!((extinction.y - 0.013_040).abs() < 1e-6);
+        assert!((extinction - Vec3::splat(0.013_040)).abs().max_element() < 1e-6);
+        assert_eq!(extinction, inscattering);
         let t = (-extinction * 300.0).exp();
-        assert!((t.y - 0.0200).abs() < 2e-4);
-        assert!((t.x - 0.0077).abs() < 2e-4);
-        assert!((t.z - 0.0457).abs() < 2e-4);
+        assert!((t - Vec3::splat(0.0200)).abs().max_element() < 2e-4);
+        for d in [0.0, 50.0, 300.0, 5000.0] {
+            let scene = (-extinction * d).exp();
+            let fog = Vec3::ONE - (-inscattering * d).exp();
+            assert!(((scene + fog) - Vec3::ONE).abs().max_element() < 1e-6);
+        }
     }
 
     #[test]

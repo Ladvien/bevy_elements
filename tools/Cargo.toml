@@ -1,0 +1,17 @@
+# Offline data generators for `src/celestial/`. Not a workspace member and not part of the
+# published package (`exclude = ["tools/*"]` in the crate manifest): the crate ships the generated
+# files, never these programs or their dependencies.
+[package]
+name = "bevy_elements_tools"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[workspace]
+
+[dependencies]
+# `catalog.gz` of the Yale Bright Star Catalogue.
+flate2 = "1"
+# The NASA SVS Moon map is a JPEG.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }

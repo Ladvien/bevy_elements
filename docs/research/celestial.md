@@ -17,6 +17,9 @@ Papers (all five DOIs were read from `/tmp/research/{md,pdf}`; Ballesteros read 
 - Espenak & Meeus, ΔT polynomials, https://eclipse.gsfc.nasa.gov/SEhelp/deltatpoly2004.html (read).
 - Exposure calibration constants: https://en.wikipedia.org/wiki/Light_meter (Calibration constants: K = 12.5 reflected, C = 250 flat incident receptor, ISO 2720:1974); Bevy `Exposure` at `bevy_camera-0.20.0/src/camera.rs:233-284` (`exposure = 2^-ev100 / 1.2`, Filament formula); `bevy-0.20-render.md` §Atmosphere/Exposure.
 - Kang et al., "Design of advanced color temperature control system for HDTV applications", J. Korean Phys. Soc. 41(6), 2002 — Planckian-locus cubic spline, coefficients confirmed at https://en.wikipedia.org/wiki/Planckian_locus (source dump read).
+- Patry, J. (2021). Real-time samurai cinema: lighting, atmosphere and tonemapping in Ghost of Tsushima. SIGGRAPH 2021, *Advances in Real-Time Rendering in Games*. Corpus stem `s2021-advances-pdf-66-mb` (shard `s2/`; the markdown has no page numbers, so sections are cited by slide title with corpus line numbers). Used: "Tonemapping | Exposure" (lines 2990–3060: switch to "a primarily illuminance-based exposure system, which takes albedo out of the equation altogether"; luminance used "only if the highlight luminance exceeds a threshold", e.g. fire particles, bright specular highlights); "Tonemapping | Purkinje Shift" (lines 3800–4340: constants and the 0.05 lux demonstrations); "Atmospheric Lighting" (line 2043: the 3D LUTs are resampled each frame "for current sun and moon angles"). Not used: the clouds, haze and sun/moon bounce sections (see `fog.md`; clouds are M2).
+- Akenine-Möller, Haines, Hoffman, et al., *Real-Time Rendering* 4th ed. Corpus stem `book_real_time_rendering_4th_akenine`: §8.1 photometry footnote 1 (corpus line 8077): photopic vision above 3.4 cd/m² ("twilight or brighter"), scotopic below 0.034 cd/m² ("a moonless night or darker"). §14.4 (sky rendering) was read for celestial content and adds nothing beyond Hillaire 2020: it has no moon, night-sky or exposure material.
+- Checked, nothing for celestial: `s2009-advances-materials-updated-july-12th2016-slides-pdf` (Bungie 2009: Bruneton-based sky and a CIE sky-luminance distribution table, no night, moon or exposure content), `s2017-advances-pdf-slides-2` (Decima 2017: GGX area lights, AA, height fog; used in `fog.md`), `s2006-advances-materials-11` and `-12` (Wenzel 2006: Nishita sky updated on the CPU over time of day, no moon, night or exposure content; used in `fog.md`). A corpus search for "Krisciunas", "moonlight … lux", "Julian day" and "night sky" with rendering terms found no astronomy or night-sky model.
 
 Data:
 - Yale Bright Star Catalogue, 5th rev. ed. (Hoffleit & Warren 1991, preliminary). CDS V/50: https://cdsarc.cds.unistra.fr/ftp/cats/V/50/ (`ReadMe`, `catalog.gz`, 9110 records). HEASARC table `bsc5p`: https://heasarc.gsfc.nasa.gov/W3Browse/star-catalog/bsc5p.html (derived by HEASARC from the ADC/CDS file).
@@ -276,6 +279,13 @@ $$E=130000\max(\sin h_\odot,0)+E_{moon}\max(\sin h_m,0)+0.15\cdot130000\max(\sin
 
 (moon term uses true moon altitude and 0 when below the horizon). Smoothing in real time: $EV\leftarrow EV+(EV^{target}-EV)(1-e^{-\Delta t_{real}/1.5})$; the first frame sets $EV=EV^{target}$. Cloud dimming of $E_\odot$ arrives with `CloudShadows` in M2. For context, Jensen Fig. 2 lists non-lunar night illumination (zodiacal $1.2\times10^{-7}$, integrated starlight $3.0\times10^{-8}$, airglow $5.1\times10^{-8}$, galactic $9.1\times10^{-9}$, cosmic $9.1\times10^{-10}$ W/m²; sum $\approx2.4\times10^{-7}$ W/m², about $2.4\times10^{-5}$ lx at the Sun's 98 lx per W/m² — [INFERENCE] broadband conversion); the plan's 0.0005 lx floor is a deliberate exposure clamp, not a physical claim, and is kept.
 
+**Corpus corroboration and limits (Patry 2021; RTR4 §8.1).**
+
+1. *Illuminance metering is the production choice.* Patry's team moved from luminance-based exposure, whose feedback with albedo made authored albedos too dark, to illuminance-based exposure with luminance used only for highlights above a threshold. This note's $EV_{100} = \log_2(0.4E)$ meters illuminance only, so it matches; the corollary for M2 is that the lightning flash (an emissive bolt of 50 000 cd/m² plus a point light) must not enter $E$: no term in the formula above sees it, and it must stay that way.
+2. *Where moonlight sits photometrically.* RTR4 puts the photopic/scotopic boundaries at 3.4 and 0.034 cd/m². A 0.18 grey card under $E_{full} = 0.31331$ lx (zenith, top of atmosphere) has $L = 0.18\,E/\pi = 0.01795$ cd/m², below the scotopic limit; at the Meeus Ex. 48.a phase ($E = 0.05510$ lx) 0.00316 cd/m²; at the 0.0005 lx floor $2.9\times10^{-5}$ cd/m²; under the sun at 68.4° (no atmosphere) $6.9\times10^{3}$ cd/m². Moonlit scenes are therefore rod-dominated, which is the regime of Patry's Purkinje shift, where "an illuminance averaging about 0.05 lux" is the demonstration level. That level is about 10 % below this note's moonlight at Ex. 48.a (0.0551 lx) and equals Bevy's `lux::FULL_MOON_NIGHT` (0.05 lx, `bevy-0.20-render.md`), which corresponds here to a phase angle of ≈ 72° ($k \approx 0.65$), not to a full moon (0.313 lx).
+3. *Purkinje shift: not adopted, constants recorded.* The plan has no tonemapping stage of its own and Bevy 0.20 has no low-light colour shift; adding one is outside the plan. For an opt-in later, Patry (after Cao 2008 and Kirk 2011) converts scene RGB to cone/rod responses $\mathbf q$ (LMSR, matrix from Smits reflectance spectra under D65), computes the gain $g_i = [1 + 0.33\,(q_i + k_i\,q_R)/m_i]^{-1/2}$ with $\mathbf k = (0.2, 0.2, 0.29)$ and $\mathbf m = (0.63721, 0.39242, 1.6064)$, and adds the rod-induced opponent-space shift scaled by $K/S$ with $K = 45$, $S = 10$, $k_3 = 0.6$, $r_w = 0.139$, $p = 0.6189$; the shader is three lines (`lmsGain = rsqrt(1 + lmsr.xyz); rgb += M_gain * lmsGain * lmsr.w`). The rod curves, the RGB→LMSR matrix and the full $\Delta\mathbf o$ matrix are not reliably recoverable from the corpus text, so this is a pointer, not an implementable spec.
+4. *Moon in the atmosphere.* Patry resamples the sky LUTs for the current sun and moon angles every frame, the same arrangement as Bevy's atmosphere looping over all directional lights (Sun and moon entities above); no change.
+
 ## Parameters
 
 | name | symbol | default | unit | source |
@@ -309,6 +319,8 @@ $$E=130000\max(\sin h_\odot,0)+E_{moon}\max(\sin h_m,0)+0.15\cdot130000\max(\sin
 | Ambient fraction of sun | — | 0.15 | — | plan |
 | Illuminance floor | — | 0.0005 | lx | plan |
 | Exposure smoothing time constant | $\tau$ | 1.5 | s (real) | plan |
+| Photopic / scotopic luminance limits | — | 3.4 / 0.034 | cd/m² | RTR4 §8.1 photometry footnote |
+| Night-scene reference illuminance (not used in code) | — | 0.05 | lx | Patry 2021 Purkinje demo; equals Bevy `lux::FULL_MOON_NIGHT`; this note's moonlight at Ex. 48.a is 0.0551 lx |
 
 ## GPU mapping
 
@@ -366,6 +378,8 @@ Stars
 
 Exposure
 25. $EV_{100}=\log_2(0.4E)$: sun at zenith ($E=130000+19500+0.0005$ lx) $=15.8679$; full moon at zenith, sun below horizon ($E=0.31331+0.0005$) $=-2.9940$; moonless night (floor only) $=-12.2877$; sun altitude 68° with $E_\odot=130000\sin68°$ plus 15 % ambient $=15.7588$ (±1e-3). Smoothing: after $3\tau=4.5$ s from a step the residual is $e^{-3}=4.98\%$ of the step (±0.1 %).
+26. Photometric regime of moonlight (arithmetic, CPU test of a helper or a doc test): grey card $\rho = 0.18$, $L = \rho E/\pi$: full moon at zenith ($E = 0.31331$ lx) $0.017951$ cd/m² (< 0.034, scotopic); Ex. 48.a ($E = 0.05510$ lx) $0.003157$ cd/m²; floor ($0.0005$ lx) $2.865\times10^{-5}$ cd/m²; sun at 68.43° ($E = 130000\sin 68.43°$ lx) $6926.8$ cd/m² (> 3.4, photopic); tolerance 1e-3 relative. Source: RTR4 §8.1 footnote (limits), K&S (illuminances); arithmetic here.
+27. (M2, forward-looking) A `LightningStrike` flash (point light and emissive bolt) leaves the metered $E$ and `target EV` unchanged: the exposure estimate is a function of `SunState` and cloud-dimming only. Source: Patry 2021, "Tonemapping | Exposure" (luminance used only above a highlight threshold; this crate uses none).
 
 ## Deviations from this plan
 

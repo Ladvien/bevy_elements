@@ -6,6 +6,7 @@
 mod gpu;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bevy::asset::embedded_asset;
 use bevy::prelude::*;
@@ -26,8 +27,11 @@ pub const WIND_ROUGHNESS_M: f32 = 0.03;
 pub const MAX_GUSTS: usize = 16;
 /// Forcing relaxation rate, 1/s.
 const RELAX_RATE: f32 = 0.5;
-/// Curl-noise length scale, m.
+/// Curl-noise length scale of the coarse octave, m (the fine octave is half).
 const CURL_SCALE_M: f32 = 32.0;
+/// Scales `curl3` of the shared noise to unit rms; measured over 10⁵ points by
+/// `the_kernel_normalisation_constants_match_the_noise`.
+pub(crate) const CURL_NORMALISE: f32 = 0.709;
 /// Curl-noise amplitude per unit gustiness, as a fraction of u10.
 const CURL_FRACTION: f32 = 0.35;
 /// Gusts per second per unit gustiness.
@@ -40,8 +44,9 @@ const GUST_SPEED: f32 = 1.2;
 const GUST_WIDTH_M: f32 = 30.0;
 /// Gust peak as a fraction of gustiness × u10.
 const GUST_STRENGTH: f32 = 0.5;
-/// Noise lattice offsets are reduced modulo this to keep f32 precision.
-const NOISE_WRAP: f32 = 65_536.0;
+/// The shared noise lattice is periodic with this many cells, so the drifting offset wraps
+/// seamlessly and stays small enough for f32.
+const NOISE_WRAP: f32 = 4096.0;
 
 /// Mean wind speed at `height_m` above ground for `u10` at 10 m, m/s: the neutral log law
 /// `u10 · ln(max(z, z0)/z0) / ln(10/z0)` with z0 = 0.03 m.
@@ -185,7 +190,7 @@ pub(crate) struct GustGpu {
 #[derive(Clone, Copy, Debug, Default, ShaderType)]
 pub(crate) struct WindParams {
     size: UVec4,
-    origin: IVec4,
+    pub(super) origin: IVec4,
     prev_origin: IVec4,
     wind: Vec4,
     forcing: Vec4,
@@ -207,6 +212,9 @@ pub(crate) struct WindGpu {
     pub params: WindParams,
     pub iterations: u32,
     pub active: bool,
+    /// Set by the render world after the kernels first ran; until then the buffers hold no
+    /// simulated wind and are neither read back nor published as live.
+    pub live: Arc<AtomicBool>,
 }
 
 #[derive(Resource, Default)]
@@ -275,6 +283,7 @@ fn ensure_grid(
         params: WindParams::default(),
         iterations: quality.wind_pressure_iterations(),
         active: false,
+        live: Arc::new(AtomicBool::new(false)),
     });
 }
 
@@ -370,7 +379,7 @@ fn step_wind(
         forcing: Vec4::new(
             WIND_ROUGHNESS_M,
             1.0 - (-RELAX_RATE * dt).exp(),
-            CURL_FRACTION * gustiness * u10,
+            CURL_FRACTION * gustiness * u10 * CURL_NORMALISE,
             CURL_SCALE_M,
         ),
         misc: Vec4::new(WIND_CELL_M, dt, 0.0, runtime.gusts.len() as f32),
@@ -380,7 +389,7 @@ fn step_wind(
     grid.active = dt > 0.0;
     state.field_origin = origin.as_vec3() * WIND_CELL_M;
     state.field_extent = grid.size.as_vec3() * WIND_CELL_M;
-    state.field_live |= grid.active;
+    state.field_live = grid.live.load(Ordering::Relaxed);
     state.at_camera = snapshot
         .wind
         .as_ref()
@@ -394,7 +403,7 @@ fn read_wind(grid: Option<Res<WindGpu>>, mut readbacks: Readbacks) {
     let Some(grid) = grid else {
         return;
     };
-    if !grid.active {
+    if !grid.active || !grid.live.load(Ordering::Relaxed) {
         return;
     }
     let origin_cell = grid.params.origin.truncate();

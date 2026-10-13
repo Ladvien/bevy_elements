@@ -6,7 +6,7 @@
 import bevy_elements::noise::fbm3;
 
 struct FogParams {
-    // xyz: world position of the volume's minimum corner, m. w: unused.
+    // xyz: world position of the volume's minimum corner, m. w: 1 / max |fbm| (noise → [0, 1]).
     origin: vec4<f32>,
     // xyz: volume size, m. w: σ_V, m⁻¹.
     extent: vec4<f32>,
@@ -31,7 +31,7 @@ fn fog_density(@builtin(global_invocation_id) id: vec3<u32>) {
     let p = params.origin.xyz + uvw * params.extent.xyz;
     let h = max(p.y - params.shape.y, 0.0);
     let q = (p - vec3<f32>(params.shape.z, 0.0, params.shape.w)) / WAVELENGTH_M;
-    let f = clamp(fbm3(q, 2u) * 0.5 + 0.5, 0.0, 1.0);
+    let f = clamp(0.5 + 0.5 * fbm3(q, 2u) * params.origin.w, 0.0, 1.0);
     let sigma = params.extent.w * exp(-h / params.shape.x) * (0.6 + 0.4 * f);
     textureStore(density, vec3<i32>(id), vec4<f32>(sigma, 0.0, 0.0, 0.0));
 }

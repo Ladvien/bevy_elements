@@ -10,7 +10,7 @@
 //   project    A→B, p A
 //   publish    B→A          copy back to A and write the sampled 3D texture
 
-import bevy_elements::noise::perlin3;
+import bevy_elements::noise::{perlin3_d, seed_offset};
 
 struct Gust {
     // xy: band centre (world XZ), zw: unit direction it travels (world XZ).
@@ -28,11 +28,12 @@ struct Params {
     prev_origin: vec4<i32>,
     // xy: prevailing direction (world XZ, blows toward), z: u10 (m/s), w: gustiness 0–1.
     wind: vec4<f32>,
-    // x: z0 (m), y: relaxation factor 1 − e^(−rΔt), z: curl amplitude (m/s), w: curl scale L (m).
+    // x: z0 (m), y: relaxation factor 1 − e^(−rΔt), z: curl amplitude per unit raw curl (m/s),
+    // w: coarse curl octave L (m).
     forcing: vec4<f32>,
     // x: cell edge (m), y: Δt (s), z: ground height (m), w: active gust count.
     misc: vec4<f32>,
-    // xyz: noise lattice offset (drifts downwind).
+    // xyz: noise lattice offset of the coarse octave (drifts downwind, wrapped at the period).
     noise_offset: vec4<f32>,
     gusts: array<Gust, 16>,
 }
@@ -46,8 +47,8 @@ struct Params {
 @group(0) @binding(6) var<storage, read_write> p_out: array<f32>;
 @group(0) @binding(7) var field: texture_storage_3d<rgba16float, write>;
 
-// Normalises the finite-difference curl of unit Perlin noise to roughly unit rms.
-const CURL_NORMALISE: f32 = 0.6;
+// Kolmogorov octave weights (Kim et al. 2008): (1, 2^(−5/6)) normalised to unit total rms.
+const OCTAVE_WEIGHTS: vec2<f32> = vec2<f32>(0.8721, 0.4895);
 // The curl noise fades in over this height above ground, m.
 const CURL_RAMP_M: f32 = 4.0;
 
@@ -90,43 +91,30 @@ fn log_law(z: f32) -> f32 {
     return params.wind.z * log(max(z, z0) / z0) / log(10.0 / z0);
 }
 
-fn smoothstep01(x: f32) -> f32 {
-    let t = clamp(x, 0.0, 1.0);
-    return t * t * (3.0 - 2.0 * t);
-}
-
-// curl(A ψ) with ψ three decorrelated Perlin potentials and A(z) a ramp from the ground, so the
-// noise stays divergence-free while fading out at the surface (Bridson et al. 2007 §2.3).
-fn ramped_curl(p: vec3<f32>, z: f32) -> vec3<f32> {
-    let h = 1e-3;
-    let a = vec3<f32>(0.0, 0.0, 0.0);
-    let b = vec3<f32>(31.416, 47.853, 12.679);
-    let c = vec3<f32>(-23.17, 9.31, 71.02);
-    let dx = vec3<f32>(h, 0.0, 0.0);
-    let dy = vec3<f32>(0.0, h, 0.0);
-    let dz = vec3<f32>(0.0, 0.0, h);
-    let d3dy = perlin3(p + c + dy) - perlin3(p + c - dy);
-    let d2dz = perlin3(p + b + dz) - perlin3(p + b - dz);
-    let d1dz = perlin3(p + a + dz) - perlin3(p + a - dz);
-    let d3dx = perlin3(p + c + dx) - perlin3(p + c - dx);
-    let d2dx = perlin3(p + b + dx) - perlin3(p + b - dx);
-    let d1dy = perlin3(p + a + dy) - perlin3(p + a - dy);
-    let curl = vec3<f32>(d3dy - d2dz, d1dz - d3dx, d2dx - d1dy) / (2.0 * h);
-    let ramp = smoothstep01(z / CURL_RAMP_M);
-    // ∇A × ψ with ∇A = (0, A', 0), A' in lattice units.
+// curl(A ψ) of one octave, per lattice unit: ψ three Perlin potentials with separate seeds,
+// analytic derivatives, and A(z) a ramp from the ground so the noise stays divergence-free
+// while fading out at the surface (Bridson et al. 2007 §2.3). `scale` is the octave's lattice
+// size in metres.
+fn ramped_curl(p: vec3<f32>, z: f32, scale: f32) -> vec3<f32> {
+    let a = perlin3_d(p + seed_offset(11u));
+    let b = perlin3_d(p + seed_offset(12u));
+    let c = perlin3_d(p + seed_offset(13u));
+    let curl = vec3<f32>(c.z - b.w, a.w - c.y, b.y - a.z);
     let t = clamp(z / CURL_RAMP_M, 0.0, 1.0);
-    let ramp_slope = 6.0 * t * (1.0 - t) / CURL_RAMP_M * params.forcing.w;
-    let psi1 = perlin3(p + a);
-    let psi3 = perlin3(p + c);
-    return ramp * curl + ramp_slope * vec3<f32>(psi3, 0.0, -psi1);
+    let ramp = t * t * (3.0 - 2.0 * t);
+    // ∇A × ψ with ∇A = (0, A', 0), A' per lattice unit.
+    let slope = 6.0 * t * (1.0 - t) / CURL_RAMP_M * scale;
+    return ramp * curl + slope * vec3<f32>(c.x, 0.0, -a.x);
 }
 
 // The velocity the forcing relaxes toward; w = turbulence intensity of the noise part.
 fn target_wind(pos: vec3<f32>, z: f32) -> vec4<f32> {
     let dir = vec3<f32>(params.wind.x, 0.0, params.wind.y);
     let mean = dir * log_law(z);
-    let lattice = pos / params.forcing.w + params.noise_offset.xyz;
-    let noise = ramped_curl(lattice, z) * (params.forcing.z * CURL_NORMALISE);
+    let coarse = params.forcing.w;
+    let lattice = pos / coarse + params.noise_offset.xyz;
+    let noise = (OCTAVE_WEIGHTS.x * ramped_curl(lattice, z, coarse)
+        + OCTAVE_WEIGHTS.y * ramped_curl(2.0 * lattice, z, 0.5 * coarse)) * params.forcing.z;
     var gust = vec3<f32>(0.0);
     let shape = log_law(z) / max(params.wind.z, 1e-3);
     let count = u32(params.misc.w);
@@ -222,15 +210,21 @@ fn mask(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 }
 
-// Velocity of a neighbour for the divergence stencil: zero in solids, the centre's own value
-// beyond the window edge.
+// Velocity of a neighbour for the divergence stencil (Harris 2004 boundary rules): across a
+// solid face the component along the stencil axis is mirrored and the others slip freely; the
+// window top is a lid (vertical component mirrored); the other window edges are open (the
+// centre's value, zero gradient).
 fn vel_nbr(g: vec3<i32>, o: vec3<i32>) -> vec3<f32> {
     let n = g + o;
+    let c = vel_in[at(g)].xyz;
     if !inside(n) {
-        return vel_in[at(g)].xyz;
+        if o.y > 0 {
+            return vec3<f32>(c.x, -c.y, c.z);
+        }
+        return c;
     }
     if is_solid(n) {
-        return vec3<f32>(0.0);
+        return c * (vec3<f32>(1.0) - 2.0 * abs(vec3<f32>(o)));
     }
     return vel_in[at(n)].xyz;
 }

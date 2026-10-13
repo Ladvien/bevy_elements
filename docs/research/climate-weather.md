@@ -9,6 +9,9 @@
 - Koschmieder visibility law, V = ln(1/ε)/σ with contrast threshold ε = 0.02 → V = 3.912/σ. Defined and used in `docs/research/fog.md`. Bevy 0.20's own constant is ε = 0.05 (`bevy_pbr-0.20.0/src/fog.rs:437`, `koschmieder` at `:464`).
 - Steele, G. L., Lea, D., Flood, C. H. (2014). Fast splittable pseudorandom number generators. OOPSLA. DOI `10.1145/2660193.2660195`. SplitMix64 finaliser constants; test vector verified below.
 - Meteorological seasons (Dec–Feb winter in the northern hemisphere, whole-month boundaries) — convention used by the plan's `Season`.
+- Corpus search for this note (2026-10-13, over `~/.cache/bevy_elements_corpus/markdown`): phrases "weather generator", "stochastic weather", "diurnal temperature" and "Markov chain" (the last filtered to documents mentioning precipitation, rainfall or wet/dry days), and "rain-snow threshold" / "rain-snow partition" (no hits). No document describes a stochastic weather generator or a diurnal temperature curve: the only generator hit, `10.1002_eap.2313` (Huber et al. 2020, forest model), names ForClim's generator in one sentence without equations; the other hits are unrelated ecology, plant-physiology, biomedical and machine-learning papers (listed from file names only, not all opened). So Richardson 1981, Parton & Logan 1981 and Jennings 2018 above stay the only sources for the generator, the diurnal maximum hour and the rain/snow threshold.
+- Luo, Y., Arnold, J., Allen, P., Chen, X. (2012). Baseflow simulation using SWAT model in an inland river basin in Tianshan Mountains, Northwest China. *Hydrol. Earth Syst. Sci.* 16:1259. Stem `10.5194_hess-16-1259-2012` ("Default value −6 °C km⁻¹ in the SWAT model was used for the temperature lapse rate", corpus line 250). Used only as a second value for the lapse rate.
+- Dubois, E., Doummar, J., Pistre, S., Larocque, M. (2020). Calibration of a lumped karst system model and application to the Qachqouch karst spring (Lebanon) under climate change conditions. *Hydrol. Earth Syst. Sci.* 24:4275. Stem `10.5194_hess-24-4275-2020` (parameter table: temperature lapse rate −0.45 °C per 100 m, "Measured"). Used only as a measured regional lapse rate.
 
 ## Model adopted
 
@@ -66,7 +69,7 @@ $$ T(h,\mathrm{doy},z) = T_{mean} + A_{ann}\cos\frac{2\pi(\mathrm{doy}-d_{warm})
 | Mean wind | $\bar u$ | 4 / 6 / 5 / 3 / 7 | m/s | plan 1.2 |
 | Prevailing wind direction | — | $+X$ | unit XZ vector (blows toward) | plan 1.2 |
 | Reference elevation | $z_{ref}$ | 0 | m | plan 1.2 |
-| Lapse rate | $\Gamma$ | 6.5 | K/km | ISO 2533:1975 / ICAO standard atmosphere, 0–11 km |
+| Lapse rate | $\Gamma$ | 6.5 | K/km | ISO 2533:1975 / ICAO standard atmosphere, 0–11 km. Regional values in the corpus differ and none justifies changing the default: 6.0 (SWAT default, Luo et al. 2012), 4.5 measured on a Lebanese slope (Dubois et al. 2020); 6.5 stays as the standard-atmosphere value and `Climate` has no lapse-rate field |
 | Snow fully falling below | $T_s$ | −1 | °C | plan 1.2; consistent with Jennings 2018 (95 % range −0.4…2.4 °C lies above it) |
 | Rain fully falling above | $T_r$ | 2 | °C | plan 1.2; Jennings 2018 95 % upper bound 2.4 °C |
 | Forced-snow temperature cap | — | −2.0 | °C | plan 1.2 (guarantees `snow_fraction() = 1` since $-2 \le T_s$) |
