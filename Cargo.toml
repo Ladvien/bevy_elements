@@ -1,0 +1,75 @@
+[package]
+name = "bevy_elements"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+description = "Living environments for Bevy: sun, moon and stars, climate-driven weather, GPU wind, volumetric clouds, rain, snow and fog, lightning, terrain with hydraulic and thermal erosion, flooding, snow cover, wetness and dust — simulated in compute shaders."
+license = "MIT OR Apache-2.0"
+authors = ["C. Thomas Brittain <cthomasbrittain@yahoo.com>"]
+repository = "https://github.com/Ladvien/bevy_elements"
+documentation = "https://docs.rs/bevy_elements"
+readme = "README.md"
+# `bevy` first: it is the term a Bevy user searches, and crates.io weights keyword position.
+keywords = ["bevy", "weather", "terrain", "erosion", "atmosphere"]
+categories = ["game-development", "graphics", "rendering"]
+exclude = ["docs/*.gif", "docs/*.png", "tools/*"]
+
+# docs.rs builds with every feature so the optional integrations are visible to someone choosing
+# the crate, not only to someone who has already checked out the source.
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = []
+# `serde` derives on the public settings, presets and messages.
+serde = ["dep:serde"]
+
+[dependencies]
+# The umbrella with defaults off. Features unify with the game's full bevy, so this costs a consumer
+# nothing; the list is the minimal set for which `cargo build --release` passes.
+bevy = { version = "0.20.0", default-features = false, features = [
+    "std",
+] }
+serde = { version = "1", features = ["derive"], optional = true }
+# Plain-old-data casts for the GPU uniform structs and the readback decode.
+bytemuck = { version = "1", features = ["derive"] }
+
+# **Tests and examples only.** The examples need a window and the full 3D pipeline, so they take the
+# full umbrella here, where it cannot reach a consumer's dependency graph. `tests/leaf.rs` reads
+# `[dependencies]` only, deliberately.
+[dev-dependencies]
+bevy = { version = "0.20.0" }
+
+# Compute shaders are not in WebGL2, so wasm means WebGPU. `web` makes `bevy::platform::time::Instant`
+# use `web_time` rather than a `std::time::Instant` whose `now()` panics on wasm.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+bevy = { version = "0.20.0", default-features = false, features = ["web", "webgpu"] }
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+
+# Simulation and rendering in a debug build is 20-50x slower and makes it look as if the algorithm
+# is wrong rather than the profile. Examples are always run with --release; this keeps a debug run
+# merely slow rather than unusable.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev]
+opt-level = 1
+
+# Bevy's wasm binary is size-bound, not arithmetic-bound, so `s` beats `3` and `thin` beats `fat`:
+# fat LTO on a 30 MB module costs minutes per example. `strip = "debuginfo"` rather than `true`
+# because the name section is dropped by `wasm-bindgen`, the tool that knows what it may drop.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
