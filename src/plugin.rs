@@ -14,6 +14,7 @@ use bevy::shader::load_shader_library;
 
 use crate::celestial::{CelestialPlugin, SunState, clock_plugin};
 use crate::climate::{ClimatePlugin, Weather};
+use crate::clouds::CloudPlugin;
 use crate::fog::FogPlugin;
 use crate::gpu::readback::ReadbackPlugin;
 use crate::query::EnvironmentSnapshot;
@@ -37,6 +38,7 @@ impl PluginGroup for ElementsPlugins {
             .add(CelestialPlugin)
             .add(WindPlugin)
             .add(FogPlugin)
+            .add(CloudPlugin)
     }
 }
 
@@ -62,10 +64,12 @@ pub enum ElementsSystems {
 /// Marks the camera the environment follows and renders for.
 ///
 /// Adding it inserts, where absent: `AtmosphereSettings`, `AtmosphereEnvironmentMapLight`,
-/// `DepthPrepass`, `Msaa::Off`, `VolumetricFog`, `DistanceFog` and `Exposure`, and spawns one
-/// Earth `Atmosphere` if the world has none. With more than one `ElementsCamera` the one with the
-/// lowest `Camera::order` is followed and a warning is logged once. With none, the camera-relative
-/// simulations (wind, fog volume) idle while the clock, weather and gameplay queries keep running.
+/// `DepthPrepass`, `VolumetricFog`, `DistanceFog` and `Exposure`, and spawns one Earth
+/// `Atmosphere` if the world has none. It always sets `Msaa::Off` (a `Camera3d` requires `Msaa`,
+/// so there is no "absent" to fill): the cloud pass reads the non-multisampled depth prepass.
+/// With more than one `ElementsCamera` the one with the lowest `Camera::order` is followed and a
+/// warning is logged once. With none, the camera-relative simulations (wind, fog volume, clouds)
+/// idle while the clock, weather and gameplay queries keep running.
 #[derive(Component, Clone, Copy, Debug, Reflect)]
 #[require(Hdr)]
 pub struct ElementsCamera {
@@ -202,25 +206,27 @@ fn dress_camera(
     atmospheres: Query<(), With<Atmosphere>>,
     mut media: ResMut<Assets<ScatteringMedium>>,
 ) {
-    commands.entity(add.entity).insert_if_new((
-        AtmosphereSettings::default(),
-        AtmosphereEnvironmentMapLight::default(),
-        DepthPrepass,
-        Msaa::Off,
-        VolumetricFog {
-            ambient_intensity: 0.0,
-            step_count: quality.fog_steps(),
-            ..default()
-        },
-        DistanceFog::default(),
-        Exposure::SUNLIGHT,
-        // Sky light comes from the atmosphere's environment map; Bevy's default ambient is a
-        // constant 80 cd/m² that the night exposure would lift to white.
-        AmbientLight {
-            brightness: 0.0,
-            ..default()
-        },
-    ));
+    commands
+        .entity(add.entity)
+        .insert(Msaa::Off)
+        .insert_if_new((
+            AtmosphereSettings::default(),
+            AtmosphereEnvironmentMapLight::default(),
+            DepthPrepass,
+            VolumetricFog {
+                ambient_intensity: 0.0,
+                step_count: quality.fog_steps(),
+                ..default()
+            },
+            DistanceFog::default(),
+            Exposure::SUNLIGHT,
+            // Sky light comes from the atmosphere's environment map; Bevy's default ambient is a
+            // constant 80 cd/m² that the night exposure would lift to white.
+            AmbientLight {
+                brightness: 0.0,
+                ..default()
+            },
+        ));
     if atmospheres.is_empty() {
         let medium = media.add(ScatteringMedium::default());
         commands.spawn((Name::new("Elements atmosphere"), Atmosphere::earth(medium)));

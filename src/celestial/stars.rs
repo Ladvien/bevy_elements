@@ -6,7 +6,7 @@
 //! One `Mesh` is built at startup from `stars.bin`: four vertices per star carrying the J2000 unit
 //! direction, the quad corner `(±1, ±1)`, the linear-sRGB colour from B−V (luminance 1) and the
 //! outside-the-atmosphere illuminance E★. Each frame the CPU writes the 3×3 J2000 → world matrix
-//! ([`CelestialFrame::j2000_to_world`]), the cloud factor and the moon's position into the material
+//! ([`CelestialFrame::j2000_to_world`]) and the moon's position into the material
 //! uniform; `stars.wesl` does the rest:
 //!
 //! - **Placement.** The star's world direction is rotated into view space and projected as a point
@@ -22,11 +22,13 @@
 //! - **Radiance.** The sprite's solid angle is Ω = (1.5·p)². The soft disc profile
 //!   `g(ρ) = (1 − ρ²)²` over `ρ = |corner| ≤ 1` is normalised to unit energy over Ω
 //!   (∫ g d²c = π/3, so the peak is `3/π` times the mean), giving
-//!   `L = E★/Ω · (3/π) · g(ρ) · colour · T_atm · (1 − cloud_cover) · exposure` cd/m².
+//!   `L = E★/Ω · (3/π) · g(ρ) · colour · T_atm · exposure` cd/m².
 //! - **Extinction.** `T_atm = exp(−τ·X)` with X the Kasten–Young airmass at the star's altitude and
 //!   τ = [`ZENITH_OPTICAL_DEPTH`] per channel.
 //! - **Culling.** Stars below the horizon and stars inside the moon's disc are moved outside the
 //!   clip volume in the vertex shader.
+//! - **Clouds.** The cloud composite attenuates the stars by the march transmittance, so no cloud
+//!   factor is applied here. With `CloudPlugin` disabled the stars are not dimmed by cloud cover.
 //!
 //! # Blending and depth
 //!
@@ -48,7 +50,6 @@ use bevy::render::render_resource::{
 use bevy::shader::ShaderRef;
 
 use super::{CelestialFrame, SunState};
-use crate::climate::Weather;
 use crate::gpu::readback::decode;
 use crate::plugin::{ElementsSystems, ElementsView};
 
@@ -223,7 +224,7 @@ fn star_mesh(catalog: &[[f32; 4]]) -> Mesh {
 pub(super) struct StarsParams {
     /// Columns of the J2000 → world matrix, `.w` unused.
     pub j2000_to_world: [Vec4; 3],
-    /// `.xyz`: zenith optical depth per channel. `.w`: `1 − cloud_cover`.
+    /// `.xyz`: zenith optical depth per channel. `.w`: unused (1).
     pub extinction_cloud: Vec4,
     /// `.xyz`: unit world direction of the moon. `.w`: cosine of its angular radius.
     pub moon: Vec4,
@@ -324,11 +325,7 @@ fn spawn_stars(
 }
 
 /// This frame's uniform from the sky state.
-pub(super) fn stars_params(
-    frame: &CelestialFrame,
-    sun: &SunState,
-    cloud_cover: f32,
-) -> StarsParams {
+pub(super) fn stars_params(frame: &CelestialFrame, sun: &SunState) -> StarsParams {
     let m = frame.j2000_to_world;
     let moon_radius = 0.5 * frame.moon_angular_diameter_deg.to_radians();
     StarsParams {
@@ -337,7 +334,7 @@ pub(super) fn stars_params(
             m.y_axis.extend(0.0),
             m.z_axis.extend(0.0),
         ],
-        extinction_cloud: ZENITH_OPTICAL_DEPTH.extend(1.0 - cloud_cover.clamp(0.0, 1.0)),
+        extinction_cloud: ZENITH_OPTICAL_DEPTH.extend(1.0),
         moon: sun.moon_direction.extend(moon_radius.cos()),
         ..default()
     }
@@ -346,12 +343,11 @@ pub(super) fn stars_params(
 fn update_stars(
     frame: Res<CelestialFrame>,
     sun: Res<SunState>,
-    weather: Res<Weather>,
     view: Res<ElementsView>,
     mut materials: ResMut<Assets<StarsMaterial>>,
     mut fields: Query<(&MeshMaterial3d<StarsMaterial>, &mut Visibility), With<StarField>>,
 ) {
-    let params = stars_params(&frame, &sun, weather.cloud_cover);
+    let params = stars_params(&frame, &sun);
     let visibility = if view.entity.is_some() {
         Visibility::Visible
     } else {
@@ -595,8 +591,8 @@ mod tests {
             moon_direction: Vec3::X,
             ..default()
         };
-        let p = stars_params(&frame, &sun, 0.25);
-        assert_eq!(p.extinction_cloud.w, 0.75);
+        let p = stars_params(&frame, &sun);
+        assert_eq!(p.extinction_cloud.w, 1.0);
         assert_eq!(p.j2000_to_world[0].truncate(), frame.j2000_to_world.x_axis);
         assert!((p.moon.w - (0.26f32.to_radians()).cos()).abs() < 1e-7);
     }

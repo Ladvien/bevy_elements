@@ -3,6 +3,8 @@
 
 mod celestial;
 mod climate;
+mod clouds;
+mod flash;
 #[cfg(feature = "flora")]
 mod flora;
 mod fog;
@@ -42,6 +44,12 @@ pub use fog::{
     FogPlugin, GROUND_FOG_EXTENT, GROUND_FOG_TEXELS, GroundFog, KOSCHMIEDER, distance_fog_falloff,
     extinction_for_visibility, fog_hue, volume_light_compensation,
 };
+
+// Clouds.
+pub use clouds::{CloudLayer, CloudPlugin, CloudQuality, CloudShadows, CloudWeatherMap};
+
+// Lightning flash, shared by the lightning and cloud domains.
+pub use flash::LightningFlash;
 
 // `bevy_flora` integration.
 #[cfg(feature = "flora")]

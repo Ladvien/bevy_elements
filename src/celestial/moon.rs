@@ -23,8 +23,11 @@
 //! - Lommel–Seeliger shading `L = A · E_sun/π · 2μ₀/(μ₀ + μ)` with `μ₀ = n · ŝ` (0 on the night
 //!   side), plus earthshine `0.0002 · A · E_sun/π · (1 − k)` everywhere (negligible on the lit
 //!   side), where `k` is the illuminated fraction.
-//! - Times `1 − cloud_cover`, the same atmospheric transmittance as a star at the moon's
-//!   altitude, the camera exposure and the limb coverage.
+//! - Times the atmospheric transmittance of a star at the moon's altitude, the camera exposure and
+//!   the limb coverage.
+//!
+//! The cloud composite attenuates the disc by the march transmittance, so no cloud factor is
+//! applied here; with `CloudPlugin` disabled the disc is not dimmed by cloud cover.
 //!
 //! The disc is hidden below [`MOON_HIDE_BELOW_DEG`] altitude and when no camera is followed.
 
@@ -44,7 +47,6 @@ use bevy::shader::ShaderRef;
 
 use super::stars::ZENITH_OPTICAL_DEPTH;
 use super::{CelestialFrame, SunState};
-use crate::climate::Weather;
 use crate::plugin::{ElementsSystems, ElementsView};
 
 /// The albedo map, raw `u8`, row-major, 512×256, row 0 = north, column 0 = longitude −180°.
@@ -80,7 +82,7 @@ pub(super) struct MoonParams {
     /// `.xyz`: the moon-fixed +Z axis (north), unit and perpendicular to `moon`. `.w`: illuminated
     /// fraction `k`.
     pub north: Vec4,
-    /// `.xyz`: unit world direction to the sun. `.w`: `1 − cloud_cover`.
+    /// `.xyz`: unit world direction to the sun. `.w`: unused (1).
     pub sun_cloud: Vec4,
     /// `.xyz`: zenith optical depth per channel. `.w`: exposure for an eye adapted to the lit
     /// lunar surface (the disc is shown at the darker of this and the scene's exposure).
@@ -271,7 +273,7 @@ fn spawn_moon(
 }
 
 /// This frame's uniform from the sky state.
-pub(super) fn moon_params(frame: &CelestialFrame, sun: &SunState, cloud_cover: f32) -> MoonParams {
+pub(super) fn moon_params(frame: &CelestialFrame, sun: &SunState) -> MoonParams {
     let m = sun.moon_direction.normalize_or(Vec3::Y);
     // Moon-fixed +Z: the ecliptic pole, projected perpendicular to the line of sight.
     let up = (frame.ecliptic_north - m * frame.ecliptic_north.dot(m))
@@ -280,10 +282,7 @@ pub(super) fn moon_params(frame: &CelestialFrame, sun: &SunState, cloud_cover: f
     MoonParams {
         moon: m.extend(0.5 * frame.moon_angular_diameter_deg.to_radians()),
         north: up.extend(sun.moon_illuminated_fraction.clamp(0.0, 1.0)),
-        sun_cloud: sun
-            .direction
-            .normalize_or(Vec3::Y)
-            .extend(1.0 - cloud_cover.clamp(0.0, 1.0)),
+        sun_cloud: sun.direction.normalize_or(Vec3::Y).extend(1.0),
         ..default()
     }
 }
@@ -291,12 +290,11 @@ pub(super) fn moon_params(frame: &CelestialFrame, sun: &SunState, cloud_cover: f
 fn update_moon(
     frame: Res<CelestialFrame>,
     sun: Res<SunState>,
-    weather: Res<Weather>,
     view: Res<ElementsView>,
     mut materials: ResMut<Assets<MoonMaterial>>,
     mut discs: Query<(&MeshMaterial3d<MoonMaterial>, &mut Visibility), With<MoonDisc>>,
 ) {
-    let params = moon_params(&frame, &sun, weather.cloud_cover);
+    let params = moon_params(&frame, &sun);
     let visibility = if view.entity.is_some() && sun.moon_altitude_deg > MOON_HIDE_BELOW_DEG {
         Visibility::Visible
     } else {
@@ -493,7 +491,7 @@ mod tests {
             moon_illuminated_fraction: 0.4,
             ..default()
         };
-        let p = moon_params(&frame, &sun, 0.1);
+        let p = moon_params(&frame, &sun);
         let m = p.moon.truncate();
         let up = p.north.truncate();
         assert!((up.length() - 1.0).abs() < 1e-5);
@@ -510,7 +508,7 @@ mod tests {
         let right = m.cross(up);
         assert!(((-m).cross(right) - up).length() < 1e-5);
         assert_eq!(p.north.w, 0.4);
-        assert!((p.sun_cloud.w - 0.9).abs() < 1e-6);
+        assert_eq!(p.sun_cloud.w, 1.0);
         assert!((p.moon.w - 0.26f32.to_radians()).abs() < 1e-7);
     }
 

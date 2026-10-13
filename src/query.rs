@@ -15,6 +15,8 @@ use crate::wind::{WindSnapshot, WindState};
 pub struct EnvironmentSnapshot {
     /// The wind field at the last readback, if any.
     pub(crate) wind: Option<WindSnapshot>,
+    /// Mean direct cloud transmittance around the camera at the last readback, 0–1.
+    pub(crate) cloud_transmittance: Option<f32>,
     /// Real time of the last completed readback.
     pub(crate) updated_at: Option<Duration>,
 }

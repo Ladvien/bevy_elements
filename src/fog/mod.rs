@@ -10,8 +10,9 @@ use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
 use bevy::render::render_resource::ShaderType;
 
-use crate::celestial::{CelestialFrame, SunState, cloud_transmission, scene_illuminance};
+use crate::celestial::{CelestialFrame, SunState, scene_illuminance, sky_dimming};
 use crate::climate::{Weather, WeatherDirector, WeatherPreset};
+use crate::clouds::CloudShadows;
 use crate::gpu::grid::storage_volume;
 use crate::plugin::{ElementsCamera, ElementsSystems, ElementsView, ensure_gpu_core};
 
@@ -259,6 +260,7 @@ fn update_distance_fog(
     weather: Res<Weather>,
     sun: Res<SunState>,
     frame: Res<CelestialFrame>,
+    shadows: Option<Res<CloudShadows>>,
     mut cameras: Query<(&mut DistanceFog, &Exposure), With<ElementsCamera>>,
 ) {
     let falloff = distance_fog_falloff(weather.visibility_m);
@@ -268,7 +270,7 @@ fn update_distance_fog(
     let luminance = scene_illuminance(
         &sun,
         frame.moon_lux,
-        cloud_transmission(weather.cloud_cover),
+        sky_dimming(weather.cloud_cover, shadows.as_deref()),
     ) / std::f32::consts::PI;
     let hue = fog_hue(sun.altitude_deg, weather.dust);
     for (mut fog, exposure) in &mut cameras {

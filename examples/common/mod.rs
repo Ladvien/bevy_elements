@@ -9,7 +9,11 @@
 
 #![allow(dead_code)]
 
+mod ground;
+
 use std::time::Duration;
+
+use ground::GroundPlane;
 
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
@@ -62,6 +66,7 @@ impl Plugin for ExampleHarness {
             (fly, clock_keys, weather_keys).before(ElementsSystems::Clock),
         )
         .add_systems(Update, (status, run_limit).after(ElementsSystems::Readback));
+        ground::plugin(app);
     }
 }
 
@@ -176,13 +181,15 @@ fn spawn_status(mut commands: Commands) {
     ));
 }
 
-/// A 2 km ground plane and a ring of boxes, columns and spheres to read shadows and fog depth.
+/// A 2 km ground plane (given per-pixel cloud shadows by the harness) and a ring of boxes,
+/// columns and spheres to read shadows and fog depth.
 pub fn test_scene(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) {
     commands.spawn((
+        GroundPlane,
         Mesh3d(meshes.add(Plane3d::default().mesh().size(2000.0, 2000.0))),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::srgb(0.30, 0.36, 0.22),

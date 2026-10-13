@@ -21,7 +21,16 @@ use bevy_elements::*;
 use common::{ExampleHarness, camera, test_scene};
 
 /// The crate's GPU passes, by diagnostic span name.
-const PASSES: [&str; 2] = ["elements_wind", "elements_fog"];
+const PASSES: [&str; 8] = [
+    "elements_wind",
+    "elements_fog",
+    "elements_clouds_noise",
+    "elements_clouds_weather",
+    "elements_clouds_shadow",
+    "elements_clouds_march",
+    "elements_clouds_resolve",
+    "elements_clouds_composite",
+];
 
 fn main() {
     let (width, height) = std::env::var("ELEMENTS_RESOLUTION")
@@ -69,30 +78,50 @@ fn setup(
     mut director: ResMut<WeatherDirector>,
 ) {
     commands.spawn(camera(
-        Vec3::new(0.0, 12.0, 0.0),
-        Vec3::new(150.0, 10.0, 80.0),
+        Vec3::new(0.0, 30.0, 0.0),
+        // Looking 20° above the horizon: about half the frame is cloud.
+        Vec3::new(150.0, 91.9, 80.0),
     ));
     test_scene(&mut commands, &mut meshes, &mut materials);
-    director.force(WeatherPreset::Fog, std::time::Duration::ZERO);
+    director.force(WeatherPreset::PartlyCloudy, std::time::Duration::ZERO);
 }
 
-fn report(store: Res<DiagnosticsStore>, quality: Res<ElementsQuality>, mut frame: Local<u32>) {
+fn report(
+    store: Res<DiagnosticsStore>,
+    quality: Res<ElementsQuality>,
+    mut frame: Local<u32>,
+    mut lowest: Local<[f64; PASSES.len()]>,
+) {
     *frame += 1;
+    // The minimum over the whole run is the full-clock cost: a pass can only read slower than
+    // that, when the GPU has dropped to a low power state; the history window and the average mix
+    // both.
+    for (slot, pass) in lowest.iter_mut().zip(PASSES) {
+        let gpu = DiagnosticPath::new(format!("render/{pass}/elapsed_gpu"));
+        if let Some(now) = store.get(&gpu).and_then(|d| d.value()) {
+            *slot = if *slot > 0.0 { slot.min(now) } else { now };
+        }
+    }
     if !(*frame).is_multiple_of(120) {
         return;
     }
-    // The minimum over the history is the full-clock cost: a pass can only read slower than
-    // that, when the GPU has dropped to a low power state; the average mixes both.
     let mut total = 0.0;
+    let mut clouds = 0.0;
     let mut line = format!("{:?}:", *quality);
     for pass in PASSES {
         let gpu = DiagnosticPath::new(format!("render/{pass}/elapsed_gpu"));
         let cpu = DiagnosticPath::new(format!("render/{pass}/elapsed_cpu"));
         match store.get(&gpu) {
             Some(d) => {
-                let min = d.values().copied().fold(f64::INFINITY, f64::min);
+                let min = lowest[PASSES.iter().position(|p| *p == pass).unwrap_or(0)];
                 let mean = d.average().unwrap_or(f64::NAN);
-                total += min;
+                // The noise volumes are generated once, in the first frames: not a per-frame cost.
+                if !pass.ends_with("_noise") {
+                    total += min;
+                    if pass.starts_with("elements_clouds") {
+                        clouds += min;
+                    }
+                }
                 line += &format!("  {pass} min {min:.3} / mean {mean:.3} ms GPU");
             }
             None => match store.get(&cpu).and_then(|d| d.smoothed()) {
@@ -101,5 +130,5 @@ fn report(store: Res<DiagnosticsStore>, quality: Res<ElementsQuality>, mut frame
             },
         }
     }
-    println!("{line}  | total min {total:.3} ms GPU");
+    println!("{line}  | total min {total:.3} ms GPU, clouds min {clouds:.3} ms GPU");
 }

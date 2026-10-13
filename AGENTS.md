@@ -53,6 +53,9 @@ No system is implemented without its `docs/research/<system>.md`, committed firs
 - **Shaders are WESL.** `embedded://bevy_elements/noise.wesl` is importable as `bevy_elements::noise`; shared libraries are loaded with `load_shader_library!`.
 - **GPU timings on a lightly loaded NVIDIA card read 5–10× slow** (P8/P5 clocks under Xvfb). Report the minimum over the diagnostic history and log `nvidia-smi` clocks in the same shell.
 - **Screenshots without a display:** `xvfb-run -a -s "-screen 0 1920x1080x24" env ELEMENTS_FRAMES=… ELEMENTS_SHOT=… ./target/release/examples/<name>` renders on the GPU.
+- **A `Camera3d` requires `Msaa` (4 samples by default)**, so `insert_if_new(Msaa::Off)` never applies; `ElementsCamera` inserts it unconditionally. The cloud pass binds the non-multisampled depth prepass.
+- **Bevy's `ScatteringMedium::earth` falloffs are fractions of the atmosphere thickness** (100 km): effective scale heights 13.3 km (Rayleigh) and 2 km (Mie), not Hillaire's 8 and 1.2 km. Oracles for the sky or cloud light use `bevy_optical_transmittance` (`src/clouds/model.rs`).
+- **`ReadbackOnce` is stripped in `First`**: spawn it from a system, or use `Readback` and despawn it (tests do the latter, `tests/support`).
 
 ## Build and test
 
