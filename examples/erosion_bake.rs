@@ -99,7 +99,8 @@ fn report(
     mut last: Local<u64>,
 ) {
     let now = time.elapsed_secs();
-    if before.heights.is_none() && !stats.baking && stats.substeps == 0 {
+    // The first survey that lands before the bake has run for five simulated seconds.
+    if before.heights.is_none() && stats.simulated_s < 5.0 {
         before.heights = survey(&env);
     }
     for done in baked.read() {
