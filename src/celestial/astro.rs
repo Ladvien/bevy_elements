@@ -103,9 +103,9 @@ impl Nutation {
 
 /// Nutation and obliquity at `t` centuries (Meeus 22.2 low-accuracy terms).
 pub fn nutation(t: f64) -> Nutation {
-    let omega = 125.044_52 - 1934.136_261 * t;
-    let l = 280.4665 + 36_000.7698 * t;
-    let lp = 218.3165 + 481_267.8813 * t;
+    let omega = 125.044_52 - 1_934.136_261 * t;
+    let l = 280.466_5 + 36_000.769_8 * t;
+    let lp = 218.316_5 + 481_267.881_3 * t;
     let dpsi = (-17.20 * sin(omega) - 1.32 * sin(2.0 * l) - 0.23 * sin(2.0 * lp)
         + 0.21 * sin(2.0 * omega))
         / 3600.0;
@@ -300,6 +300,25 @@ pub fn refraction_deg(alt: f64, pressure_mbar: f64, temp_c: f64) -> f64 {
         * (283.0 / (273.0 + temp_c))
 }
 
+/// Total horizontal illuminance from a body (direct plus sky), as a fraction of its
+/// illuminance outside the atmosphere on a surface facing it, for a refracted (apparent)
+/// altitude in degrees. Valid from the zenith through twilight (the sky term stays positive below
+/// the horizon): 0.925 at the zenith, 0.0057 on the horizon, 2.2e-5 at −6°.
+///
+/// Subroutine `ATMOS` of Janiczek & DeYoung 1987, *Computer programs for sun and moon
+/// illuminance*, US Naval Observatory Circular 171 (X = Earth radius / scale height):
+/// `M = X(cos S − sin h) + cos S` with `S = asin(X cos h / (X + 1))`, then
+/// `e^(−0.21 M) sin h + 0.0289 e^(−0.042 M)(1 + (h + 90) sin h / 57.29578)`.
+pub fn horizontal_illuminance_factor(apparent_altitude: f64) -> f64 {
+    let x = 753.661_56;
+    let u = sin(apparent_altitude);
+    let s = (x * cos(apparent_altitude) / (x + 1.0)).asin();
+    let m = x * (s.cos() - u) + s.cos();
+    ((-0.21 * m).exp() * u
+        + 0.0289 * (-0.042 * m).exp() * (1.0 + (apparent_altitude + 90.0) * u / R2D))
+        .max(0.0)
+}
+
 /// Unit vector toward altitude/azimuth in the east-north-up frame: (east, north, up).
 pub fn enu(alt: f64, az: f64) -> [f64; 3] {
     [cos(alt) * sin(az), cos(alt) * cos(az), sin(alt)]
@@ -486,6 +505,23 @@ mod tests {
         assert!(close(moon_phase_factor(90.0), 0.090_996, 1e-6));
         assert!(close(moon_phase_factor(180.0), 2.8079e-4, 1e-8));
         assert!(close(moon_angular_diameter(368_409.7), 0.5404, 1e-4));
+    }
+
+    #[test]
+    fn horizontal_illuminance_matches_usno_circular_171() {
+        assert!(close(horizontal_illuminance_factor(90.0), 0.925_353, 1e-6));
+        assert!(close(
+            horizontal_illuminance_factor(0.0) * 133_775.0,
+            756.605,
+            0.01
+        ));
+        // Civil twilight (−6°): about 3 lx, the order of the 3.4 lx Bevy calls CIVIL_TWILIGHT.
+        assert!(close(
+            horizontal_illuminance_factor(-6.0) * 133_775.0,
+            2.992_14,
+            1e-4
+        ));
+        assert!(horizontal_illuminance_factor(-18.0) * 133_775.0 < 1e-5);
     }
 
     #[test]

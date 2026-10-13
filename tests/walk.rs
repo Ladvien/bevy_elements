@@ -40,7 +40,11 @@ fn run_for(app: &mut App, updates: usize) {
 
 #[test]
 fn a_forced_thunderstorm_arrives_on_time_and_is_announced_once() {
-    let mut app = app(Climate::temperate().with_seed(42), 1.0, Duration::from_millis(100));
+    let mut app = app(
+        Climate::temperate().with_seed(42),
+        1.0,
+        Duration::from_millis(100),
+    );
     app.world_mut()
         .resource_mut::<WeatherDirector>()
         .force(WeatherPreset::Thunderstorm, Duration::from_secs(60));
@@ -57,7 +61,12 @@ fn a_forced_thunderstorm_arrives_on_time_and_is_announced_once() {
         .filter(|c| c.to == WeatherPreset::Thunderstorm && c.forced)
         .copied()
         .collect();
-    assert_eq!(forced.len(), 1, "messages: {:?}", app.world().resource::<Seen>().0);
+    assert_eq!(
+        forced.len(),
+        1,
+        "messages: {:?}",
+        app.world().resource::<Seen>().0
+    );
     assert!(app.world().resource::<WeatherDirector>().is_forced());
 }
 
@@ -85,7 +94,10 @@ fn release_hands_the_weather_back_to_the_scheduler() {
 
     let after = forced.world().resource::<WeatherDirector>();
     assert!(!after.is_forced());
-    assert_eq!(after.current(), free.world().resource::<WeatherDirector>().current());
+    assert_eq!(
+        after.current(),
+        free.world().resource::<WeatherDirector>().current()
+    );
 }
 
 #[test]
@@ -98,7 +110,11 @@ fn forced_snow_falls_as_snow_even_in_the_tropics() {
     run_for(&mut app, 110);
 
     let weather = *app.world().resource::<Weather>();
-    assert!(weather.temperature_c <= -2.0, "temperature {}", weather.temperature_c);
+    assert!(
+        weather.temperature_c <= -2.0,
+        "temperature {}",
+        weather.temperature_c
+    );
     assert_eq!(weather.snow_fraction(), 1.0);
     assert_eq!(weather.precipitation_mm_h, 1.5);
 }

@@ -452,7 +452,8 @@ mod tests {
         };
         // World cell (−1, 1, 9) → slot ((−1 mod 4), 1, (9 mod 4)) = (3, 1, 1).
         let s = snap.slot(IVec3::new(-1, 1, 9));
-        assert_eq!(s, 3 + 4 * (1 + 2 * 1));
+        // x + nx * (y + ny * z) with (x, y, z) = (3, 1, 1), nx = 4, ny = 2.
+        assert_eq!(s, 3 + 4 * (1 + 2));
         data[s] = Vec4::new(5.0, 0.0, 0.0, 0.0);
         let snap = WindSnapshot {
             data: Arc::from(data),

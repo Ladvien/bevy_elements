@@ -33,15 +33,13 @@ impl ExtractResource<RenderApp> for WindGpu {
 /// Kernel entry points in `sim.wesl`, in dispatch order.
 const FORCING: usize = 0;
 const ADVECT: usize = 1;
-const MASK: usize = 2;
-const DIVERGENCE: usize = 3;
-const JACOBI: usize = 4;
-const PROJECT: usize = 5;
-const PUBLISH: usize = 6;
-const ENTRIES: [&str; 7] = [
+const DIVERGENCE: usize = 2;
+const JACOBI: usize = 3;
+const PROJECT: usize = 4;
+const PUBLISH: usize = 5;
+const ENTRIES: [&str; 6] = [
     "forcing",
     "advect",
-    "mask",
     "divergence",
     "jacobi",
     "project",
@@ -206,8 +204,7 @@ fn dispatch(
     };
     run(FORCING, &bg[0][0]);
     run(ADVECT, &bg[1][0]);
-    run(MASK, &bg[0][1]);
-    run(DIVERGENCE, &bg[0][0]);
+    run(DIVERGENCE, &bg[0][1]);
     for i in 0..grid.iterations {
         run(JACOBI, &bg[0][(i % 2) as usize]);
     }

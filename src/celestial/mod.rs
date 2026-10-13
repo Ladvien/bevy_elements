@@ -3,10 +3,12 @@
 
 pub mod astro;
 mod clock;
+mod moon;
+mod stars;
 
 use bevy::camera::Exposure;
 use bevy::light::light_consts::lux;
-use bevy::light::{SunDisk, VolumetricLight};
+use bevy::light::{CascadeShadowConfigBuilder, SunDisk, VolumetricLight};
 use bevy::prelude::*;
 
 pub(crate) use clock::plugin as clock_plugin;
@@ -91,6 +93,8 @@ pub struct CelestialPlugin;
 impl Plugin for CelestialPlugin {
     fn build(&self, app: &mut App) {
         ensure_gpu_core(app);
+        stars::plugin(app);
+        moon::plugin(app);
         app.init_resource::<CelestialFrame>()
             .add_systems(Startup, spawn_lights)
             .add_systems(
@@ -112,6 +116,11 @@ const MOON_OFF_DEG: f32 = -0.5;
 /// Moon shadows are drawn only when the sun is lower than this, degrees (civil twilight).
 const MOON_SHADOWS_BELOW_SUN_DEG: f32 = -6.0;
 
+/// How far the sun's shadow cascades reach, m. Volumetric fog takes its sunlight through the
+/// shadow map, so beyond the last cascade fog gets no light at all and turns into a dark band
+/// toward the horizon; the cascades cover the ground-fog volume (±400 m) with margin.
+const SUN_SHADOW_DISTANCE_M: f32 = 600.0;
+
 fn spawn_lights(mut commands: Commands) {
     commands.spawn((
         Name::new("Sun"),
@@ -121,6 +130,12 @@ fn spawn_lights(mut commands: Commands) {
             shadow_maps_enabled: true,
             ..default()
         },
+        CascadeShadowConfigBuilder {
+            maximum_distance: SUN_SHADOW_DISTANCE_M,
+            first_cascade_far_bound: 15.0,
+            ..default()
+        }
+        .build(),
         VolumetricLight,
         Transform::default(),
     ));
@@ -245,21 +260,62 @@ fn set_shadows(light: &mut Mut<DirectionalLight>, on: bool) {
 
 /// Real-time constant of the exposure adaptation, s.
 const EXPOSURE_TAU_S: f32 = 1.5;
-/// Fraction of the direct sun the sky adds as diffuse light on the ground.
-const SKY_AMBIENT_FRACTION: f32 = 0.15;
 /// Illuminance floor so a moonless night still has a finite exposure, lx.
 const ILLUMINANCE_FLOOR_LUX: f32 = 0.0005;
 
-/// Horizontal illuminance from the sun, the moon and the sky, lx.
+/// Horizontal illuminance from the sun and the moon, direct plus sky, lx: each body's
+/// illuminance outside the atmosphere times the USNO total-illuminance factor at its refracted
+/// altitude (which carries twilight), dimmed by cloud, plus a floor.
 pub(crate) fn scene_illuminance(state: &SunState, moon_lux: f32, clouds: f32) -> f32 {
-    let sun = lux::RAW_SUNLIGHT * clouds * state.altitude_deg.to_radians().sin().max(0.0);
-    let moon = moon_lux * clouds * state.moon_altitude_deg.to_radians().sin().max(0.0);
-    sun + SKY_AMBIENT_FRACTION * sun + moon + ILLUMINANCE_FLOOR_LUX
+    let factor = |true_altitude: f32| {
+        let h = f64::from(true_altitude);
+        let apparent = h + astro::refraction_deg(h, REFRACTION_PRESSURE_MBAR, REFRACTION_TEMP_C);
+        astro::horizontal_illuminance_factor(apparent) as f32
+    };
+    let sun = lux::RAW_SUNLIGHT * factor(state.altitude_deg);
+    let moon = moon_lux * factor(state.moon_altitude_deg);
+    (sun + moon) * clouds + ILLUMINANCE_FLOOR_LUX
 }
 
-/// Incident-light exposure at ISO 100 for illuminance `lux` (calibration constant C = 250).
+/// Peak luminance of the display the exposure targets, cd/m² (an SDR monitor).
+const DISPLAY_MAX_NITS: f32 = 100.0;
+/// Reflectance of the surface the eye is assumed to adapt to (mid grey).
+const ADAPTING_REFLECTANCE: f32 = 0.18;
+
+/// Base-10 log of the just-noticeable luminance difference at adaptation luminance `la`, cd/m²
+/// (Larson, Rushmeier & Piatko 1997, Table 1: rods and cones, after Ferwerda et al. 1996).
+pub(crate) fn log10_threshold(la: f32) -> f32 {
+    let x = la.max(1e-12).log10();
+    if x < -3.94 {
+        -2.86
+    } else if x < -1.44 {
+        (0.405 * x + 1.6).powf(2.18) - 2.86
+    } else if x < -0.0184 {
+        x - 0.395
+    } else if x < 1.9 {
+        (0.249 * x + 0.65).powf(2.7) - 0.72
+    } else {
+        x - 1.255
+    }
+}
+
+/// Exposure for a scene lit by `lux` of horizontal illuminance.
+///
+/// Ward's contrast-based scale factor (Graphics Gems IV, 1994) with the threshold function of
+/// Larson et al. 1997: world luminance is scaled by the ratio of the display's and the world's
+/// just-noticeable differences, `ΔL(L_d,max/2) / ΔL(0.18·E/π)`, so a contrast that is just
+/// visible in the world is just visible on screen. A moonlit scene therefore stays dark instead
+/// of being exposed up to daylight. Bevy multiplies scene luminance by `2^−EV₁₀₀ / 1.2` and
+/// treats 1 as display peak, so `EV₁₀₀ = −log₂(1.2 · m / L_d,max)`.
 pub(crate) fn ev100_for(lux: f32) -> f32 {
-    (lux * 100.0 / 250.0).log2()
+    -(1.2 * exposure_for_adaptation(ADAPTING_REFLECTANCE * lux / std::f32::consts::PI)).log2()
+}
+
+/// The factor scene luminance is multiplied by for an eye adapted to luminance `la`, cd/m²
+/// (`m / L_d,max` of [`ev100_for`]; Bevy's `Exposure::exposure()` for the matching EV).
+pub(crate) fn exposure_for_adaptation(la: f32) -> f32 {
+    let display = DISPLAY_MAX_NITS * 0.5;
+    10f32.powf(log10_threshold(display) - log10_threshold(la)) / DISPLAY_MAX_NITS
 }
 
 fn auto_exposure(
@@ -300,7 +356,7 @@ mod tests {
             moon_altitude_deg: -10.0,
             ..default()
         };
-        assert!((ev100_for(scene_illuminance(&zenith_sun, 0.0, 1.0)) - 15.8679).abs() < 1e-3);
+        assert!((ev100_for(scene_illuminance(&zenith_sun, 0.0, 1.0)) - 13.3360).abs() < 1e-3);
         let full_moon = SunState {
             altitude_deg: -30.0,
             moon_altitude_deg: 90.0,
@@ -311,13 +367,26 @@ mod tests {
             astro::FULL_MOON_LUX as f32,
             1.0,
         ));
-        assert!((ev - -2.9940).abs() < 1e-3, "{ev}");
+        assert!((ev - -2.2353).abs() < 1e-3, "{ev}");
         let dark = SunState {
             altitude_deg: -30.0,
             moon_altitude_deg: -30.0,
             ..default()
         };
-        assert!((ev100_for(scene_illuminance(&dark, 0.0, 1.0)) - -12.2877).abs() < 1e-3);
+        assert!((ev100_for(scene_illuminance(&dark, 0.0, 1.0)) - -4.7465).abs() < 1e-3);
+        // Sunrise and civil twilight keep the sky's light (USNO), so dawn is not metered as night.
+        let sunrise = SunState {
+            altitude_deg: 0.0,
+            moon_altitude_deg: -30.0,
+            ..default()
+        };
+        assert!((ev100_for(scene_illuminance(&sunrise, 0.0, 1.0)) - 6.4780).abs() < 1e-3);
+        let civil = SunState {
+            altitude_deg: -6.0,
+            moon_altitude_deg: -30.0,
+            ..default()
+        };
+        assert!((ev100_for(scene_illuminance(&civil, 0.0, 1.0)) - 0.8567).abs() < 2e-3);
     }
 
     #[test]

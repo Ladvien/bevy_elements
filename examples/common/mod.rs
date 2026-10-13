@@ -61,10 +61,7 @@ impl Plugin for ExampleHarness {
             Update,
             (fly, clock_keys, weather_keys).before(ElementsSystems::Clock),
         )
-        .add_systems(
-            Update,
-            (status, run_limit).after(ElementsSystems::Readback),
-        );
+        .add_systems(Update, (status, run_limit).after(ElementsSystems::Readback));
     }
 }
 
@@ -77,8 +74,12 @@ pub fn camera(position: Vec3, look_at: Vec3) -> impl Bundle {
         Camera3d::default(),
         ElementsCamera::default(),
         FlyCamera::looking(yaw, pitch),
-        Transform::from_translation(position)
-            .with_rotation(Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0)),
+        Transform::from_translation(position).with_rotation(Quat::from_euler(
+            EulerRot::YXZ,
+            yaw,
+            pitch,
+            0.0,
+        )),
     )
 }
 
@@ -111,7 +112,11 @@ fn fly(
                 wish += dir;
             }
         }
-        let speed = if keys.pressed(KeyCode::ShiftLeft) { 60.0 } else { 12.0 };
+        let speed = if keys.pressed(KeyCode::ShiftLeft) {
+            60.0
+        } else {
+            12.0
+        };
         transform.translation += wish.normalize_or_zero() * speed * dt;
     }
 }
@@ -156,20 +161,70 @@ fn spawn_status(mut commands: Commands) {
         StatusLine,
         Text::new(""),
         TextFont {
-            font_size: 16.0,
+            font_size: FontSize::Px(16.0),
             ..default()
         },
         TextColor(Color::WHITE),
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)),
         Node {
             position_type: PositionType::Absolute,
             left: Val::Px(10.0),
             top: Val::Px(10.0),
+            padding: UiRect::all(Val::Px(4.0)),
             ..default()
         },
     ));
 }
 
-fn status(env: Environment, director: Res<WeatherDirector>, mut text: Query<&mut Text, With<StatusLine>>) {
+/// A 2 km ground plane and a ring of boxes, columns and spheres to read shadows and fog depth.
+pub fn test_scene(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+) {
+    commands.spawn((
+        Mesh3d(meshes.add(Plane3d::default().mesh().size(2000.0, 2000.0))),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::srgb(0.30, 0.36, 0.22),
+            perceptual_roughness: 0.95,
+            ..default()
+        })),
+    ));
+    let stone = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.55, 0.53, 0.50),
+        perceptual_roughness: 0.8,
+        ..default()
+    });
+    let white = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.85, 0.85, 0.85),
+        perceptual_roughness: 0.4,
+        ..default()
+    });
+    let cube = meshes.add(Cuboid::new(6.0, 6.0, 6.0));
+    let column = meshes.add(Cylinder::new(1.5, 24.0));
+    let ball = meshes.add(Sphere::new(4.0));
+    for i in 0..24 {
+        let angle = i as f32 / 24.0 * std::f32::consts::TAU;
+        let radius = 40.0 + (i % 4) as f32 * 60.0;
+        let at = Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius);
+        let (mesh, material, y) = match i % 3 {
+            0 => (cube.clone(), stone.clone(), 3.0),
+            1 => (column.clone(), stone.clone(), 12.0),
+            _ => (ball.clone(), white.clone(), 4.0),
+        };
+        commands.spawn((
+            Mesh3d(mesh),
+            MeshMaterial3d(material),
+            Transform::from_translation(at + Vec3::Y * y),
+        ));
+    }
+}
+
+fn status(
+    env: Environment,
+    director: Res<WeatherDirector>,
+    mut text: Query<&mut Text, With<StatusLine>>,
+) {
     let Ok(mut text) = text.single_mut() else {
         return;
     };
@@ -177,14 +232,18 @@ fn status(env: Environment, director: Res<WeatherDirector>, mut text: Query<&mut
     let weather = env.weather();
     let sun = env.sun();
     text.0 = format!(
-        "{:04}-{:02}-{:02} {:05.2} h ×{}  |  {:?}{}  |  {:.1} °C  cover {:.2}  {:.1} mm/h  wind {:.1} m/s  vis {:.0} m  |  sun {:.1}°  moon {:.1}° ({:.0}%)",
+        "{:04}-{:02}-{:02} {:05.2} h x{}  |  {:?}{}  |  {:.1} C  cover {:.2}  {:.1} mm/h  wind {:.1} m/s  vis {:.0} m  |  sun {:.1} deg  moon {:.1} deg ({:.0}%)",
         clock.date.year,
         clock.date.month,
         clock.date.day,
         clock.hour,
         clock.time_scale,
         director.current(),
-        if director.is_forced() { " (forced)" } else { "" },
+        if director.is_forced() {
+            " (forced)"
+        } else {
+            ""
+        },
         env.temperature_c(),
         weather.cloud_cover,
         weather.precipitation_mm_h,

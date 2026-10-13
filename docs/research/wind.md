@@ -105,7 +105,7 @@ Per-kernel binding count (storage buffers / storage textures / uniforms), all �
 | project | 3 (vel in/out, pressure in) + 1 (mask) = 4 | 0 | |
 | publish | 1 (vel in) | 1 (`rgba16float` write-only 3D) | |
 
-Maximum: 4 storage buffers in one stage, 1 storage texture in one stage. No `read_write` storage texture is used (the publish texture is write-only; consumers sample it as a filterable 3D texture). If a device reports the `downlevel` limit of 4 storage buffers the Jacobi and project kernels still fit exactly (4); the plan's splitting rule is not needed.
+**As implemented:** all wind kernels share one bind-group layout (uniform, velocity in/out, solid mask, divergence, pressure in/out, the published texture) so four pre-built bind groups cover every ping-pong combination in one compute pass: 6 storage buffers and 1 storage texture per stage, inside WebGPU's defaults (8 and 4) but above the `downlevel` 4 storage buffers, which this crate does not support. The per-kernel counts below are what each kernel touches. Maximum: 4 storage buffers in one stage, 1 storage texture in one stage. No `read_write` storage texture is used (the publish texture is write-only; consumers sample it as a filterable 3D texture). If a device reports the `downlevel` limit of 4 storage buffers the Jacobi and project kernels still fit exactly (4); the plan's splitting rule is not needed.
 
 Readback: the plan's `EnvironmentSnapshot` copies the velocity buffer (High: 1 MiB at 4 Hz); Ultra's 3.4 MiB is also below the 1024² downsample threshold. Frame cost at High is the plan's wind + fog compute ≤ 0.3 ms (Verification M1); 30 Jacobi dispatches of 65 536 cells are small, but each is a separate dispatch with a barrier, so the bench must measure it.
 
@@ -125,7 +125,9 @@ Readback: the plan's `EnvironmentSnapshot` copies the velocity buffer (High: 1 M
 
 ## Deviations from this plan
 
-None. No plan number changed. (Items marked [INFERENCE] are choices where the plan was silent: curl-noise length scale, finite-difference step, the exact definition of `gust_factor`, the toroidal Repeat-sampled `WindField` layout, and — added from the corpus pass — the two-octave Kolmogorov-weighted curl spectrum (Kim et al. 2008), the logical-edge, ground-slip and lid boundary rules (Harris 2004), and the operator-consistency residual factors.)
+1. **Jacobi iterations at Medium/High lowered to 10/12 (from 20/30); Low and Ultra unchanged (10, 40).** The plan's performance contingency applies: at High the wind pass measured 0.50 ms GPU at full clock (RTX 3090, 1800 MHz, 36 dispatches) against the plan's 0.3 ms wind + fog budget, and each Jacobi dispatch costs ≈ 14 µs whatever the grid. The listed first remedy is fewer iterations; the warm start makes them nearly free in accuracy: on the High grid, `tests/gpu_wind.rs` measured mean |∇·u| 8.2×10⁻⁴ s⁻¹ with 30 iterations and 8.4×10⁻⁴ with 10 (flat ground, u₁₀ = 10 m/s). The mask kernel was also folded into forcing and the fresh-cell pressure reset into divergence (34 → 17 dispatches at High). Terrain (M3) adds solid boundaries and must re-check the divergence bound before keeping these counts.
+
+Otherwise no plan number changed. (Items marked [INFERENCE] are choices where the plan was silent: curl-noise length scale, finite-difference step, the exact definition of `gust_factor`, the toroidal Repeat-sampled `WindField` layout, and — added from the corpus pass — the two-octave Kolmogorov-weighted curl spectrum (Kim et al. 2008), the logical-edge, ground-slip and lid boundary rules (Harris 2004), and the operator-consistency residual factors.)
 
 ## Pending index
 

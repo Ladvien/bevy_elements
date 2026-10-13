@@ -41,6 +41,19 @@ No system is implemented without its `docs/research/<system>.md`, committed firs
 - Close any Bevy app you launch for a test.
 - Do not hard-wrap markdown.
 
+## Bevy 0.20 traps found here
+
+- **A camera needs a render target.** Bevy's atmosphere environment probe unwraps the view uniforms, so an `ElementsCamera` with no window or image target panics the render world. GPU tests render into an `Image` target (`tests/support`).
+- **Pipelined rendering moves the render app away.** After `App::finish()` the `RenderApp` sub-app is gone from the `App` (it runs on its own thread). Register render-world systems and resources before `finish()`, and report back through an `Arc<Mutex<…>>` resource. Wait for `PluginsState::Ready` (ticking the task pools) before `finish()`: the renderer is created asynchronously.
+- **Pipelines compile asynchronously.** A kernel that is not ready yet skips the frame; anything read back meanwhile is zeros. GPU state is published as live (`WindGpu::live`) only after the first real dispatch. Tests use `RenderPlugin { synchronous_pipeline_compilation: true }`.
+- **`FogVolume`s are extracted regardless of `Visibility`.** Switch one off with `density_factor = 0`.
+- **`FogVolume` light attenuation uses the bounding-sphere radius.** Every sample's light is attenuated by `exp(−density · R)`: keep volumes small or compensate with `light_intensity` (`fog::volume_light_compensation`).
+- **`DistanceFog::color` is added after exposure**, so it is a display-referred value: scale it by the camera's `Exposure::exposure()`.
+- **Bevy's default `GlobalAmbientLight` is a constant 80 cd/m²**, which a night exposure lifts to white; `ElementsCamera` zeroes the per-camera `AmbientLight`.
+- **Shaders are WESL.** `embedded://bevy_elements/noise.wesl` is importable as `bevy_elements::noise`; shared libraries are loaded with `load_shader_library!`.
+- **GPU timings on a lightly loaded NVIDIA card read 5–10× slow** (P8/P5 clocks under Xvfb). Report the minimum over the diagnostic history and log `nvidia-smi` clocks in the same shell.
+- **Screenshots without a display:** `xvfb-run -a -s "-screen 0 1920x1080x24" env ELEMENTS_FRAMES=… ELEMENTS_SHOT=… ./target/release/examples/<name>` renders on the GPU.
+
 ## Build and test
 
 ```sh

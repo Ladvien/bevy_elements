@@ -2,10 +2,9 @@
 // collocated grid. See docs/research/wind.md.
 //
 // Frame order (bind group = velocity in→out, pressure in→out):
-//   forcing    A→B          relax toward log-law + curl noise + gust bands
+//   forcing    A→B          solid mask; relax toward log-law + curl noise + gust bands
 //   advect     B→A          semi-Lagrangian
-//   mask          p B→A     solid cells; zero pressure in freshly exposed cells
-//   divergence A→·
+//   divergence A→·, p B→A   divergence; zero pressure in freshly exposed cells
 //   jacobi ×n     p A→B, B→A, …  (n even: the result is back in A)
 //   project    A→B, p A
 //   publish    B→A          copy back to A and write the sampled 3D texture
@@ -142,6 +141,7 @@ fn forcing(@builtin(global_invocation_id) id: vec3<u32>) {
     let i = slot(w);
     let pos = centre(g);
     let z = pos.y - params.misc.z;
+    solid[i] = select(0u, 1u, z < 0.0);
     if z < 0.0 {
         vel_out[i] = vec4<f32>(0.0);
         return;
@@ -194,22 +194,6 @@ fn advect(@builtin(global_invocation_id) id: vec3<u32>) {
     vel_out[i] = sample_in(back);
 }
 
-@compute @workgroup_size(4, 4, 4)
-fn mask(@builtin(global_invocation_id) id: vec3<u32>) {
-    if any(id >= params.size.xyz) {
-        return;
-    }
-    let g = vec3<i32>(id);
-    let w = params.origin.xyz + g;
-    let i = slot(w);
-    solid[i] = select(0u, 1u, centre(g).y < params.misc.z);
-    let lo = params.prev_origin.xyz;
-    let fresh = params.origin.w != 0 || any(w < lo) || any(w >= lo + dims());
-    if fresh {
-        p_out[i] = 0.0;
-    }
-}
-
 // Velocity of a neighbour for the divergence stencil (Harris 2004 boundary rules): across a
 // solid face the component along the stencil axis is mirrored and the others slip freely; the
 // window top is a lid (vertical component mirrored); the other window edges are open (the
@@ -235,7 +219,12 @@ fn divergence(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let g = vec3<i32>(id);
-    let i = at(g);
+    let w = params.origin.xyz + g;
+    let i = slot(w);
+    let lo = params.prev_origin.xyz;
+    if params.origin.w != 0 || any(w < lo) || any(w >= lo + dims()) {
+        p_out[i] = 0.0;
+    }
     if is_solid(g) {
         divergence_field[i] = 0.0;
         return;

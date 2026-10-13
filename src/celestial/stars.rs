@@ -94,16 +94,19 @@ const DEFAULT_B_MINUS_V: f32 = 0.48;
 /// thick.
 pub(super) const ZENITH_OPTICAL_DEPTH: Vec3 = Vec3::new(0.095_669, 0.217_118, 0.449_657);
 
-/// Airmass of a source at `sin_altitude` (Kasten & Young 1989):
+/// CPU mirror of the shader's airmass (Kasten & Young 1989):
 /// `X = 1 / (sin h + 0.50572 (h° + 6.07995)^−1.6364)`; 1 at the zenith, ≈ 38 at the horizon.
-pub(super) fn airmass(sin_altitude: f32) -> f32 {
+#[cfg(test)]
+fn airmass(sin_altitude: f32) -> f32 {
     let s = sin_altitude.clamp(0.0, 1.0);
     let altitude_deg = s.asin().to_degrees();
     1.0 / (s + 0.505_72 * (altitude_deg + 6.079_95).powf(-1.6364))
 }
 
-/// Fraction of light that survives the atmosphere at `sin_altitude`, per channel.
-pub(super) fn atmospheric_transmittance(sin_altitude: f32) -> Vec3 {
+/// CPU mirror of the shader's transmittance: the fraction of light that survives the atmosphere at
+/// `sin_altitude`, per channel.
+#[cfg(test)]
+fn atmospheric_transmittance(sin_altitude: f32) -> Vec3 {
     let x = airmass(sin_altitude);
     Vec3::new(
         (-ZENITH_OPTICAL_DEPTH.x * x).exp(),
@@ -119,8 +122,11 @@ pub(super) fn star_illuminance_lux(vmag: f32) -> f32 {
 
 /// Effective temperature of a star of colour index `b_minus_v`, K (Ballesteros 2012, Eq. 14),
 /// clamped to the validity range of the Planckian-locus fit below.
+///
+/// The index is first clamped to `[−0.4, 4.0]`: Eq. 14 has poles at B−V = −0.674 and −1.848, and the
+/// catalogue's stars lie in `[−0.28, 3.86]`.
 pub(super) fn effective_temperature(b_minus_v: f32) -> f32 {
-    let bv = f64::from(b_minus_v);
+    let bv = f64::from(b_minus_v.clamp(-0.4, 4.0));
     let t = 4600.0 * (1.0 / (0.92 * bv + 1.7) + 1.0 / (0.92 * bv + 0.62));
     t.clamp(1667.0, 25000.0) as f32
 }
@@ -318,11 +324,19 @@ fn spawn_stars(
 }
 
 /// This frame's uniform from the sky state.
-pub(super) fn stars_params(frame: &CelestialFrame, sun: &SunState, cloud_cover: f32) -> StarsParams {
+pub(super) fn stars_params(
+    frame: &CelestialFrame,
+    sun: &SunState,
+    cloud_cover: f32,
+) -> StarsParams {
     let m = frame.j2000_to_world;
     let moon_radius = 0.5 * frame.moon_angular_diameter_deg.to_radians();
     StarsParams {
-        j2000_to_world: [m.x_axis.extend(0.0), m.y_axis.extend(0.0), m.z_axis.extend(0.0)],
+        j2000_to_world: [
+            m.x_axis.extend(0.0),
+            m.y_axis.extend(0.0),
+            m.z_axis.extend(0.0),
+        ],
         extinction_cloud: ZENITH_OPTICAL_DEPTH.extend(1.0 - cloud_cover.clamp(0.0, 1.0)),
         moon: sun.moon_direction.extend(moon_radius.cos()),
         ..default()
@@ -350,7 +364,7 @@ fn update_stars(
         if materials
             .get(&handle.0)
             .is_some_and(|material| material.params != params)
-            && let Some(material) = materials.get_mut(&handle.0)
+            && let Some(mut material) = materials.get_mut(&handle.0)
         {
             material.params = params;
         }
@@ -360,7 +374,8 @@ fn update_stars(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::light::{Atmosphere, Falloff, ScatteringMedium};
+    use bevy::light::Atmosphere;
+    use bevy::light::atmosphere::{Falloff, ScatteringMedium};
 
     fn records() -> Vec<[f32; 4]> {
         decode::<[f32; 4]>(CATALOG).expect("whole records")
@@ -380,11 +395,13 @@ mod tests {
         );
         let brightest = stars.iter().map(|s| s[2]).fold(f32::INFINITY, f32::min);
         assert_eq!(brightest, -1.46);
+        // 244 stars have no B−V; some measured ones are 0.48 too.
         let defaulted = stars.iter().filter(|s| s[3] == DEFAULT_B_MINUS_V).count();
         assert!(
-            (244..=260).contains(&defaulted),
+            defaulted >= 244,
             "{defaulted} stars carry the default colour index"
         );
+        assert!(stars.iter().all(|s| (-0.4..=4.0).contains(&s[3])));
     }
 
     /// Validation 21: Sirius, HR 2491, is `06h45m08.9s −16°42′58″`, V −1.46, B−V 0.00.
@@ -400,8 +417,8 @@ mod tests {
         assert!((f64::from(sirius[1]) - dec).abs() < 1e-6, "{}", sirius[1]);
         assert!((sirius[2] - -1.46).abs() < 0.005);
         assert!(sirius[3].abs() < 0.005);
-        assert!((sirius[0] - 1.767_793_1).abs() < 1e-6);
-        assert!((sirius[1] - -0.291_751_2).abs() < 1e-6);
+        assert!((sirius[0] - 1.767_793).abs() < 1e-6);
+        assert!((sirius[1] - -0.291_751).abs() < 1e-6);
     }
 
     /// Validation 22.
@@ -436,8 +453,14 @@ mod tests {
             let t = effective_temperature(bv);
             assert!((t - kelvin).abs() < 0.1, "B-V {bv}: {t} vs {kelvin}");
         }
-        assert_eq!(effective_temperature(10.0), 1667.0, "clamps cold");
-        assert_eq!(effective_temperature(-1.0), 25000.0, "clamps hot");
+        // Outside the fit's domain the index is clamped, never fed through the formula's poles.
+        assert_eq!(effective_temperature(-1.0), effective_temperature(-0.4));
+        assert!((effective_temperature(-0.4) - 21707.4).abs() < 0.1);
+        assert_eq!(effective_temperature(10.0), effective_temperature(4.0));
+        assert!((effective_temperature(4.0) - 1925.0).abs() < 5.0);
+        for bv in [-10.0, -0.28, 3.86, 10.0] {
+            assert!((1667.0..=25000.0).contains(&effective_temperature(bv)));
+        }
     }
 
     /// Validation 24.
@@ -449,7 +472,10 @@ mod tests {
             (6504.0, 0.31343, 0.32360),
         ] {
             let (cx, cy) = planckian_chromaticity(kelvin);
-            assert!((cx - x).abs() < 1e-4 && (cy - y).abs() < 1e-4, "{kelvin}: {cx} {cy}");
+            assert!(
+                (cx - x).abs() < 1e-4 && (cy - y).abs() < 1e-4,
+                "{kelvin}: {cx} {cy}"
+            );
         }
         for (kelvin, rgb) in [
             (5778.0, [1.1109, 0.9757, 0.9142]),
@@ -535,7 +561,10 @@ mod tests {
             tau[2] += f64::from(extinction.z) * height * integral;
         }
         for (got, want) in tau.iter().zip(ZENITH_OPTICAL_DEPTH.to_array()) {
-            assert!((got - f64::from(want)).abs() < 5e-4, "{tau:?} vs {ZENITH_OPTICAL_DEPTH}");
+            assert!(
+                (got - f64::from(want)).abs() < 5e-4,
+                "{tau:?} vs {ZENITH_OPTICAL_DEPTH}"
+            );
         }
     }
 

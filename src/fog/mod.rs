@@ -17,8 +17,10 @@ use crate::plugin::{ElementsCamera, ElementsSystems, ElementsView, ensure_gpu_co
 
 /// Koschmieder's constant for a 2 % contrast threshold: extinction = 3.912 / visibility.
 pub const KOSCHMIEDER: f32 = 3.912;
-/// Size of the ground-fog volume, m.
-pub const GROUND_FOG_EXTENT: Vec3 = Vec3::new(800.0, 120.0, 800.0);
+/// Size of the ground-fog volume, m: the near field, around the camera; distance fog carries
+/// the far field. Kept small because Bevy attenuates the light reaching every fog sample by the
+/// volume's bounding radius (see [`volume_light_compensation`]).
+pub const GROUND_FOG_EXTENT: Vec3 = Vec3::new(240.0, 120.0, 240.0);
 /// Texels of the ground-fog density texture.
 pub const GROUND_FOG_TEXELS: UVec3 = UVec3::new(128, 32, 128);
 /// Fog colour in full light, linear RGB.
@@ -27,6 +29,8 @@ const FOG_COLOUR: Vec3 = Vec3::new(0.75, 0.80, 0.85);
 const DUSK_TINT: Vec3 = Vec3::new(1.0, 0.55, 0.3);
 /// Sun altitude below which the dusk tint starts, degrees.
 const DUSK_ONSET_DEG: f32 = 10.0;
+/// Sun depression at which the dusk tint has faded out, degrees (end of civil twilight).
+const CIVIL_TWILIGHT_DEG: f32 = 6.0;
 /// Colour of airborne dust, linear RGB.
 const DUST_ALBEDO: Vec3 = Vec3::new(0.76, 0.60, 0.42);
 /// Ground-fog scale height in the Fog preset and otherwise, m.
@@ -40,6 +44,10 @@ const DUST_SINGLE_SCATTER: f32 = 0.9;
 /// Largest |n| of the 2-octave `fbm3`, measured over 10⁵ points by
 /// `the_kernel_normalisation_constants_match_the_noise`; maps the noise onto f ∈ [0, 1].
 pub(crate) const FBM2_MAX: f32 = 0.522;
+/// Mean of the density modulation 0.6 + 0.4 f with E[f] = 0.5.
+const MEAN_NOISE_FACTOR: f32 = 0.8;
+/// Lowest sine of the sun's altitude used for the slant path through the fog layer.
+const MIN_SUN_SINE: f32 = 0.05;
 /// Noise offsets wrap at this many metres to keep f32 precision.
 const OFFSET_WRAP_M: f32 = 80.0 * 4096.0;
 
@@ -65,11 +73,41 @@ pub fn distance_fog_falloff(visibility_m: f32) -> FogFalloff {
 }
 
 /// Linear-RGB fog colour before brightness: the fog hue, tinted toward sunset orange as the sun
-/// drops below 10°, and toward dust as `dust` rises.
+/// drops below 10°, fully at the horizon, fading out by the end of civil twilight (−6°) so
+/// moonlit fog is not orange; and toward dust as `dust` rises.
 pub fn fog_hue(sun_altitude_deg: f32, dust: f32) -> Vec3 {
-    let dusk = (1.0 - sun_altitude_deg / DUSK_ONSET_DEG).clamp(0.0, 1.0);
+    let dusk = if sun_altitude_deg >= 0.0 {
+        (1.0 - sun_altitude_deg / DUSK_ONSET_DEG).clamp(0.0, 1.0)
+    } else {
+        (1.0 + sun_altitude_deg / CIVIL_TWILIGHT_DEG).clamp(0.0, 1.0)
+    };
     let tinted = FOG_COLOUR * Vec3::ONE.lerp(DUSK_TINT, dusk);
     tinted.lerp(DUST_ALBEDO, dust.clamp(0.0, 1.0))
+}
+
+/// `FogVolume::light_intensity` that makes the volume's sunlit in-scattering right at the camera.
+///
+/// Bevy attenuates the light reaching each fog sample by `exp(−density · R)`, with `R` the
+/// radius of the volume's bounding sphere (`bevy_pbr` `volumetric_fog.wesl`, the
+/// `light_attenuation` term), whatever the sun's direction. In a ground-fog layer the sunlight
+/// actually crosses the layer above the sample: optical depth `σ_V · 0.8 · H · e^(−h/H) / sin α`
+/// from height `h` to the top along the sun. The returned factor replaces Bevy's attenuation by
+/// that one at the camera's height, where most of the visible in-scattering happens, clamped to
+/// 1–100.
+pub fn volume_light_compensation(
+    visibility_m: f32,
+    scale_height_m: f32,
+    camera_height_m: f32,
+    sun_altitude_deg: f32,
+    volume_extent: Vec3,
+) -> f32 {
+    let sigma_v = extinction_for_visibility(visibility_m);
+    let falloff = (-camera_height_m.max(0.0) / scale_height_m).exp();
+    let sigma_camera = sigma_v * falloff * MEAN_NOISE_FACTOR;
+    let radius = (volume_extent * 0.5).length();
+    let sine = sun_altitude_deg.to_radians().sin().max(MIN_SUN_SINE);
+    let tau_layer = sigma_v * MEAN_NOISE_FACTOR * scale_height_m * falloff / sine;
+    ((sigma_camera * radius - tau_layer).exp()).clamp(1.0, 100.0)
 }
 
 /// Uniform of `density.wesl`.
@@ -127,14 +165,13 @@ fn spawn_volume(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
         Name::new("Ground fog"),
         GroundFog,
         FogVolume {
-            density_factor: 1.0,
+            density_factor: 0.0,
             density_texture: Some(texture.clone()),
             absorption: 1.0 - FOG_ALBEDO,
             scattering: FOG_ALBEDO,
             ..default()
         },
         Transform::from_scale(GROUND_FOG_EXTENT),
-        Visibility::Hidden,
     ));
     commands.insert_resource(FogGpu {
         texture,
@@ -147,25 +184,28 @@ fn spawn_volume(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 fn update_volume(
     time: Res<Time<Virtual>>,
     view: Res<ElementsView>,
+    sun: Res<SunState>,
     weather: Res<Weather>,
     director: Res<WeatherDirector>,
     clock: Res<crate::celestial::WorldClock>,
     mut runtime: ResMut<FogRuntime>,
     gpu: Option<ResMut<FogGpu>>,
-    mut volumes: Query<(&mut FogVolume, &mut Transform, &mut Visibility), With<GroundFog>>,
+    mut volumes: Query<(&mut FogVolume, &mut Transform), With<GroundFog>>,
 ) {
     let Some(mut gpu) = gpu else {
         return;
     };
-    let Ok((mut volume, mut transform, mut visibility)) = volumes.single_mut() else {
+    let Ok((mut volume, mut transform)) = volumes.single_mut() else {
         return;
     };
+    // Bevy extracts every FogVolume regardless of `Visibility`, so a volume is switched off by
+    // its density.
     let Some(camera) = view.entity.map(|_| view.position) else {
         gpu.active = false;
-        visibility.set_if_neq(Visibility::Hidden);
+        volume.density_factor = 0.0;
         return;
     };
-    visibility.set_if_neq(Visibility::Inherited);
+    volume.density_factor = 1.0;
 
     let dt = time.delta_secs();
     let game_dt = dt * clock.time_scale;
@@ -189,6 +229,13 @@ fn update_volume(
     let albedo = FOG_ALBEDO + (DUST_SINGLE_SCATTER - FOG_ALBEDO) * dust;
     volume.absorption = 1.0 - albedo;
     volume.scattering = albedo;
+    volume.light_intensity = volume_light_compensation(
+        weather.visibility_m,
+        runtime.scale_height,
+        camera.y - ground,
+        sun.altitude_deg,
+        GROUND_FOG_EXTENT,
+    );
     volume.fog_color = Color::linear_rgb(1.0, 1.0, 1.0).mix(
         &Color::linear_rgb(DUST_ALBEDO.x, DUST_ALBEDO.y, DUST_ALBEDO.z),
         dust,
@@ -257,10 +304,29 @@ mod tests {
     }
 
     #[test]
+    fn the_volume_light_matches_the_layer_attenuation_at_the_camera() {
+        // Fog preset, camera 2 m up, sun at 48°: Bevy's exp(−σR) over the 180 m radius is
+        // undone and the slant layer depth σ_V·0.8·H·e^(−h/H)/sin α applied instead.
+        let k = volume_light_compensation(300.0, 25.0, 2.0, 48.0, GROUND_FOG_EXTENT);
+        let sigma_v = 3.912_f32 / 300.0;
+        let falloff = (-2.0_f32 / 25.0).exp();
+        let radius = (GROUND_FOG_EXTENT * 0.5).length();
+        let expected = (sigma_v * falloff * 0.8 * radius
+            - sigma_v * 0.8 * 25.0 * falloff / 48f32.to_radians().sin())
+        .exp();
+        assert!((k - expected).abs() < 1e-3 * expected, "{k} vs {expected}");
+        // Clear air needs next to no help.
+        let clear = volume_light_compensation(40_000.0, 60.0, 2.0, 48.0, GROUND_FOG_EXTENT);
+        assert!((1.0..1.01).contains(&clear), "{clear}");
+    }
+
+    #[test]
     fn the_hue_tints_at_dusk_and_in_dust() {
         assert_eq!(fog_hue(90.0, 0.0), FOG_COLOUR);
         let dusk = fog_hue(5.0, 0.0) / FOG_COLOUR;
         assert!((dusk - Vec3::new(1.0, 0.775, 0.65)).length() < 1e-5);
         assert!((fog_hue(45.0, 1.0) - DUST_ALBEDO).length() < 1e-6);
+        assert_eq!(fog_hue(0.0, 0.0), FOG_COLOUR * DUSK_TINT);
+        assert_eq!(fog_hue(-20.0, 0.0), FOG_COLOUR);
     }
 }

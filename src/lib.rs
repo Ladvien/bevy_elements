@@ -3,6 +3,8 @@
 
 mod celestial;
 mod climate;
+#[cfg(feature = "flora")]
+mod flora;
 mod fog;
 mod gpu;
 mod plugin;
@@ -38,5 +40,9 @@ pub use wind::{
 // Fog.
 pub use fog::{
     FogPlugin, GROUND_FOG_EXTENT, GROUND_FOG_TEXELS, GroundFog, KOSCHMIEDER, distance_fog_falloff,
-    extinction_for_visibility, fog_hue,
+    extinction_for_visibility, fog_hue, volume_light_compensation,
 };
+
+// `bevy_flora` integration.
+#[cfg(feature = "flora")]
+pub use flora::{ElementsFloraPlugin, FLORA_FULL_WIND_MS};

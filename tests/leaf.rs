@@ -12,7 +12,7 @@
 use std::path::{Path, PathBuf};
 
 /// Everything this crate is allowed to depend on.
-const ALLOWED_DEPS: &[&str] = &["bevy", "serde", "bytemuck"];
+const ALLOWED_DEPS: &[&str] = &["bevy", "serde", "bytemuck", "bevy_flora"];
 
 /// Crate names that would mean the boundary has been crossed. `bevy_math` is glam types and is
 /// allowed above; anything that draws, schedules, or knows what a game is, is not.

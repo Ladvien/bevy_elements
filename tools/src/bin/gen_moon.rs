@@ -118,16 +118,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // The disc mean rises monotonically with the scale (clipping only flattens it), so bisect.
-    let (mut lo, mut hi) = (1.0, 1.0e6);
+    let (mut lo, mut hi): (f64, f64) = (1.0, 1.0e6);
     for _ in 0..80 {
-        let mid = (lo * hi as f64).sqrt();
+        let mid = (lo * hi).sqrt();
         if disc_mean_byte(&quantise(&luminance, mid)) < TARGET_MEAN {
             lo = mid;
         } else {
             hi = mid;
         }
     }
-    let scale = (lo * hi as f64).sqrt();
+    let scale = (lo * hi).sqrt();
     let bytes = quantise(&luminance, scale);
     let mean = disc_mean_byte(&bytes);
     let clipped = bytes.iter().filter(|&&b| b == 255).count();

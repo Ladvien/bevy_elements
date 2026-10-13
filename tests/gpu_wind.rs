@@ -3,48 +3,29 @@
 //!
 //! Needs a GPU: `cargo test --test gpu_wind -- --ignored`.
 
+mod support;
+
 use std::time::Duration;
 
 use bevy::app::AppExit;
-use bevy::camera::RenderTarget;
 use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
-use bevy::render::RenderPlugin;
-use bevy::render::render_resource::TextureFormat;
 use bevy::time::TimeUpdateStrategy;
-use bevy::window::ExitCondition;
-use bevy::winit::WinitPlugin;
 use bevy_elements::*;
 
 fn headless_app() -> App {
     let mut app = App::new();
-    app.add_plugins((
-        DefaultPlugins
-            .set(WindowPlugin {
-                primary_window: None,
-                exit_condition: ExitCondition::DontExit,
-                ..default()
-            })
-            // Compile pipelines on first use so the frames below measure the simulation, not
-            // the shader compiler.
-            .set(RenderPlugin {
-                synchronous_pipeline_compilation: true,
-                ..default()
-            })
-            .disable::<WinitPlugin>(),
-        ElementsPlugins,
-    ))
-    .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
-        1.0 / 60.0,
-    )))
-    // Overcast blows 5 m/s × mean_wind/4: mean 8 m/s gives exactly 10 m/s at 10 m.
-    .insert_resource(Climate {
-        mean_wind_ms: 8.0,
-        ..Climate::temperate()
-    })
-    .add_systems(Startup, setup);
-    app.finish();
-    app.cleanup();
+    app.add_plugins((support::headless_plugins(), ElementsPlugins))
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )))
+        // Overcast blows 5 m/s × mean_wind/4: mean 8 m/s gives exactly 10 m/s at 10 m.
+        .insert_resource(Climate {
+            mean_wind_ms: 8.0,
+            ..Climate::temperate()
+        })
+        .add_systems(Startup, setup);
+    support::finish(&mut app);
     app
 }
 
@@ -53,17 +34,9 @@ fn setup(
     mut director: ResMut<WeatherDirector>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    // A camera needs a target to have a view: Bevy 0.20's atmosphere environment probe unwraps
-    // the view uniforms, so a target-less camera panics the render world.
-    let target = images.add(Image::new_target_texture(
-        256,
-        256,
-        TextureFormat::Rgba8UnormSrgb,
-        None,
-    ));
     commands.spawn((
         Camera3d::default(),
-        RenderTarget::Image(target.into()),
+        support::image_target(&mut images),
         ElementsCamera::default(),
         Transform::from_xyz(0.0, 10.0, 0.0),
     ));

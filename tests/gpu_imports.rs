@@ -3,12 +3,13 @@
 //!
 //! Needs a GPU: `cargo test --test gpu_imports -- --ignored`.
 
+mod support;
+
 use std::borrow::Cow;
+use std::sync::{Arc, Mutex};
 
 use bevy::app::AppExit;
 use bevy::prelude::*;
-use bevy::render::RenderApp;
-use bevy::render::RenderPlugin;
 use bevy::render::render_resource::binding_types::{
     sampler, storage_buffer_sized, texture_3d, uniform_buffer, uniform_buffer_sized,
 };
@@ -17,8 +18,7 @@ use bevy::render::render_resource::{
     CachedPipelineState, ComputePipelineDescriptor, PipelineCache, SamplerBindingType,
     ShaderStages, TextureSampleType,
 };
-use bevy::window::ExitCondition;
-use bevy::winit::WinitPlugin;
+use bevy::render::{Render, RenderApp, RenderStartup, RenderSystems};
 use bevy_elements::*;
 
 const CONSUMER: &str = r#"
@@ -42,33 +42,16 @@ fn main() {
 "#;
 
 #[derive(Resource)]
+struct ConsumerShader(Handle<Shader>);
+
+#[derive(Resource)]
 struct Check(CachedComputePipelineId);
 
-#[test]
-#[ignore = "needs a GPU"]
-fn a_consumer_shader_can_import_every_public_module() {
-    let mut app = App::new();
-    app.add_plugins((
-        DefaultPlugins
-            .set(WindowPlugin {
-                primary_window: None,
-                exit_condition: ExitCondition::DontExit,
-                ..default()
-            })
-            .set(RenderPlugin {
-                synchronous_pipeline_compilation: true,
-                ..default()
-            })
-            .disable::<WinitPlugin>(),
-        ElementsPlugins,
-    ));
-    let shader = app
-        .world_mut()
-        .resource_mut::<Assets<Shader>>()
-        .add(Shader::from_wesl(CONSUMER, "embedded://import_check/consumer.wesl"));
-    app.finish();
-    app.cleanup();
+/// The pipeline state as seen from the render world, which runs on its own thread.
+#[derive(Resource, Clone, Default)]
+struct Outcome(Arc<Mutex<Option<String>>>);
 
+fn queue(mut commands: Commands, cache: Res<PipelineCache>, shader: Res<ConsumerShader>) {
     let layout = BindGroupLayoutDescriptor::new(
         "import_check",
         &BindGroupLayoutEntries::sequential(
@@ -82,33 +65,63 @@ fn a_consumer_shader_can_import_every_public_module() {
             ),
         ),
     );
-    let render = app.sub_app_mut(RenderApp);
-    let id = render
-        .world()
-        .resource::<PipelineCache>()
-        .queue_compute_pipeline(ComputePipelineDescriptor {
+    commands.insert_resource(Check(cache.queue_compute_pipeline(
+        ComputePipelineDescriptor {
             label: Some(Cow::Borrowed("import_check")),
             layout: vec![layout],
-            shader,
+            shader: shader.0.clone(),
             entry_point: Some(Cow::Borrowed("main")),
             ..default()
-        });
-    render.insert_resource(Check(id));
+        },
+    )));
+}
 
-    let mut state = String::new();
-    for _ in 0..60 {
+fn observe(cache: Res<PipelineCache>, check: Option<Res<Check>>, outcome: Res<Outcome>) {
+    let Some(check) = check else {
+        return;
+    };
+    let state = match cache.get_compute_pipeline_state(check.0) {
+        CachedPipelineState::Ok(_) => Some("ok".to_string()),
+        CachedPipelineState::Err(e) => Some(format!("{e}")),
+        _ => None,
+    };
+    if let (Some(state), Ok(mut slot)) = (state, outcome.0.lock()) {
+        *slot = Some(state);
+    }
+}
+
+#[test]
+#[ignore = "needs a GPU"]
+fn a_consumer_shader_can_import_every_public_module() {
+    let mut app = App::new();
+    app.add_plugins((support::headless_plugins(), ElementsPlugins));
+    let shader = app
+        .world_mut()
+        .resource_mut::<Assets<Shader>>()
+        .add(Shader::from_wesl(
+            CONSUMER,
+            "embedded://import_check/consumer.wesl",
+        ));
+    let outcome = Outcome::default();
+    app.sub_app_mut(RenderApp)
+        .insert_resource(ConsumerShader(shader))
+        .insert_resource(outcome.clone())
+        .add_systems(RenderStartup, queue)
+        .add_systems(Render, observe.in_set(RenderSystems::Cleanup));
+    support::finish(&mut app);
+
+    let mut state = None;
+    for _ in 0..120 {
         app.update();
-        let render = app.sub_app(RenderApp);
-        let id = render.world().resource::<Check>().0;
-        match render.world().resource::<PipelineCache>().get_compute_pipeline_state(id) {
-            CachedPipelineState::Ok(_) => {
-                state = "ok".into();
-                break;
-            }
-            CachedPipelineState::Err(e) => state = format!("{e}"),
-            _ => {}
+        state = outcome.0.lock().ok().and_then(|s| s.clone());
+        if state.is_some() {
+            break;
         }
     }
     app.world_mut().write_message(AppExit::Success);
-    assert_eq!(state, "ok", "the consumer shader did not compile: {state}");
+    assert_eq!(
+        state.as_deref(),
+        Some("ok"),
+        "the consumer shader did not compile: {state:?}"
+    );
 }

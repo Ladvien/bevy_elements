@@ -107,12 +107,13 @@ impl ElementsQuality {
         }
     }
 
-    /// Jacobi pressure iterations per wind step.
+    /// Jacobi pressure iterations per wind step (even: the ping-pong ends in the same buffer).
+    /// The pressure is warm-started from the last frame, so few are needed: on the High grid 10
+    /// iterations leave the same divergence as 30 (8.4e-4 vs 8.2e-4 s⁻¹, `tests/gpu_wind.rs`).
     pub fn wind_pressure_iterations(self) -> u32 {
         match self {
-            Self::Low => 10,
-            Self::Medium => 20,
-            Self::High => 30,
+            Self::Low | Self::Medium => 10,
+            Self::High => 12,
             Self::Ultra => 40,
         }
     }
@@ -213,6 +214,12 @@ fn dress_camera(
         },
         DistanceFog::default(),
         Exposure::SUNLIGHT,
+        // Sky light comes from the atmosphere's environment map; Bevy's default ambient is a
+        // constant 80 cd/m² that the night exposure would lift to white.
+        AmbientLight {
+            brightness: 0.0,
+            ..default()
+        },
     ));
     if atmospheres.is_empty() {
         let medium = media.add(ScatteringMedium::default());

@@ -117,7 +117,12 @@ mod tests {
     #[test]
     fn sirius_parses_to_the_catalogue_values() {
         // HR 2491: 06h45m08.9s, -16d42m58s, V -1.46, B-V 0.00.
-        let sirius = line(&[(76, "064508.9"), (84, "-164258"), (103, "-1.46"), (110, " 0.00")]);
+        let sirius = line(&[
+            (76, "064508.9"),
+            (84, "-164258"),
+            (103, "-1.46"),
+            (110, " 0.00"),
+        ]);
         let (star, measured) = parse_line(&sirius).expect("kept");
         assert!(measured);
         assert!((star.ra_rad - 1.767_793).abs() < 1e-6, "{}", star.ra_rad);

@@ -132,5 +132,8 @@ impl Readbacks<'_, '_> {
 /// alignment guarantee, so they are copied rather than cast in place. `None` for a length that is
 /// not a whole number of `T`.
 pub(crate) fn decode<T: bytemuck::Pod>(bytes: &[u8]) -> Option<Vec<T>> {
-    (bytes.len() % size_of::<T>() == 0).then(|| bytemuck::pod_collect_to_vec(bytes))
+    bytes
+        .len()
+        .is_multiple_of(size_of::<T>())
+        .then(|| bytemuck::pod_collect_to_vec(bytes))
 }

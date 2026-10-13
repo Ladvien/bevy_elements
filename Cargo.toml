@@ -23,6 +23,8 @@ all-features = true
 default = []
 # `serde` derives on the public settings, presets and messages.
 serde = ["dep:serde"]
+# Drive `bevy_flora`'s global wind, season and wetness from this crate (`ElementsFloraPlugin`).
+flora = ["dep:bevy_flora"]
 
 [dependencies]
 # The umbrella with defaults off. Features unify with the game's full bevy, so this costs a consumer
@@ -44,6 +46,9 @@ bevy = { version = "0.20.0", default-features = false, features = [
 serde = { version = "1", features = ["derive"], optional = true }
 # Plain-old-data casts for the GPU uniform structs and the readback decode.
 bytemuck = { version = "1", features = ["derive"] }
+# Optional sibling: trees and their wind, season and wetness belong to `bevy_flora`; this crate
+# only writes its public resources (feature `flora`). Same Bevy minor (0.20).
+bevy_flora = { version = "0.30", optional = true, default-features = false }
 
 # **Tests and examples only.** The examples need a window and the full 3D pipeline, so they take the
 # full umbrella here, where it cannot reach a consumer's dependency graph. `tests/leaf.rs` reads
@@ -55,6 +60,10 @@ bevy = { version = "0.20.0" }
 # use `web_time` rather than a `std::time::Instant` whose `now()` panics on wasm.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 bevy = { version = "0.20.0", default-features = false, features = ["web", "webgpu"] }
+
+[[example]]
+name = "flora_wind"
+required-features = ["flora"]
 
 [lints.rust]
 missing_docs = "warn"
