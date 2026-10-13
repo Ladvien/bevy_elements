@@ -62,9 +62,9 @@ pub struct HydrologySettings {
     /// The simulation step, s. Default 0.02.
     pub step_s: f32,
     /// Simulated seconds per real second, independent of the `WorldClock`, `Time<Virtual>` and
-    /// pausing. The substeps per frame are capped by the quality level (2, 4, 8 and 16 from
-    /// `Low` to `Ultra`), so a large scale makes the simulation run slower than asked rather than
-    /// stall the frame. Default 1.
+    /// pausing. The substeps per frame are capped by the quality level (2, 4, 4 and 16 from
+    /// `Low` to `Ultra`, [`ElementsQuality::hydrology_substeps`]), so a large scale makes the
+    /// simulation run slower than asked rather than stall the frame. Default 1.
     pub time_scale: f32,
     /// The terrain's edge. Default [`HydrologyBoundary::Open`].
     pub boundary: HydrologyBoundary,
