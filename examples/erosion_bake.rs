@@ -66,16 +66,67 @@ fn bake_key(keys: Res<ButtonInput<KeyCode>>, mut baking: MessageWriter<ErodeTerr
     }
 }
 
+/// Heights sampled on a 48 × 48 grid over the middle of the terrain, for the before and after.
+const SURVEY: i32 = 48;
+const SURVEY_SPACING_M: f32 = 40.0;
+
+/// The surface heights of the survey grid, `None` until every point has been read back.
+fn survey(env: &Environment) -> Option<Vec<f32>> {
+    (0..SURVEY * SURVEY)
+        .map(|k| {
+            let at = Vec2::new(
+                (k % SURVEY - SURVEY / 2) as f32,
+                (k / SURVEY - SURVEY / 2) as f32,
+            ) * SURVEY_SPACING_M;
+            env.terrain_height(at)
+        })
+        .collect()
+}
+
+#[derive(Default)]
+struct Before {
+    heights: Option<Vec<f32>>,
+    /// Real time the bake finished at, until its numbers have been printed.
+    baked_at: Option<f32>,
+}
+
 fn report(
+    env: Environment,
     stats: Res<HydrologyStats>,
     mut baked: MessageReader<TerrainBaked>,
     time: Res<Time<Real>>,
+    mut before: Local<Before>,
     mut last: Local<u64>,
 ) {
+    let now = time.elapsed_secs();
+    if before.heights.is_none() && !stats.baking && stats.substeps == 0 {
+        before.heights = survey(&env);
+    }
     for done in baked.read() {
         info!("terrain baked: {} s of erosion done", done.duration_s);
+        before.baked_at = Some(now);
     }
-    let second = time.elapsed_secs() as u64;
+    // A second after the bake the height readback has caught up: print what changed.
+    if let (Some(at), Some(first)) = (before.baked_at, before.heights.as_ref())
+        && now > at + 1.0
+        && let Some(after) = survey(&env)
+    {
+        let mut change: Vec<f32> = after.iter().zip(first).map(|(a, b)| a - b).collect();
+        let lowered = change.iter().copied().fold(0.0, f32::min);
+        let raised = change.iter().copied().fold(0.0, f32::max);
+        change.iter_mut().for_each(|c| *c = c.abs());
+        change.sort_by(f32::total_cmp);
+        println!(
+            "surface change over {} points: mean |dz| {:.2} m, p99 {:.2} m, lowered at most {:.2} m, raised at most {:.2} m",
+            change.len(),
+            change.iter().sum::<f32>() / change.len() as f32,
+            change[change.len() * 99 / 100],
+            lowered.abs(),
+            raised
+        );
+        before.baked_at = None;
+    }
+    let second = now as u64;
     if stats.baking && second != *last {
         *last = second;
         println!("baking: {:.0} s simulated", stats.simulated_s);

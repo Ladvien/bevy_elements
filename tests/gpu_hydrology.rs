@@ -63,6 +63,8 @@ struct Config {
     sources: Vec<(Vec2, f32, f32)>,
     /// A precipitation blocker box (centre, half extents) spawned at startup.
     blockers: Vec<(Vec3, Vec3)>,
+    /// A bake requested before the terrain exists.
+    early_bake: Option<ErodeTerrain>,
 }
 
 impl Config {
@@ -82,6 +84,7 @@ impl Config {
             temperature_c: 15.0,
             sources: Vec::new(),
             blockers: Vec::new(),
+            early_bake: None,
         }
     }
 }
@@ -170,7 +173,7 @@ impl Sim {
                 mm_h: config.mm_h,
                 temperature_c: config.temperature_c,
             })
-            .insert_resource(Spawn(config))
+            .insert_resource(Spawn(config.clone()))
             .init_resource::<Baked>()
             .add_systems(Startup, setup)
             .add_systems(
@@ -181,6 +184,9 @@ impl Sim {
             )
             .add_systems(Update, record_baked.after(ElementsSystems::Simulation));
         support::finish(&mut app);
+        if let Some(bake) = config.early_bake {
+            app.world_mut().write_message(bake);
+        }
         run_until(&mut app, "the terrain", |app| {
             app.world()
                 .get_resource::<TerrainState>()
@@ -995,5 +1001,24 @@ fn a_flood_reaches_the_marker_and_stays() {
         velocity.x
     );
     assert!(velocity.y.abs() < 0.2 * velocity.x.abs());
+    sim.finish();
+}
+
+/// A bake requested before the terrain exists waits for it and then runs.
+#[test]
+#[ignore = "needs a GPU"]
+fn a_bake_asked_for_before_the_terrain_exists_still_runs() {
+    let _lock = serial();
+    let mut config = Config::new(tank(64, 2.0));
+    config.early_bake = Some(ErodeTerrain {
+        duration_s: 4.0,
+        rain_mm_h: 20.0,
+    });
+    let mut sim = Sim::new(config);
+    bake_frames(&mut sim);
+    sim.settle();
+    let baked = sim.app.world().resource::<Baked>().0.clone();
+    assert_eq!(baked, vec![4.0]);
+    assert_eq!(sim.stats().substeps, 200);
     sim.finish();
 }

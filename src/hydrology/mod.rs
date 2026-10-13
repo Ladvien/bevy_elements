@@ -409,7 +409,12 @@ fn ensure_hydrology(
     let Some(terrain) = terrain else {
         if gpu.is_some() {
             commands.remove_resource::<HydrologyGpu>();
-            *runtime = HydrologyRuntime::default();
+            // A bake asked for before the terrain exists (or while it is rebuilt) waits for it.
+            let queue = std::mem::take(&mut runtime.queue);
+            *runtime = HydrologyRuntime {
+                queue,
+                ..HydrologyRuntime::default()
+            };
             *stats = HydrologyStats::default();
             snapshot.water_depth = None;
             snapshot.water_velocity = None;
@@ -439,6 +444,7 @@ fn ensure_hydrology(
     *runtime = HydrologyRuntime {
         built_for: Some(terrain.water.id()),
         source_epoch: 1,
+        queue: std::mem::take(&mut runtime.queue),
         ..HydrologyRuntime::default()
     };
     *stats = HydrologyStats::default();
