@@ -121,9 +121,13 @@ pub struct TerrainSnapshot {
 impl TerrainSnapshot {
     /// World height of the ground at `p` (world XZ), `None` outside the grid.
     pub fn height(&self, p: Vec2) -> Option<f32> {
-        self.grid
-            .contains(p)
-            .then(|| self.grid.y0 + self.grid.sample(&self.surface, p))
+        self.grid.contains(p).then(|| self.height_clamped(p))
+    }
+
+    /// World height of the ground at `p`, with the edge cells extended outward: defined
+    /// everywhere, for callers (such as `bevy_flora`'s ground) that cannot take `None`.
+    pub fn height_clamped(&self, p: Vec2) -> f32 {
+        self.grid.y0 + self.grid.sample(&self.surface, p)
     }
 }
 

@@ -1,5 +1,4 @@
-//! The smallest complete scene: the plugin group, a clock, a climate and a camera. Terrain
-//! arrives in 0.3; until then the ground is a plane.
+//! The smallest complete scene: the plugin group, a clock, a climate, a camera and rolling hills.
 //!
 //! `cargo run --release --example quickstart`
 
@@ -7,7 +6,7 @@ mod common;
 
 use bevy::prelude::*;
 use bevy_elements::*;
-use common::{ExampleHarness, camera, test_scene};
+use common::{ExampleHarness, camera, stand_on_ground};
 
 fn main() {
     App::new()
@@ -22,14 +21,11 @@ fn main() {
         .run();
 }
 
-fn setup(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    commands.spawn(camera(
-        Vec3::new(0.0, 30.0, 0.0),
-        Vec3::new(150.0, 10.0, 80.0),
+fn setup(mut commands: Commands) {
+    commands.spawn(Terrain::procedural(ProceduralTerrain::hills(42)));
+    // The camera is lifted to 6 m above the ground as soon as the terrain's heights are known.
+    commands.spawn((
+        camera(Vec3::new(0.0, 160.0, 0.0), Vec3::new(150.0, 100.0, 80.0)),
+        stand_on_ground(6.0),
     ));
-    test_scene(&mut commands, &mut meshes, &mut materials);
 }

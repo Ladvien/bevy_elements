@@ -75,7 +75,12 @@ pub(super) fn plugin(app: &mut App) {
         .init_resource::<PrecipitationUniforms>()
         .add_systems(RenderStartup, init_pipelines)
         .add_systems(Render, prepare.in_set(RenderSystems::PrepareBindGroups))
-        .add_systems(RenderGraph, simulate.before(camera_driver))
+        .add_systems(
+            RenderGraph,
+            simulate
+                .after(crate::terrain::TerrainDispatch)
+                .before(camera_driver),
+        )
         .add_systems(Core3d, draw.in_set(Core3dSystems::EarlyPostProcess));
 }
 
@@ -91,6 +96,7 @@ fn sim_layout() -> BindGroupLayoutDescriptor {
                 storage_buffer_read_only_sized(false, None),
                 texture_3d(TextureSampleType::Float { filterable: true }),
                 sampler(SamplerBindingType::Filtering),
+                storage_buffer_read_only_sized(false, None),
             ),
         ),
     )
@@ -175,10 +181,11 @@ fn prepare(
         commands.remove_resource::<SimBindGroup>();
         return;
     }
-    let (Some(particles), Some(splashes), Some(wind)) = (
+    let (Some(particles), Some(splashes), Some(wind), Some(terrain)) = (
         buffers.get(&gpu.particles),
         buffers.get(&gpu.splashes),
         images.get(&gpu.wind_field),
+        buffers.get(&gpu.terrain),
     ) else {
         commands.remove_resource::<SimBindGroup>();
         return;
@@ -203,6 +210,7 @@ fn prepare(
             blockers,
             &wind.texture_view,
             &wind.sampler,
+            terrain.buffer.as_entire_buffer_binding(),
         )),
     );
     commands.insert_resource(SimBindGroup(group));
@@ -344,4 +352,29 @@ fn draw(
         pass.draw(0..6, 0..SPLASH_RING as u32);
     }
     span.end(&mut pass);
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::render::render_resource::{BindingType, BufferBindingType};
+
+    /// Terrain validation 9: the particle kernel binds four storage buffers of WebGPU's eight
+    /// (particles, splashes, blockers, terrain).
+    #[test]
+    fn the_particle_layout_binds_four_storage_buffers() {
+        let storage = super::sim_layout()
+            .entries
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.ty,
+                    BindingType::Buffer {
+                        ty: BufferBindingType::Storage { .. },
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(storage, 4);
+    }
 }

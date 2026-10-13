@@ -9,7 +9,9 @@
 //   project    A→B, p A
 //   publish    B→A          copy back to A and write the sampled 3D texture
 
+import bevy_elements::grid::grid_taps;
 import bevy_elements::noise::{perlin3_d, seed_offset};
+import bevy_elements::terrain::common::{TerrainParams, terrain_live};
 
 struct Gust {
     // xy: band centre (world XZ), zw: unit direction it travels (world XZ).
@@ -30,10 +32,12 @@ struct Params {
     // x: z0 (m), y: relaxation factor 1 − e^(−rΔt), z: curl amplitude per unit raw curl (m/s),
     // w: coarse curl octave L (m).
     forcing: vec4<f32>,
-    // x: cell edge (m), y: Δt (s), z: ground height (m), w: active gust count.
+    // x: cell edge (m), y: Δt (s), z: unused, w: active gust count.
     misc: vec4<f32>,
     // xyz: noise lattice offset of the coarse octave (drifts downwind, wrapped at the period).
     noise_offset: vec4<f32>,
+    // The terrain grid; without a live terrain the ground is the plane y = 0.
+    terrain: TerrainParams,
     gusts: array<Gust, 16>,
 }
 
@@ -45,6 +49,7 @@ struct Params {
 @group(0) @binding(5) var<storage, read> p_in: array<f32>;
 @group(0) @binding(6) var<storage, read_write> p_out: array<f32>;
 @group(0) @binding(7) var field: texture_storage_3d<rgba16float, write>;
+@group(0) @binding(8) var<storage, read> terrain_cells: array<vec4<f32>>;
 
 // Kolmogorov octave weights (Kim et al. 2008): (1, 2^(−5/6)) normalised to unit total rms.
 const OCTAVE_WEIGHTS: vec2<f32> = vec2<f32>(0.8721, 0.4895);
@@ -82,6 +87,26 @@ fn centre(g: vec3<i32>) -> vec3<f32> {
 
 fn is_solid(g: vec3<i32>) -> bool {
     return solid[at(g)] != 0u;
+}
+
+// Bilinear terrain surface (world height, m) at world XZ; the plane y = 0 without a terrain.
+fn ground_at(xz: vec2<f32>) -> f32 {
+    if !terrain_live(params.terrain) {
+        return 0.0;
+    }
+    let t = grid_taps(params.terrain.grid, xz);
+    let a = mix(terrain_cells[t.i00].x, terrain_cells[t.i10].x, t.w.x);
+    let b = mix(terrain_cells[t.i01].x, terrain_cells[t.i11].x, t.w.x);
+    return params.terrain.misc.x + mix(a, b, t.w.y);
+}
+
+// The ground a wind cell centred over `xz` must clear to be air: the highest surface at the
+// cell's four quarter points (x ± 1, z ± 1 m), so a slope makes cells solid rather than leaky.
+fn solid_ground_at(xz: vec2<f32>) -> f32 {
+    return max(
+        max(ground_at(xz + vec2<f32>(1.0, 1.0)), ground_at(xz + vec2<f32>(-1.0, 1.0))),
+        max(ground_at(xz + vec2<f32>(1.0, -1.0)), ground_at(xz + vec2<f32>(-1.0, -1.0))),
+    );
 }
 
 // Neutral log-law speed at height z above ground (WMO open-terrain z0).
@@ -140,9 +165,10 @@ fn forcing(@builtin(global_invocation_id) id: vec3<u32>) {
     let w = params.origin.xyz + g;
     let i = slot(w);
     let pos = centre(g);
-    let z = pos.y - params.misc.z;
-    solid[i] = select(0u, 1u, z < 0.0);
-    if z < 0.0 {
+    let is_ground = pos.y < solid_ground_at(pos.xz);
+    solid[i] = select(0u, 1u, is_ground);
+    let z = pos.y - ground_at(pos.xz);
+    if is_ground {
         vel_out[i] = vec4<f32>(0.0);
         return;
     }
@@ -184,8 +210,7 @@ fn advect(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let g = vec3<i32>(id);
     let i = at(g);
-    let pos = centre(g);
-    if pos.y - params.misc.z < 0.0 {
+    if is_solid(g) {
         vel_out[i] = vec4<f32>(0.0);
         return;
     }

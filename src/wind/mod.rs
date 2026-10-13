@@ -18,6 +18,7 @@ use crate::gpu::grid::{storage_buffer, storage_volume};
 use crate::gpu::readback::{Readbacks, decode};
 use crate::plugin::{ElementsQuality, ElementsSystems, ElementsView, ensure_gpu_core};
 use crate::query::EnvironmentSnapshot;
+use crate::terrain::{NO_TERRAIN, TerrainParamsGpu, TerrainState};
 
 /// Wind cell edge, m (horizontal and vertical).
 pub const WIND_CELL_M: f32 = 4.0;
@@ -196,6 +197,7 @@ pub(crate) struct WindParams {
     forcing: Vec4,
     misc: Vec4,
     noise_offset: Vec4,
+    terrain: TerrainParamsGpu,
     gusts: [GustGpu; MAX_GUSTS],
 }
 
@@ -209,6 +211,8 @@ pub(crate) struct WindGpu {
     pub solid: Handle<ShaderBuffer>,
     pub divergence: Handle<ShaderBuffer>,
     pub field: Handle<Image>,
+    /// The terrain's `terrain_cells`, or the one-cell placeholder without a live terrain.
+    pub terrain: Handle<ShaderBuffer>,
     pub params: WindParams,
     pub iterations: u32,
     pub active: bool,
@@ -280,6 +284,7 @@ fn ensure_grid(
         solid: storage_buffer(&mut buffers, "elements_wind_solid", vec![0u32; n]),
         divergence: storage_buffer(&mut buffers, "elements_wind_divergence", vec![0f32; n]),
         field,
+        terrain: NO_TERRAIN,
         params: WindParams::default(),
         iterations: quality.wind_pressure_iterations(),
         active: false,
@@ -333,6 +338,7 @@ fn step_wind(
     weather: Res<Weather>,
     climate: Res<Climate>,
     snapshot: Res<EnvironmentSnapshot>,
+    terrain: Option<Res<TerrainState>>,
     mut grid: Option<ResMut<WindGpu>>,
     mut runtime: ResMut<WindRuntime>,
     mut state: ResMut<WindState>,
@@ -362,12 +368,21 @@ fn step_wind(
         gusts.write(gust);
     }
 
-    // Window: whole-cell steps, centred horizontally, a quarter below the camera vertically.
+    // Window: whole-cell steps, centred horizontally. Vertically it starts 8 m below the ground
+    // under the camera, or lower as the camera rises, so it never sits more than three quarters
+    // of its height under the camera (`terrain.md`: the ground under the camera is the snapshot
+    // surface, the camera 8 m up before the first readback, the plane y = 0 without a terrain).
     let size = grid.size.as_ivec3();
+    let ground = match (&terrain, snapshot.terrain.as_ref()) {
+        (Some(_), Some(t)) => t.height(camera.xz()).unwrap_or(camera.y - 8.0),
+        (Some(_), None) => camera.y - 8.0,
+        (None, _) => 0.0,
+    };
+    let window_floor = (ground - 8.0).max(camera.y - 0.75 * grid.size.y as f32 * WIND_CELL_M);
     let cam_cell = (camera / WIND_CELL_M).floor().as_ivec3();
     let origin = IVec3::new(
         cam_cell.x - size.x / 2,
-        cam_cell.y - size.y / 4,
+        (window_floor / WIND_CELL_M).floor() as i32,
         cam_cell.z - size.z / 2,
     );
     let prev = runtime.origin.unwrap_or(origin);
@@ -386,6 +401,11 @@ fn step_wind(
             b: Vec4::new(g.width, g.strength, 0.0, 0.0),
         };
     }
+    let live = terrain.as_ref().filter(|t| t.is_live());
+    let terrain_params = live.map_or_else(TerrainParamsGpu::default, |t| {
+        TerrainParamsGpu::new(&t.grid, 1, true)
+    });
+    grid.terrain = live.map_or(NO_TERRAIN, |t| t.cells.clone());
     grid.params = WindParams {
         size: grid.size.extend(0),
         origin: origin.extend(i32::from(reset)),
@@ -399,6 +419,7 @@ fn step_wind(
         ),
         misc: Vec4::new(WIND_CELL_M, dt, 0.0, runtime.gusts.len() as f32),
         noise_offset: runtime.noise_offset.extend(0.0),
+        terrain: terrain_params,
         gusts: bands,
     };
     grid.active = dt > 0.0;

@@ -212,6 +212,14 @@ impl Plugin for ElementsGpuCorePlugin {
         load_shader_library!(app, "noise.wesl");
         load_shader_library!(app, "grid.wesl");
         load_shader_library!(app, "wind.wesl");
+        // The one-cell `terrain_cells` that wind, precipitation and ground materials bind until
+        // a terrain exists.
+        if let Some(mut buffers) = app
+            .world_mut()
+            .get_resource_mut::<Assets<bevy::render::storage::ShaderBuffer>>()
+        {
+            crate::terrain::insert_placeholder(&mut buffers);
+        }
         app.add_plugins(ReadbackPlugin).add_observer(dress_camera);
     }
 }

@@ -66,8 +66,9 @@ pub use lightning::{
 
 // Terrain.
 pub use terrain::{
-    ProceduralTerrain, Terrain, TerrainGrid, TerrainPlugin, TerrainRender, TerrainSnapshot,
-    TerrainSource, TerrainState,
+    GroundExtension, GroundMaterial, GroundParams, ProceduralTerrain, Terrain, TerrainExtension,
+    TerrainGrid, TerrainMaterial, TerrainMaterialParams, TerrainPlugin, TerrainRender,
+    TerrainSnapshot, TerrainSource, TerrainState,
 };
 
 // `bevy_flora` integration.

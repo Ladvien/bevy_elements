@@ -8,6 +8,8 @@
 //             particle at the top of the box, and a rain hit near the camera appends a splash
 //   wrap      toroidally around the camera
 
+import bevy_elements::grid::grid_taps;
+import bevy_elements::terrain::common::{TerrainParams, terrain_live};
 import bevy_elements::wind::{WindFieldParams, elements_wind};
 import bevy_elements::precipitation::common::{particle_rand, drop_diameter_mm, drop_fall_speed};
 
@@ -47,6 +49,8 @@ struct Params {
     // x: flutter speed, m/s. y: snow fall speed, m/s. zw: flutter frequency range, Hz.
     snow: vec4<f32>,
     wind: WindFieldParams,
+    // The terrain grid; without a live terrain the ground is the plane y = motion.w.
+    terrain: TerrainParams,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -55,6 +59,7 @@ struct Params {
 @group(0) @binding(3) var<storage, read> blockers: array<Blocker>;
 @group(0) @binding(4) var wind_field: texture_3d<f32>;
 @group(0) @binding(5) var wind_sampler: sampler;
+@group(0) @binding(6) var<storage, read> terrain_cells: array<vec4<f32>>;
 
 const KIND_RAIN: u32 = 0u;
 const KIND_SNOW: u32 = 1u;
@@ -92,18 +97,33 @@ fn segment_enter(b: Blocker, p0: vec3<f32>, p1: vec3<f32>) -> f32 {
     return select(MISS, t_in, t_in <= t_out);
 }
 
+/// World height of the surface rain lands on at world XZ: the terrain's surface plus the water
+/// standing on it (a flood splashes), or the plane y = motion.w without a terrain.
+fn ground_at(xz: vec2<f32>) -> f32 {
+    if !terrain_live(params.terrain) {
+        return params.motion.w;
+    }
+    let t = grid_taps(params.terrain.grid, xz);
+    let a = terrain_cells[t.i00];
+    let b = terrain_cells[t.i10];
+    let c = terrain_cells[t.i01];
+    let d = terrain_cells[t.i11];
+    let h = mix(mix(a.x + a.z, b.x + b.z, t.w.x), mix(c.x + c.z, d.x + d.z, t.w.x), t.w.y);
+    return params.terrain.misc.x + h;
+}
+
 /// A position uniform in the part of the box above the ground.
 fn seed_position(index: u32, epoch: u32) -> vec3<f32> {
     let cam = params.camera.xyz;
     let half_edge = params.motion.y;
     let r = particle_rand(index, epoch, 3u);
     let top = cam.y + half_edge;
-    let bottom = min(max(params.motion.w, cam.y - half_edge), top);
-    return vec3<f32>(
+    let xz = vec2<f32>(
         cam.x + (r.x * 2.0 - 1.0) * half_edge,
-        mix(bottom, top, r.y),
         cam.z + (r.z * 2.0 - 1.0) * half_edge,
     );
+    let bottom = min(max(ground_at(xz), cam.y - half_edge), top);
+    return vec3<f32>(xz.x, mix(bottom, top, r.y), xz.y);
 }
 
 fn wrap_axis(x: f32, centre: f32, half_edge: f32) -> f32 {
@@ -123,7 +143,6 @@ fn elements_precip_sim(
     let dt = params.camera.w;
     let cam = params.camera.xyz;
     let half_edge = params.motion.y;
-    let ground = params.motion.w;
 
     var kind = KIND_PARKED;
     var epoch = 0u;
@@ -190,11 +209,15 @@ fn elements_precip_sim(
         return;
     }
 
-    // Ground: the plane y = ground. A particle already below it respawns without a splash.
-    if p0.y <= ground {
+    // Ground: the terrain surface (plus standing water) under each end of the step. A particle
+    // already below it respawns without a splash.
+    let g0 = ground_at(p0.xz);
+    let g1 = ground_at(p1.xz);
+    if p0.y <= g0 {
         t_hit = 0.0;
-    } else if p1.y <= ground {
-        t_hit = min(t_hit, (p0.y - ground) / (p0.y - p1.y));
+    } else if p1.y <= g1 {
+        let above = p0.y - g0;
+        t_hit = min(t_hit, above / (above - (p1.y - g1)));
     }
 
     var out_pos = p1;

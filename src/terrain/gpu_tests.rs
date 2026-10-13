@@ -332,3 +332,361 @@ fn an_srgb_heightmap_leaves_the_terrain_unspawned() {
     );
     finish(&mut a);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Wiring: wind, precipitation and the patch pool over a real terrain.
+// ---------------------------------------------------------------------------------------------
+
+use bevy::camera::primitives::Aabb;
+use bevy::camera::visibility::NoAutoAabb;
+
+use super::TerrainRuntime;
+use crate::plugin::ElementsView;
+use crate::query::EnvironmentSnapshot;
+use crate::wind::{WIND_CELL_M, WindGpu, WindState};
+use crate::{PrecipitationState, Weather, WeatherDirector, WeatherPreset};
+
+/// Mean |divergence| of the wind field (1/s) over cells that are in the air with their whole
+/// stencil, 12 m above the ground, and the number of such cells.
+fn divergence_over_terrain(app: &mut App) -> (f32, usize) {
+    app.world_mut()
+        .run_system_once(|env: Environment, wind: Res<WindState>| {
+            let h = WIND_CELL_M;
+            let (lo, hi) = (
+                wind.field_origin + 2.0 * h,
+                wind.field_origin + wind.field_extent - 2.0 * h,
+            );
+            let centre = Vec2::new(
+                wind.field_origin.x + 0.5 * wind.field_extent.x,
+                wind.field_origin.z + 0.5 * wind.field_extent.z,
+            );
+            let (mut sum, mut n) = (0.0, 0usize);
+            for ix in -20..20 {
+                for iz in -20..20 {
+                    let xz = centre + Vec2::new(ix as f32, iz as f32) * h;
+                    let Some(ground) = env.terrain_height(xz) else {
+                        continue;
+                    };
+                    let p = Vec3::new(xz.x, ground + 12.0, xz.y);
+                    // The whole stencil inside the window and clear of the ground.
+                    let clear = [Vec2::X, -Vec2::X, Vec2::Y, -Vec2::Y].iter().all(|o| {
+                        env.terrain_height(xz + *o * h)
+                            .is_some_and(|g| g + 4.0 < p.y - h)
+                    });
+                    if !clear
+                        || p.y + h > hi.y
+                        || p.y - h < lo.y
+                        || xz.x < lo.x
+                        || xz.x > hi.x
+                        || xz.y < lo.z
+                        || xz.y > hi.z
+                    {
+                        continue;
+                    }
+                    let d = (env.wind_at(p + Vec3::X * h).x - env.wind_at(p - Vec3::X * h).x
+                        + env.wind_at(p + Vec3::Y * h).y
+                        - env.wind_at(p - Vec3::Y * h).y
+                        + env.wind_at(p + Vec3::Z * h).z
+                        - env.wind_at(p - Vec3::Z * h).z)
+                        / (2.0 * h);
+                    sum += d.abs();
+                    n += 1;
+                }
+            }
+            (if n > 0 { sum / n as f32 } else { f32::NAN }, n)
+        })
+        .expect("the query system runs")
+}
+
+/// Validation of the wind wiring and wind.md Deviation 1: over hills the projection still
+/// leaves the field nearly divergence-free, and the Jacobi iteration count of the High grid
+/// (12, warm-started) is as good as 30.
+#[test]
+#[ignore = "needs a GPU"]
+fn wind_over_hills_stays_divergence_free_at_the_jacobi_counts() {
+    let _lock = serial();
+    let mut results = Vec::new();
+    for iterations in [12u32, 30] {
+        let mut app = app(
+            Terrain::procedural(ProceduralTerrain::hills(42)).with_resolution(UVec2::splat(256)),
+            ElementsQuality::High,
+        );
+        app.update();
+        app.world_mut().resource_mut::<WindGpu>().iterations = iterations;
+        run_until(&mut app, "the height readback", |app| {
+            height_at(app, Vec2::ZERO).is_some()
+        });
+        for _ in 0..300 {
+            app.update();
+        }
+        let (mean, cells) = divergence_over_terrain(&mut app);
+        println!(
+            "{iterations} Jacobi iterations over hills: mean |div| {mean:.5} 1/s over {cells} cells"
+        );
+        results.push((mean, cells));
+        finish(&mut app);
+    }
+    for (mean, cells) in &results {
+        assert!(*cells > 200, "too few air cells ({cells})");
+        assert!(*mean < 1e-2, "mean |div| {mean}");
+    }
+}
+
+/// Validation 10: a flat terrain at 10 m makes every wind cell whose centre is below 10 m solid
+/// (bit-exact on the CPU model of the mask) and the window starts at `4·⌊(h − 8)/4⌋`.
+#[test]
+#[ignore = "needs a GPU"]
+fn a_flat_terrain_makes_the_cells_below_it_solid() {
+    let _lock = serial();
+    let mut app = app(
+        Terrain::flat(10.0).with_resolution(UVec2::splat(128)),
+        ElementsQuality::High,
+    );
+    run_until(&mut app, "the height readback", |app| {
+        height_at(app, Vec2::ZERO).is_some()
+    });
+    for _ in 0..60 {
+        app.update();
+    }
+    let (origin, extent, handle, live) = {
+        let w = app.world().resource::<WindState>();
+        let g = app.world().resource::<WindGpu>();
+        (
+            w.field_origin,
+            w.field_extent,
+            g.solid.clone(),
+            w.field_live,
+        )
+    };
+    assert!(live);
+    assert_eq!(origin.y, 0.0, "window starts at 4·⌊(10 − 8)/4⌋ = 0");
+    let n = (extent / WIND_CELL_M).as_ivec3();
+    let solid = bytemuck::pod_collect_to_vec::<u8, u32>(
+        &read_buffer(&mut app, handle)[..(n.x * n.y * n.z) as usize * 4],
+    );
+    let origin_cell = (origin / WIND_CELL_M).as_ivec3();
+    let mut below = 0;
+    for gy in 0..n.y {
+        for gz in 0..n.z {
+            for gx in 0..n.x {
+                let w = origin_cell + IVec3::new(gx, gy, gz);
+                let s = IVec3::new(
+                    w.x.rem_euclid(n.x),
+                    w.y.rem_euclid(n.y),
+                    w.z.rem_euclid(n.z),
+                );
+                let slot = (s.x + n.x * (s.y + n.y * s.z)) as usize;
+                let centre_y = (w.y as f32 + 0.5) * WIND_CELL_M;
+                let expected = u32::from(centre_y < 10.0);
+                below += expected;
+                assert_eq!(solid[slot], expected, "cell {w} centred at y = {centre_y}");
+            }
+        }
+    }
+    assert_eq!(
+        below,
+        2 * (n.x * n.z) as u32,
+        "the two lowest layers (centres 2 and 6 m) are solid"
+    );
+    finish(&mut app);
+}
+
+/// Pin the weather to steady rain after the climate has run.
+fn pin_rain(mut weather: ResMut<Weather>) {
+    weather.precipitation_mm_h = 25.0;
+    weather.temperature_c = 15.0;
+}
+
+/// Positions of the active rain particles at the next readback.
+fn rain_heights(app: &mut App) -> Vec<f32> {
+    let (particles, rain) = {
+        let s = app.world().resource::<PrecipitationState>();
+        (s.particles.clone(), s.rain as usize)
+    };
+    let bytes = read_buffer(app, particles);
+    let records = bytemuck::pod_collect_to_vec::<u8, [f32; 8]>(&bytes[..rain * 32]);
+    records.iter().map(|r| r[1]).collect()
+}
+
+/// Validation 10: rain over a flat terrain at 10 m never goes below it, and some drops reach
+/// it; with 1 m of water standing the ground is 11 m.
+#[test]
+#[ignore = "needs a GPU"]
+fn rain_lands_on_the_terrain_and_on_a_flood() {
+    let _lock = serial();
+    let mut app = app(
+        Terrain::flat(10.0).with_resolution(UVec2::splat(128)),
+        ElementsQuality::High,
+    );
+    app.add_systems(
+        Update,
+        pin_rain
+            .after(crate::ElementsSystems::Weather)
+            .before(crate::ElementsSystems::Simulation),
+    );
+    app.world_mut()
+        .resource_mut::<WeatherDirector>()
+        .force(WeatherPreset::Rain, Duration::ZERO);
+    run_until(&mut app, "the generator", live);
+    for _ in 0..180 {
+        app.update();
+    }
+    let heights = rain_heights(&mut app);
+    let lowest = heights.iter().copied().fold(f32::INFINITY, f32::min);
+    println!(
+        "{} rain particles over a 10 m plain: lowest y {lowest:.3}",
+        heights.len()
+    );
+    assert!(heights.len() > 1000);
+    assert!(
+        lowest >= 10.0,
+        "a drop fell through the ground to y = {lowest}"
+    );
+    assert!(
+        lowest < 10.6,
+        "no drop came near the ground (lowest {lowest})"
+    );
+
+    // A 1 m flood: write the water layer and ask for a repack.
+    let (water, cells) = {
+        let s = state(&app).expect("state");
+        (s.water.clone(), (s.grid.size.x * s.grid.size.y) as usize)
+    };
+    {
+        let mut buffers = app.world_mut().resource_mut::<Assets<ShaderBuffer>>();
+        let mut buffer = buffers
+            .get_mut(&water)
+            .expect("the water layer is kept in the main world");
+        *buffer = ShaderBuffer::new(
+            vec![1.0f32; cells],
+            bevy::asset::RenderAssetUsages::default(),
+        );
+        buffer.label = "elements_terrain_water".into();
+        buffer.buffer_usage = bevy::render::render_resource::BufferUsages::STORAGE
+            | bevy::render::render_resource::BufferUsages::COPY_SRC
+            | bevy::render::render_resource::BufferUsages::COPY_DST;
+    }
+    app.world()
+        .resource::<super::TerrainGpu>()
+        .dirty
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    for _ in 0..180 {
+        app.update();
+    }
+    let heights = rain_heights(&mut app);
+    let lowest = heights.iter().copied().fold(f32::INFINITY, f32::min);
+    println!("over a 1 m flood: lowest y {lowest:.3}");
+    assert!(
+        lowest >= 11.0,
+        "a drop fell through the water surface to y = {lowest}"
+    );
+    assert!(
+        lowest < 11.6,
+        "no drop came near the water (lowest {lowest})"
+    );
+    finish(&mut app);
+}
+
+/// Validation 8 and the pool: patches are selected after a readback, every pool entity has
+/// `NoAutoAabb`, every patch's `Aabb` contains all 1089 vertices the shader would displace, and
+/// re-inserting `Mesh3d` leaves the `Aabb` alone.
+#[test]
+#[ignore = "needs a GPU"]
+fn every_patch_bounds_its_displaced_vertices() {
+    let _lock = serial();
+    let mut app = app(
+        Terrain::procedural(ProceduralTerrain::mountains(42)).with_resolution(UVec2::splat(512)),
+        ElementsQuality::High,
+    );
+    run_until(&mut app, "the bounds readback", |app| {
+        app.world().resource::<TerrainRuntime>().bounds_version > 0
+    });
+    for _ in 0..10 {
+        app.update();
+    }
+    let (lod, pool, grid) = {
+        let rt = app.world().resource::<TerrainRuntime>();
+        (
+            rt.lod.expect("a quadtree"),
+            rt.pool
+                .iter()
+                .map(|s| (s.entity, s.patch))
+                .collect::<Vec<_>>(),
+            state(&app).expect("state").grid,
+        )
+    };
+    let camera = app.world().resource::<ElementsView>().position;
+    let snapshot = app
+        .world()
+        .resource::<EnvironmentSnapshot>()
+        .terrain
+        .clone()
+        .expect("a height snapshot");
+    let local = Vec3::new(
+        camera.x - grid.origin.x,
+        camera.y - grid.y0,
+        camera.z - grid.origin.y,
+    );
+    let height = |p: Vec2| snapshot.grid.sample(&snapshot.surface, p + grid.origin);
+    let mut visible = 0;
+    let mut before = Vec::new();
+    for (entity, patch) in &pool {
+        let e = app.world().entity(*entity);
+        assert!(
+            e.contains::<NoAutoAabb>(),
+            "every pool entity carries NoAutoAabb"
+        );
+        let Some(patch) = patch else {
+            assert_eq!(e.get::<Visibility>(), Some(&Visibility::Hidden));
+            continue;
+        };
+        visible += 1;
+        let aabb = *e.get::<Aabb>().expect("an Aabb");
+        let (lo, hi) = (aabb.min().y, aabb.max().y);
+        for gz in 0..=32 {
+            for gx in 0..=32 {
+                let v =
+                    super::lod::vertex_position(&lod, *patch, UVec2::new(gx, gz), local, height);
+                assert!(
+                    v.y >= lo - 1e-3 && v.y <= hi + 1e-3,
+                    "{patch:?} vertex {gx},{gz} at {} outside [{lo}, {hi}]",
+                    v.y
+                );
+            }
+        }
+        before.push((*entity, aabb));
+    }
+    println!("{visible} patches selected over the mountains");
+    assert!(visible > 20);
+    // Re-inserting the mesh handle must not recompute the bounds.
+    for (entity, _) in &before {
+        let mesh = app
+            .world()
+            .entity(*entity)
+            .get::<Mesh3d>()
+            .expect("a mesh")
+            .0
+            .clone();
+        app.world_mut().entity_mut(*entity).insert(Mesh3d(mesh));
+    }
+    for _ in 0..3 {
+        app.update();
+    }
+    for (entity, aabb) in before {
+        // The selection may have moved on, so compare only patches that still draw the same tile.
+        if app
+            .world()
+            .resource::<TerrainRuntime>()
+            .pool
+            .iter()
+            .any(|s| s.entity == entity && s.patch.is_some())
+        {
+            let now = *app.world().entity(entity).get::<Aabb>().expect("an Aabb");
+            assert!(
+                now.half_extents.x == aabb.half_extents.x,
+                "the Aabb was recomputed from the flat mesh"
+            );
+        }
+    }
+    finish(&mut app);
+}

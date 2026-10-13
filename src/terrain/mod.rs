@@ -11,25 +11,39 @@
 mod gpu;
 #[cfg(test)]
 mod gpu_tests;
+mod lod;
+mod material;
 pub(crate) mod model;
 
+use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use bevy::asset::embedded_asset;
+use crate::gpu::grid::zeroed_buffer;
+use crate::gpu::readback::{Readbacks, decode};
+use crate::plugin::{ElementsQuality, ElementsSystems, ElementsView, ensure_gpu_core};
+use crate::query::EnvironmentSnapshot;
+use bevy::asset::{RenderAssetUsages, embedded_asset};
+use bevy::camera::primitives::Aabb;
+use bevy::camera::visibility::NoAutoAabb;
 use bevy::math::UVec4;
+use bevy::mesh::{Indices, MeshTag, PrimitiveTopology};
+use bevy::pbr::MaterialPlugin;
 use bevy::prelude::*;
 use bevy::render::render_resource::{ShaderType, TextureFormat};
 use bevy::render::storage::ShaderBuffer;
 use bevy::shader::load_shader_library;
-
-use crate::gpu::grid::zeroed_buffer;
-use crate::gpu::readback::{Readbacks, decode};
-use crate::plugin::{ElementsQuality, ElementsSystems, ensure_gpu_core};
-use crate::query::EnvironmentSnapshot;
+use bevy::transform::TransformSystems;
+pub(crate) use gpu::TerrainDispatch;
+use lod::{BoundsTree, LodConfig, Patch, select_patches};
+pub use material::{
+    GroundExtension, GroundMaterial, GroundParams, TerrainExtension, TerrainMaterial,
+    TerrainMaterialParams,
+};
+pub(crate) use material::{NO_TERRAIN, insert_placeholder};
 use model::{
-    AABB_PAD_M, F_HALF, GAIN, LACUNARITY, LEAF_CELLS, OCTAVE_ROTATION, R_LOW, R_SPAN, octave_count,
+    F_HALF, GAIN, LACUNARITY, LEAF_CELLS, OCTAVE_ROTATION, R_LOW, R_SPAN, octave_count,
     resolve_resolution, seed_mix,
 };
 pub use model::{TerrainGrid, TerrainSnapshot};
@@ -324,6 +338,16 @@ pub(crate) struct TerrainGpu {
     pub generated: Arc<std::sync::atomic::AtomicBool>,
 }
 
+/// Entities per patch pool: the measured worst case of the selection (187 on flat Ultra, 133 at
+/// High) plus margin (`terrain.md` Deviation 9).
+pub(crate) const POOL_CAPACITY: usize = 256;
+
+/// One entity of the patch pool and the patch it currently draws.
+struct PoolSlot {
+    entity: Entity,
+    patch: Option<Patch>,
+}
+
 /// Main-world bookkeeping of the active terrain.
 #[derive(Resource, Default)]
 struct TerrainRuntime {
@@ -333,6 +357,16 @@ struct TerrainRuntime {
     failed: Option<Terrain>,
     warned_extra: bool,
     warned_transform: bool,
+    warned_capacity: bool,
+    /// The quadtree geometry of the active terrain.
+    lod: Option<LodConfig>,
+    /// Min and max heights of every node, from the last bounds readback (before the first, the
+    /// generator's analytic range).
+    bounds: Option<BoundsTree>,
+    bounds_version: u32,
+    /// The owned render's patch pool, empty for an external terrain.
+    pool: Vec<PoolSlot>,
+    patch_mesh: Option<Handle<Mesh>>,
 }
 
 /// Heightmap formats the generator reads linearly, and whether the kernel is the integer one.
@@ -365,9 +399,27 @@ impl Plugin for TerrainPlugin {
         embedded_asset!(app, "heightmap.wesl");
         embedded_asset!(app, "pack.wesl");
         embedded_asset!(app, "flow.wesl");
-        app.init_resource::<TerrainRuntime>()
-            .add_systems(Update, ensure_terrain.in_set(ElementsSystems::Simulation))
-            .add_systems(Update, read_terrain.in_set(ElementsSystems::Readback));
+        embedded_asset!(app, "render.wesl");
+        embedded_asset!(app, "ground.wesl");
+        app.add_plugins((
+            MaterialPlugin::<TerrainMaterial>::default(),
+            MaterialPlugin::<GroundMaterial>::default(),
+        ))
+        .init_resource::<TerrainRuntime>()
+        .add_systems(Update, ensure_terrain.in_set(ElementsSystems::Simulation))
+        .add_systems(
+            Update,
+            (
+                read_terrain.in_set(ElementsSystems::Readback),
+                material::update_materials,
+            )
+                .chain()
+                .after(ElementsSystems::Simulation),
+        )
+        .add_systems(
+            PostUpdate,
+            update_patches.before(TransformSystems::Propagate),
+        );
         gpu::plugin(app);
     }
 }
@@ -384,6 +436,8 @@ fn ensure_terrain(
     mut runtime: ResMut<TerrainRuntime>,
     mut snapshot: ResMut<EnvironmentSnapshot>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<TerrainMaterial>>,
 ) {
     // The terrain in use: the one already built, else the lowest entity.
     let active_entity = runtime
@@ -400,6 +454,7 @@ fn ensure_terrain(
             snapshot.terrain = None;
             snapshot.terrain_leaves = None;
         }
+        clear_pool(&mut commands, &mut runtime);
         runtime.active = None;
         return;
     };
@@ -563,12 +618,243 @@ fn ensure_terrain(
         dirty: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         generated: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
+    let cells_handle = new_state.cells.clone();
     commands.insert_resource(new_state);
     snapshot.terrain = None;
     snapshot.terrain_leaves = None;
+    clear_pool(&mut commands, &mut runtime);
+    let lod = LodConfig::new(size.as_vec2() * cell, cell);
+    let (low, high) = analytic_range(&terrain.source);
+    runtime.bounds = Some(BoundsTree::uniform(&lod, low, high));
+    runtime.bounds_version = 0;
+    runtime.lod = Some(lod);
+    if terrain.render == TerrainRender::Owned {
+        let mesh = runtime
+            .patch_mesh
+            .get_or_insert_with(|| meshes.add(patch_mesh()))
+            .clone();
+        let material = materials.add(TerrainMaterial {
+            base: StandardMaterial {
+                base_color: Color::WHITE,
+                perceptual_roughness: 0.9,
+                metallic: 0.0,
+                ..default()
+            },
+            extension: TerrainExtension {
+                params: TerrainMaterialParams::default(),
+                cells: cells_handle,
+                cloud_shadow: None,
+            },
+        });
+        // Hidden until the first selection puts a patch in a slot.
+        let analytic = Aabb::from_min_max(
+            Vec3::new(0.0, low - 2.0, 0.0),
+            Vec3::new(1.0, high + 2.0, 1.0),
+        );
+        let mut slots = Vec::with_capacity(POOL_CAPACITY);
+        commands.entity(entity).with_children(|parent| {
+            for _ in 0..POOL_CAPACITY {
+                let entity = parent
+                    .spawn((
+                        Name::new("Terrain patch"),
+                        Mesh3d(mesh.clone()),
+                        MeshMaterial3d(material.clone()),
+                        Transform::default(),
+                        MeshTag::new(0),
+                        analytic,
+                        NoAutoAabb,
+                        Visibility::Hidden,
+                    ))
+                    .id();
+                slots.push(PoolSlot {
+                    entity,
+                    patch: None,
+                });
+            }
+        });
+        runtime.pool = slots;
+    }
     runtime.active = Some(wanted);
     runtime.failed = None;
-    let _ = AABB_PAD_M;
+}
+
+/// Despawn the patch pool (the terrain's children), if any.
+fn clear_pool(commands: &mut Commands, runtime: &mut TerrainRuntime) {
+    for slot in runtime.pool.drain(..) {
+        commands.entity(slot.entity).despawn();
+    }
+}
+
+/// The range of surface heights the source can produce before the first bounds readback, m.
+fn analytic_range(source: &TerrainSource) -> (f32, f32) {
+    match source {
+        TerrainSource::Procedural(p) => {
+            let (a, b) = (p.base_height_m, p.base_height_m + p.relief_m);
+            (a.min(b), a.max(b))
+        }
+        TerrainSource::Heightmap { height_range_m, .. } => (
+            height_range_m.start.min(height_range_m.end),
+            height_range_m.start.max(height_range_m.end),
+        ),
+        TerrainSource::Flat(h) => (*h, *h),
+    }
+}
+
+/// The patch every pool entity shares: a unit square of 32 × 32 quads (33 × 33 vertices,
+/// `u16` indices) in the XZ plane. The vertex shader places the vertices; only the grid index
+/// (position × 32) matters.
+fn patch_mesh() -> Mesh {
+    const N: u16 = 32;
+    let mut positions = Vec::with_capacity(usize::from((N + 1) * (N + 1)));
+    for z in 0..=N {
+        for x in 0..=N {
+            positions.push([
+                f32::from(x) / f32::from(N),
+                0.0,
+                f32::from(z) / f32::from(N),
+            ]);
+        }
+    }
+    let mut indices = Vec::with_capacity(usize::from(N * N * 6));
+    for z in 0..N {
+        for x in 0..N {
+            let i = z * (N + 1) + x;
+            indices.extend_from_slice(&[i, i + N + 1, i + 1, i + 1, i + N + 1, i + N + 2]);
+        }
+    }
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_indices(Indices::U16(indices))
+}
+
+/// Select the patches for the followed camera and write them into the pool, touching only the
+/// slots whose patch, transform or bounds changed. Idles without a camera and keeps the last
+/// pool. Runs before transform propagation so the new transforms are drawn this frame.
+fn update_patches(
+    mut runtime: ResMut<TerrainRuntime>,
+    state: Option<Res<TerrainState>>,
+    view: Res<ElementsView>,
+    snapshot: Res<EnvironmentSnapshot>,
+    mut patches: Query<(&mut Transform, &mut Visibility, &mut MeshTag, &mut Aabb)>,
+) {
+    let (Some(state), Some(lod)) = (state, runtime.lod) else {
+        return;
+    };
+    if runtime.pool.is_empty() || view.entity.is_none() {
+        return;
+    }
+    if let Some(leaves) = snapshot
+        .terrain_leaves
+        .as_ref()
+        .filter(|l| l.version != runtime.bounds_version)
+    {
+        let tree =
+            BoundsTree::from_leaves(&lod, leaves.dims, leaves.bounds.iter().map(|b| (b.x, b.y)));
+        // The ranges follow the steepest node of every level.
+        runtime.lod = Some(lod.derive(Some(&tree)));
+        runtime.bounds = Some(tree);
+        runtime.bounds_version = leaves.version;
+    }
+    let Some(lod) = runtime.lod else {
+        return;
+    };
+    let Some(tree) = runtime.bounds.take() else {
+        return;
+    };
+    let grid = state.grid;
+    let camera = Vec3::new(
+        view.position.x - grid.origin.x,
+        view.position.y - grid.y0,
+        view.position.z - grid.origin.y,
+    );
+    let mut wanted = select_patches(&lod, &tree, camera);
+    if wanted.len() > POOL_CAPACITY {
+        if !runtime.warned_capacity {
+            warn!(
+                "terrain selection wants {} patches, more than the pool's {POOL_CAPACITY}; the farthest are dropped",
+                wanted.len()
+            );
+            runtime.warned_capacity = true;
+        }
+        wanted.truncate(POOL_CAPACITY);
+    }
+    // Keep a patch in the slot it already has; give the others the free slots.
+    let mut slot_of: HashMap<Patch, usize> = HashMap::new();
+    for (i, slot) in runtime.pool.iter().enumerate() {
+        if let Some(patch) = slot.patch {
+            slot_of.insert(patch, i);
+        }
+    }
+    let mut used = vec![false; runtime.pool.len()];
+    let mut assigned: Vec<(Patch, usize)> = Vec::with_capacity(wanted.len());
+    let mut unmatched = Vec::new();
+    for patch in wanted {
+        match slot_of.get(&patch) {
+            Some(&i) => {
+                used[i] = true;
+                assigned.push((patch, i));
+            }
+            None => unmatched.push(patch),
+        }
+    }
+    let mut free = (0..used.len())
+        .filter(|i| !used[*i])
+        .collect::<Vec<_>>()
+        .into_iter();
+    for patch in unmatched {
+        if let Some(i) = free.next() {
+            used[i] = true;
+            assigned.push((patch, i));
+        }
+    }
+    let extent = grid.extent();
+    for (i, slot) in runtime.pool.iter_mut().enumerate() {
+        if used[i] {
+            continue;
+        }
+        if slot.patch.take().is_some()
+            && let Ok((_, mut visibility, _, _)) = patches.get_mut(slot.entity)
+            && *visibility != Visibility::Hidden
+        {
+            *visibility = Visibility::Hidden;
+        }
+    }
+    for (patch, i) in assigned {
+        let entity = runtime.pool[i].entity;
+        runtime.pool[i].patch = Some(patch);
+        let Ok((mut transform, mut visibility, mut tag, mut aabb)) = patches.get_mut(entity) else {
+            continue;
+        };
+        let size = lod.node_m(patch.level);
+        let translation = Vec3::new(
+            patch.ix as f32 * size - extent.x * 0.5,
+            0.0,
+            patch.iz as f32 * size - extent.y * 0.5,
+        );
+        let scale = Vec3::new(size, 1.0, size);
+        if transform.translation != translation || transform.scale != scale {
+            transform.translation = translation;
+            transform.scale = scale;
+        }
+        if tag.value != patch.level {
+            *tag = MeshTag::new(patch.level);
+        }
+        let (low, high) = tree.get(patch.level, patch.ix, patch.iz);
+        let bounds = Aabb::from_min_max(
+            Vec3::new(0.0, low - model::AABB_PAD_M, 0.0),
+            Vec3::new(1.0, high + model::AABB_PAD_M, 1.0),
+        );
+        if *aabb != bounds {
+            *aabb = bounds;
+        }
+        if *visibility != Visibility::Inherited {
+            *visibility = Visibility::Inherited;
+        }
+    }
+    runtime.bounds = Some(tree);
 }
 
 /// The factor the readback box-averages the grid down by.

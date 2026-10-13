@@ -6,7 +6,10 @@
 //! elsewhere. Set `ELEMENTS_QUALITY=low|medium|high|ultra` (default high),
 //! `ELEMENTS_RESOLUTION=WxH` (default 1920x1080), `ELEMENTS_PRESET=Thunderstorm` (default `Fog`;
 //! the precipitation passes only run in a wet preset) and `ELEMENTS_BLOCKERS=256` (spawn that
-//! many precipitation blockers around the camera).
+//! many precipitation blockers around the camera). `ELEMENTS_TERRAIN=hills|mountains|none`
+//! (default `none`: the flat test scene) draws a terrain instead; its generator pass
+//! (`elements_terrain`, once at spawn) is listed but not counted in the per-frame total, and the
+//! main and depth passes it is drawn in are printed on their own line.
 //!
 //! The timed passes are compute and do not depend on the resolution, but the GPU's clocks do: a
 //! lightly loaded GPU idles in a low power state and every pass reads several times slower. Check
@@ -20,10 +23,11 @@ use bevy::prelude::*;
 use bevy::render::diagnostic::RenderDiagnosticsPlugin;
 use bevy::window::{PresentMode, WindowResolution};
 use bevy_elements::*;
-use common::{ExampleHarness, camera, test_scene};
+use common::{ExampleHarness, camera, stand_on_ground, test_scene};
 
 /// The crate's GPU passes, by diagnostic span name.
-const PASSES: [&str; 10] = [
+const PASSES: [&str; 11] = [
+    "elements_terrain",
     "elements_wind",
     "elements_fog",
     "elements_clouds_noise",
@@ -35,6 +39,9 @@ const PASSES: [&str; 10] = [
     "elements_precip_sim",
     "elements_precip_draw",
 ];
+
+/// Bevy's own passes the terrain is drawn in, printed on a separate line.
+const SCENE_PASSES: [&str; 2] = ["main_opaque_pass_3d", "prepass"];
 
 fn main() {
     let (width, height) = std::env::var("ELEMENTS_RESOLUTION")
@@ -81,12 +88,22 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut director: ResMut<WeatherDirector>,
 ) {
-    commands.spawn(camera(
+    let mut eye = commands.spawn(camera(
         Vec3::new(0.0, 30.0, 0.0),
         // Looking 20° above the horizon: about half the frame is cloud.
         Vec3::new(150.0, 91.9, 80.0),
     ));
-    test_scene(&mut commands, &mut meshes, &mut materials);
+    match std::env::var("ELEMENTS_TERRAIN").as_deref() {
+        Ok("hills") => {
+            eye.insert(stand_on_ground(30.0));
+            commands.spawn(Terrain::procedural(ProceduralTerrain::hills(42)));
+        }
+        Ok("mountains") => {
+            eye.insert(stand_on_ground(30.0));
+            commands.spawn(Terrain::procedural(ProceduralTerrain::mountains(42)));
+        }
+        _ => test_scene(&mut commands, &mut meshes, &mut materials),
+    }
     // PartlyCloudy is the clouds note's bench scene; `ELEMENTS_PRESET=Thunderstorm` saturates the
     // precipitation particles.
     let preset = std::env::var("ELEMENTS_PRESET")
@@ -124,12 +141,19 @@ fn report(
     quality: Res<ElementsQuality>,
     mut frame: Local<u32>,
     mut lowest: Local<[f64; PASSES.len()]>,
+    mut lowest_scene: Local<[f64; SCENE_PASSES.len()]>,
 ) {
     *frame += 1;
     // The minimum over the whole run is the full-clock cost: a pass can only read slower than
     // that, when the GPU has dropped to a low power state; the history window and the average mix
     // both.
     for (slot, pass) in lowest.iter_mut().zip(PASSES) {
+        let gpu = DiagnosticPath::new(format!("render/{pass}/elapsed_gpu"));
+        if let Some(now) = store.get(&gpu).and_then(|d| d.value()) {
+            *slot = if *slot > 0.0 { slot.min(now) } else { now };
+        }
+    }
+    for (slot, pass) in lowest_scene.iter_mut().zip(SCENE_PASSES) {
         let gpu = DiagnosticPath::new(format!("render/{pass}/elapsed_gpu"));
         if let Some(now) = store.get(&gpu).and_then(|d| d.value()) {
             *slot = if *slot > 0.0 { slot.min(now) } else { now };
@@ -149,7 +173,7 @@ fn report(
                 let min = lowest[PASSES.iter().position(|p| *p == pass).unwrap_or(0)];
                 let mean = d.average().unwrap_or(f64::NAN);
                 // The noise volumes are generated once, in the first frames: not a per-frame cost.
-                if !pass.ends_with("_noise") {
+                if !pass.ends_with("_noise") && pass != "elements_terrain" {
                     total += min;
                     if pass.starts_with("elements_clouds") {
                         clouds += min;
@@ -164,4 +188,19 @@ fn report(
         }
     }
     println!("{line}  | total min {total:.3} ms GPU, clouds min {clouds:.3} ms GPU");
+    let mut scene = String::from("scene:");
+    for pass in SCENE_PASSES {
+        let gpu = DiagnosticPath::new(format!("render/{pass}/elapsed_gpu"));
+        match store.get(&gpu) {
+            Some(d) => {
+                let min = lowest_scene[SCENE_PASSES.iter().position(|p| *p == pass).unwrap_or(0)];
+                scene += &format!(
+                    "  {pass} min {min:.3} / mean {:.3} ms GPU",
+                    d.average().unwrap_or(f64::NAN)
+                );
+            }
+            None => scene += &format!("  {pass} -"),
+        }
+    }
+    println!("{scene}");
 }
