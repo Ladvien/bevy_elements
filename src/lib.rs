@@ -8,6 +8,7 @@ mod flora;
 mod fog;
 mod gpu;
 mod plugin;
+mod precipitation;
 mod query;
 mod wind;
 
@@ -35,6 +36,12 @@ pub use climate::{
 pub use wind::{
     MAX_GUSTS, WIND_CELL_M, WIND_ROUGHNESS_M, WindFieldParams, WindGust, WindPlugin, WindState,
     log_wind_speed,
+};
+
+// Precipitation.
+pub use precipitation::{
+    MAX_PRECIPITATION_BLOCKERS, PRECIPITATION_BOX_M, PrecipitationBlocker, PrecipitationPlugin,
+    PrecipitationState,
 };
 
 // Fog.

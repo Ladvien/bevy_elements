@@ -3,8 +3,10 @@
 //! `cargo run --release --example bench_elements`
 //!
 //! Uses Bevy's `RenderDiagnosticsPlugin`: GPU timestamps on Vulkan and DX12, CPU-side timing only
-//! elsewhere. Set `ELEMENTS_QUALITY=low|medium|high|ultra` (default high) and
-//! `ELEMENTS_RESOLUTION=WxH` (default 1920x1080).
+//! elsewhere. Set `ELEMENTS_QUALITY=low|medium|high|ultra` (default high),
+//! `ELEMENTS_RESOLUTION=WxH` (default 1920x1080), `ELEMENTS_PRESET=Thunderstorm` (default `Fog`;
+//! the precipitation passes only run in a wet preset) and `ELEMENTS_BLOCKERS=256` (spawn that
+//! many precipitation blockers around the camera).
 //!
 //! The timed passes are compute and do not depend on the resolution, but the GPU's clocks do: a
 //! lightly loaded GPU idles in a low power state and every pass reads several times slower. Check
@@ -21,7 +23,12 @@ use bevy_elements::*;
 use common::{ExampleHarness, camera, test_scene};
 
 /// The crate's GPU passes, by diagnostic span name.
-const PASSES: [&str; 2] = ["elements_wind", "elements_fog"];
+const PASSES: [&str; 4] = [
+    "elements_wind",
+    "elements_fog",
+    "elements_precip_sim",
+    "elements_precip_draw",
+];
 
 fn main() {
     let (width, height) = std::env::var("ELEMENTS_RESOLUTION")
@@ -73,7 +80,34 @@ fn setup(
         Vec3::new(150.0, 10.0, 80.0),
     ));
     test_scene(&mut commands, &mut meshes, &mut materials);
-    director.force(WeatherPreset::Fog, std::time::Duration::ZERO);
+    let preset = std::env::var("ELEMENTS_PRESET")
+        .ok()
+        .and_then(|name| {
+            WeatherPreset::ALL
+                .into_iter()
+                .find(|p| format!("{p:?}").eq_ignore_ascii_case(&name))
+        })
+        .unwrap_or(WeatherPreset::Fog);
+    director.force(preset, std::time::Duration::ZERO);
+    // Roofs scattered through the particle box: each particle tests every uploaded blocker.
+    let blockers: usize = std::env::var("ELEMENTS_BLOCKERS")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0);
+    for i in 0..blockers {
+        let angle = i as f32 * 2.399_963;
+        let radius = 4.0 + 26.0 * ((i as f32 + 0.5) / blockers as f32).sqrt();
+        commands.spawn((
+            PrecipitationBlocker {
+                half_extents: Vec3::new(2.0, 0.1, 2.0),
+            },
+            Transform::from_xyz(
+                angle.cos() * radius,
+                3.0 + (i % 7) as f32 * 1.5,
+                angle.sin() * radius,
+            ),
+        ));
+    }
 }
 
 fn report(store: Res<DiagnosticsStore>, quality: Res<ElementsQuality>, mut frame: Local<u32>) {

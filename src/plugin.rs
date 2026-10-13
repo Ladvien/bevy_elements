@@ -16,6 +16,7 @@ use crate::celestial::{CelestialPlugin, SunState, clock_plugin};
 use crate::climate::{ClimatePlugin, Weather};
 use crate::fog::FogPlugin;
 use crate::gpu::readback::ReadbackPlugin;
+use crate::precipitation::PrecipitationPlugin;
 use crate::query::EnvironmentSnapshot;
 use crate::wind::{WindPlugin, WindState};
 
@@ -37,6 +38,7 @@ impl PluginGroup for ElementsPlugins {
             .add(CelestialPlugin)
             .add(WindPlugin)
             .add(FogPlugin)
+            .add(PrecipitationPlugin)
     }
 }
 
@@ -127,6 +129,16 @@ impl ElementsQuality {
             Self::Ultra => 96,
         }
     }
+
+    /// Particles in the precipitation buffer; rain and snow take a share of them by rate.
+    pub fn precipitation_particles(self) -> u32 {
+        match self {
+            Self::Low => 20_000,
+            Self::Medium => 60_000,
+            Self::High => 150_000,
+            Self::Ultra => 300_000,
+        }
+    }
 }
 
 /// The camera the camera-relative simulations follow this frame.
@@ -136,6 +148,9 @@ pub(crate) struct ElementsView {
     pub entity: Option<Entity>,
     /// Its world position, m.
     pub position: Vec3,
+    /// Its velocity, m/s: the finite difference of `position` over the last frame, zero on the
+    /// frame the camera is first followed.
+    pub velocity: Vec3,
 }
 
 /// Shared CPU setup every domain needs: the system sets, the clock, the followed view, the
@@ -206,7 +221,7 @@ fn dress_camera(
         AtmosphereSettings::default(),
         AtmosphereEnvironmentMapLight::default(),
         DepthPrepass,
-        Msaa::Off,
+        // (`Msaa::Off` is inserted below: `Camera` requires `Msaa`, so it is never absent here.)
         VolumetricFog {
             ambient_intensity: 0.0,
             step_count: quality.fog_steps(),
@@ -221,6 +236,10 @@ fn dress_camera(
             ..default()
         },
     ));
+    // The depth prepass and the precipitation pass read the depth texture as single-sampled, and
+    // `Camera` requires a default `Msaa::Sample4`, so `insert_if_new` would never replace it.
+    // A game that wants MSAA inserts `Msaa` after spawning the camera.
+    commands.entity(add.entity).insert(Msaa::Off);
     if atmospheres.is_empty() {
         let medium = media.add(ScatteringMedium::default());
         commands.spawn((Name::new("Elements atmosphere"), Atmosphere::earth(medium)));
@@ -228,6 +247,7 @@ fn dress_camera(
 }
 
 fn follow_camera(
+    time: Res<Time<Virtual>>,
     cameras: Query<(Entity, &Camera, &GlobalTransform), With<ElementsCamera>>,
     mut view: ResMut<ElementsView>,
     mut warned: Local<bool>,
@@ -248,9 +268,18 @@ fn follow_camera(
     }
     match best {
         Some((entity, _, position)) => {
+            let dt = time.delta_secs();
+            view.velocity = if view.entity == Some(entity) && dt > 0.0 {
+                (position - view.position) / dt
+            } else {
+                Vec3::ZERO
+            };
             view.entity = Some(entity);
             view.position = position;
         }
-        None => view.entity = None,
+        None => {
+            view.entity = None;
+            view.velocity = Vec3::ZERO;
+        }
     }
 }

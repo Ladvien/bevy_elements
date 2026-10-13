@@ -6,11 +6,13 @@ use bevy::prelude::*;
 use bevy::render::diagnostic::RecordDiagnostics;
 use bevy::render::extract_resource::{ExtractResource, ExtractResourcePlugin};
 use bevy::render::render_asset::RenderAssets;
-use bevy::render::render_resource::binding_types::{texture_storage_3d, uniform_buffer};
+use bevy::render::render_resource::binding_types::{
+    sampler, texture_2d, texture_storage_3d, uniform_buffer,
+};
 use bevy::render::render_resource::{
     BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries,
-    ComputePassDescriptor, PipelineCache, ShaderStages, StorageTextureAccess, TextureFormat,
-    UniformBuffer,
+    ComputePassDescriptor, PipelineCache, SamplerBindingType, ShaderStages, StorageTextureAccess,
+    TextureFormat, TextureSampleType, UniformBuffer,
 };
 use bevy::render::renderer::{RenderContext, RenderDevice, RenderGraph, RenderQueue};
 use bevy::render::texture::GpuImage;
@@ -56,6 +58,8 @@ fn init_pipeline(mut commands: Commands, assets: Res<AssetServer>, cache: Res<Pi
             (
                 uniform_buffer::<FogParams>(false),
                 texture_storage_3d(TextureFormat::Rgba16Float, StorageTextureAccess::WriteOnly),
+                texture_2d(TextureSampleType::Float { filterable: true }),
+                sampler(SamplerBindingType::Filtering),
             ),
         ),
     );
@@ -83,7 +87,8 @@ fn prepare(
     let (Some(fog), Some(pipeline)) = (fog, pipeline) else {
         return;
     };
-    let Some(texture) = images.get(&fog.texture) else {
+    let (Some(texture), Some(map)) = (images.get(&fog.texture), images.get(&fog.weather_map))
+    else {
         commands.remove_resource::<FogBindGroup>();
         return;
     };
@@ -92,7 +97,12 @@ fn prepare(
     let group = device.create_bind_group(
         "elements_fog",
         &cache.get_bind_group_layout(&pipeline.0.layout),
-        &BindGroupEntries::sequential((&uniform.0, &texture.texture_view)),
+        &BindGroupEntries::sequential((
+            &uniform.0,
+            &texture.texture_view,
+            &map.texture_view,
+            &map.sampler,
+        )),
     );
     commands.insert_resource(FogBindGroup(group));
 }

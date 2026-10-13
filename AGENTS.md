@@ -53,6 +53,10 @@ No system is implemented without its `docs/research/<system>.md`, committed firs
 - **Shaders are WESL.** `embedded://bevy_elements/noise.wesl` is importable as `bevy_elements::noise`; shared libraries are loaded with `load_shader_library!`.
 - **GPU timings on a lightly loaded NVIDIA card read 5–10× slow** (P8/P5 clocks under Xvfb). Report the minimum over the diagnostic history and log `nvidia-smi` clocks in the same shell.
 - **Screenshots without a display:** `xvfb-run -a -s "-screen 0 1920x1080x24" env ELEMENTS_FRAMES=… ELEMENTS_SHOT=… ./target/release/examples/<name>` renders on the GPU.
+- **`Camera` requires `Msaa::Sample4`**, so an observer's `insert_if_new(Msaa::Off)` never applies; `ElementsCamera` inserts `Msaa::Off` unconditionally. Passes that read the depth prepass (precipitation, clouds) bind it single-sampled and skip a view that has MSAA.
+- **`ReadbackOnce` lives for one frame**: Bevy removes it in `First`. Spawn it from a system in `Update` (as `gpu/readback.rs` does), never between `app.update()` calls, or the request is removed before extraction. Bevy's readback pool can return a buffer larger than the one asked for: decode only the length you know.
+- **`active` is a reserved word in WGSL**: the shader compiler rejects it as an identifier and the kernel then stays idle (look for the `ERROR bevy_elements::gpu::kernel` line).
+- **Particle and splash buffers** are read back in tests through `PrecipitationState` (`tests/gpu_precipitation.rs`); one test process builds one renderer at a time, so the GPU tests share a lock.
 
 ## Build and test
 
