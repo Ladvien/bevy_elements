@@ -60,8 +60,8 @@ const SOFT_FADE_M: f32 = 0.3;
 const SPLASH_SOFT_FADE_M: f32 = 0.05;
 /// Width of the fade-out at the sides of the box so its edges do not show, m.
 const EDGE_FADE_M: f32 = 8.0;
-/// The kind of the first particles of the buffer (rain), then snow, then — reserved for dust —
-/// 2; a parked particle is kind 3. The kind occupies the low two bits of `Particle::kind`.
+/// `Particle::kind` of a parked (inactive) particle. The kind is in the low two bits: 0 rain,
+/// 1 snow, 2 reserved for dust, 3 parked; the upper bits count respawns.
 const KIND_PARKED: u32 = 3;
 
 /// A box that stops precipitation: a roof, an awning, a tent. The box is `half_extents` in the

@@ -79,14 +79,15 @@ fn henyey_greenstein(cos_theta: f32, g: f32) -> f32 {
     return (1.0 - g2) / (4.0 * PI * pow(1.0 + g2 - 2.0 * g * cos_theta, 1.5));
 }
 
-/// Brightness of the lightning flash at `p` as an illuminance-like term, and the share it has of
-/// all the light there (for the transparency bias of Tatarchuk §3.6.2).
+/// Brightness of the lightning flash at `p` as an illuminance-like term (0 when there is no
+/// flash); added to the sky light and, as its share of the total, makes rain more transparent
+/// (Tatarchuk §3.6.2).
 fn flash_at(p: vec3<f32>) -> f32 {
     let d = p - draw.flash.xyz;
     return draw.flash.w / max(dot(d, d), 1.0);
 }
 
-/// The unit direction of the box fade: 1 inside, 0 at the box sides.
+/// The fade at the sides of the box: 1 inside, falling to 0 over the outer `draw.rain.w` metres.
 fn edge_fade(p: vec3<f32>) -> f32 {
     let half_edge = draw.camera.w;
     let d = abs(p - view.world_position);
