@@ -197,6 +197,7 @@ fn cover_inputs(
 
 /// Keep every terrain and ground material's uniform, buffer and shadow map current. Writes an
 /// asset only when something changed, so a still scene re-prepares nothing.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn update_materials(
     state: Option<Res<TerrainState>>,
     runtime: Res<super::TerrainRuntime>,

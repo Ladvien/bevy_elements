@@ -12,8 +12,15 @@ use crate::climate::Weather;
 /// A pending melt below this stays in the snow until it grows past it or the cell empties
 /// (`hydrology::model::QuantumAccumulator`: an f32 water depth cannot hold less).
 pub(crate) const RELEASE_QUANTUM_M: f32 = 5e-6;
-/// The weight of one diffusion pass.
+/// The weight of one diffusion pass at the longest step, and that step, s.
 pub(crate) const DIFFUSE_LAMBDA: f32 = 0.125;
+pub(crate) const DIFFUSE_REFERENCE_STEP_S: f32 = 600.0;
+
+/// The weight of one diffusion pass for a step of `dt_s`: proportional to the step, so the
+/// smoothing is a rate in game time (`diffuse_lambda` of `snow.wesl`).
+pub(crate) fn diffuse_lambda(dt_s: f32) -> f32 {
+    DIFFUSE_LAMBDA * (dt_s / DIFFUSE_REFERENCE_STEP_S).min(1.0)
+}
 /// Highest a blocker still shelters the ground, m (`shelter.wesl`).
 pub(crate) const SHELTER_HEIGHT_M: f32 = 500.0;
 
@@ -108,6 +115,7 @@ impl SnowCell {
 
 /// Wetness after `dt_h` hours, as `wetness_update`: rain wets `k_w` per mm, evaporation dries
 /// `k_d · E/E₀ · (1 + sun)` per hour. `rain_mm_h` is the liquid rain that reaches the ground.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn wetness_step(
     wetness: f32,
     settings: &WetnessSettings,
@@ -369,18 +377,18 @@ mod tests {
             }
         }
         assert_eq!(wet, 1.0);
-        assert!((reached.expect("soaked") - 0.5).abs() < 0.01);
+        // 4 mm/h wets 2.0 per hour and the evaporation of this weather dries 0.08 of it back.
+        assert!((reached.expect("soaked") - 1.0 / 1.92).abs() < 0.002);
         let mut hours = 0.0_f32;
-        let mut seen = [0.0_f32; 3];
+        let mut at_ten = 0.0_f32;
         while wet > 0.1 {
             wet = wetness_step(wet, &w, 1.0 / 360.0, 0.0, 3.0, 20.0, 0.5, 0.0);
             hours += 1.0 / 360.0;
             if (hours - 10.0).abs() < 1.0 / 720.0 {
-                seen[0] = wet;
+                at_ten = wet;
             }
         }
-        seen[1] = hours;
-        assert!(seen[0] > 0.1, "wetter than 0.1 at 10 h");
+        assert!(at_ten > 0.1, "wetter than 0.1 at 10 h");
         assert!((hours - 11.25).abs() < 0.05, "{hours}");
     }
 
@@ -429,6 +437,17 @@ mod tests {
         for (x, want) in [(26.0, false), (27.0, true), (43.0, true), (44.0, false)] {
             assert_eq!(at(x, wind, 1.0), want, "snow at x = {x}");
         }
+    }
+
+    /// The smoothing does not depend on how many steps a second the frame rate allows: ten
+    /// minutes of game time smooth the same in one 600 s step and in sixty 10 s steps.
+    #[test]
+    fn diffusion_is_a_rate_in_game_time() {
+        assert_eq!(diffuse_lambda(600.0), DIFFUSE_LAMBDA);
+        assert_eq!(diffuse_lambda(6000.0), DIFFUSE_LAMBDA);
+        let variance = |dt: f32| (600.0 / dt) * 4.0 * diffuse_lambda(dt);
+        assert!((variance(10.0) - variance(600.0)).abs() < 1e-5);
+        assert!((variance(30.0) - 0.5).abs() < 1e-5);
     }
 
     #[test]

@@ -16,7 +16,7 @@ pub(crate) const RIPPLE_STRENGTH: f32 = 0.35;
 pub(crate) const RIPPLE_CELL_M: f32 = 0.4;
 pub(crate) const RIPPLE_RADIUS_M: f32 = 0.2;
 const RIPPLE_JITTER: f32 = 0.25;
-const RIPPLE_PI: f32 = 3.141_592_65;
+const RIPPLE_PI: f32 = std::f32::consts::PI;
 const STREAK_AMPLITUDE: f32 = 0.6;
 const STREAK_FREQUENCY_X: f32 = 8.0;
 const STREAK_FREQUENCY_Y: f32 = 0.4;
@@ -92,6 +92,7 @@ pub(crate) fn ripple_layer(xz: Vec2, layer: u32, phase: f32, weight: f32) -> Vec
     d / dist.max(1e-5) * (ring * RIPPLE_STRENGTH)
 }
 
+#[allow(dead_code)]
 pub(crate) fn ripple_offset(xz: Vec2, phases: [f32; 4], weights: [f32; 4]) -> Vec2 {
     (0..4u32)
         .map(|k| ripple_layer(xz, k, phases[k as usize], weights[k as usize]))

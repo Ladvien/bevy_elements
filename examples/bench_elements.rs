@@ -9,7 +9,11 @@
 //! many precipitation blockers around the camera). `ELEMENTS_TERRAIN=hills|mountains|none`
 //! (default `hills`): a 2 km terrain at the quality's full simulation resolution with a 50 m³/s
 //! water source, so hydrology and erosion run their full substeps every frame
-//! (`elements_hydrology`) and the terrain repacks its layers every frame (`elements_terrain`);
+//! (`elements_hydrology`) and the terrain repacks its layers every frame (`elements_terrain`); the
+//! snow chain (`elements_snow`: source, drift and two diffusion passes per step, with
+//! `ELEMENTS_PRESET=Blizzard` for the wind that drifts), the wetness update with the cover pack and
+//! readback (`elements_wetness`) and the shelter mask (`elements_shelter`, once per change of the
+//! blockers) run at most 20 times a second;
 //! `none` is the flat test scene with neither. Bevy's main and depth passes the scene is drawn in
 //! are printed on their own line.
 //!
@@ -31,7 +35,7 @@ use common::{ExampleHarness, camera, stand_on_ground, test_scene};
 const WARMUP_FRAMES: u32 = 240;
 
 /// The crate's GPU passes, by diagnostic span name.
-const PASSES: [&str; 12] = [
+const PASSES: [&str; 15] = [
     "elements_wind",
     "elements_fog",
     "elements_clouds_noise",
@@ -43,6 +47,9 @@ const PASSES: [&str; 12] = [
     "elements_precip_sim",
     "elements_precip_draw",
     "elements_hydrology",
+    "elements_snow",
+    "elements_wetness",
+    "elements_shelter",
     "elements_terrain",
 ];
 

@@ -463,10 +463,12 @@ fn gpu_snow_drift_conserves_and_moves_downwind() {
         app.world().resource::<CoverStats>().steps >= start + 100
     });
     sim.hold();
-    assert!(
-        sim.snow().iter().zip(uniform.chunks(4)).all(|(a, b)| a[0] == b[0] && a[1] == b[1]),
-        "5 m/s is below the threshold"
-    );
+    // Below the threshold nothing moves: the pack is the one written, to the rounding of its
+    // density (200.0000x kg/m³) each step.
+    for (a, b) in sim.snow().iter().zip(uniform.chunks(4)) {
+        close(a[0], b[0], 1e-5, "depth below the threshold");
+        assert_eq!(a[1], b[1], "SWE below the threshold");
+    }
     sim.set_pin(Pin::new(0.0, -5.0).wind(12.0));
     let start = sim.stats().steps;
     sim.set_scale(1800.0);
@@ -474,8 +476,13 @@ fn gpu_snow_drift_conserves_and_moves_downwind() {
         app.world().resource::<CoverStats>().steps >= start + 100
     });
     sim.hold();
-    for c in sim.snow() {
-        close(c[1], 0.02, 1e-5, "uniform pack in uniform wind");
+    // The edges are walls: the wind erodes the first column and piles the snow against the last,
+    // and diffusion smooths both a little (the first and last ten columns are skipped);
+    // every other cell keeps its snow to the rounding of 100 subtractions and additions.
+    for (i, c) in sim.snow().iter().enumerate() {
+        if (10..cells as usize - 10).contains(&(i % cells as usize)) {
+            close(c[1], 0.02, 1e-4, "uniform pack in uniform wind");
+        }
     }
 
     // (c) A Gaussian patch, sigma 20 m, peak 0.3 m, centred 40 m upwind of the middle.

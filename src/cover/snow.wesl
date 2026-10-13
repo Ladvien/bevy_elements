@@ -31,8 +31,9 @@ import bevy_elements::cover::common::{CoverParams, local_temperature, slope_tang
 const RELEASE_QUANTUM_M: f32 = 5e-6;
 // Snow depth at which the ground is fully covered (m).
 const FULL_COVER_M: f32 = 0.05;
-// Diffusion weight D Δt / Δx² of one pass.
+// Diffusion weight D Δt / Δx² of one pass at the reference step, and that step (s).
 const DIFFUSE_LAMBDA: f32 = 0.125;
+const DIFFUSE_REFERENCE_STEP_S: f32 = 600.0;
 // Terrain-scale surface wind (docs/research/dust.md, "Surface wind"; Paris et al. 2019 §4.2-4.3).
 const VENTURI_K: f32 = 0.005;
 const VENTURI_RING_M: f32 = 50.0;
@@ -175,24 +176,19 @@ fn snow_drift_apply(@builtin(global_invocation_id) id: vec3<u32>) {
     let own = drift[k];
     var swe = snow[k].y - own.x - own.y;
     var depth = snow[k].x - own.z - own.w;
-    // Zero-gradient inflow at the upwind edge: the ghost cell sends what this one sends.
+    // Closed edges: nothing enters from outside the grid, nothing leaves through the downwind
+    // edge (`snow_drift_flux`), so drift conserves snow exactly.
     let from_x = c - vec2<i32>(sgn.x, 0);
     if in_grid(from_x) {
         let d = drift[cell_index(from_x)];
         swe += d.x;
         depth += d.z;
-    } else {
-        swe += own.x;
-        depth += own.z;
     }
     let from_z = c - vec2<i32>(0, sgn.y);
     if in_grid(from_z) {
         let d = drift[cell_index(from_z)];
         swe += d.y;
         depth += d.w;
-    } else {
-        swe += own.y;
-        depth += own.w;
     }
     var s = snow[k];
     if swe <= 0.0 {
@@ -204,15 +200,29 @@ fn snow_drift_apply(@builtin(global_invocation_id) id: vec3<u32>) {
     snow[k] = s;
 }
 
+// Diffusion weight of one pass at this step's length: `DIFFUSE_LAMBDA` at the longest step (600 s),
+// proportionally less for shorter ones, so the smoothing is a rate in game time and does not
+// depend on how many steps a second the frame rate allows.
+fn diffuse_lambda() -> f32 {
+    return DIFFUSE_LAMBDA * min(params.sim.x / DIFFUSE_REFERENCE_STEP_S, 1.0);
+}
+
 fn relax(own: vec4<f32>, n: vec4<f32>, e: vec4<f32>, s: vec4<f32>, w: vec4<f32>) -> vec4<f32> {
+    let lambda = diffuse_lambda();
     var out = own;
-    out.x = own.x + DIFFUSE_LAMBDA * (n.x + e.x + s.x + w.x - 4.0 * own.x);
-    out.y = own.y + DIFFUSE_LAMBDA * (n.y + e.y + s.y + w.y - 4.0 * own.y);
+    out.x = own.x + lambda * (n.x + e.x + s.x + w.x - 4.0 * own.x);
+    out.y = own.y + lambda * (n.y + e.y + s.y + w.y - 4.0 * own.y);
     if out.y <= 0.0 {
         out.x = 0.0;
         out.y = 0.0;
     }
     return out;
+}
+
+// Whether snow may be exchanged with the cell: a cell under a blocker is a wall, so the shelter
+// stays bare and the snow beside it keeps its edge.
+fn open_cell(k: u32) -> bool {
+    return shelter[k].y > 0.0;
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -222,17 +232,26 @@ fn snow_diffuse_a(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let c = vec2<i32>(id.xy);
-    let own = snow[cell_index(c)];
+    let k = cell_index(c);
+    let own = snow[k];
+    if !open_cell(k) {
+        drift[k] = own;
+        return;
+    }
     // No-flux edges: a missing neighbour is the cell itself.
     var n = own;
     var e = own;
     var s = own;
     var w = own;
-    if in_grid(c + vec2<i32>(0, -1)) { n = snow[cell_index(c + vec2<i32>(0, -1))]; }
-    if in_grid(c + vec2<i32>(1, 0)) { e = snow[cell_index(c + vec2<i32>(1, 0))]; }
-    if in_grid(c + vec2<i32>(0, 1)) { s = snow[cell_index(c + vec2<i32>(0, 1))]; }
-    if in_grid(c + vec2<i32>(-1, 0)) { w = snow[cell_index(c + vec2<i32>(-1, 0))]; }
-    drift[cell_index(c)] = relax(own, n, e, s, w);
+    let cn = c + vec2<i32>(0, -1);
+    let ce = c + vec2<i32>(1, 0);
+    let cs = c + vec2<i32>(0, 1);
+    let cw = c + vec2<i32>(-1, 0);
+    if in_grid(cn) && open_cell(cell_index(cn)) { n = snow[cell_index(cn)]; }
+    if in_grid(ce) && open_cell(cell_index(ce)) { e = snow[cell_index(ce)]; }
+    if in_grid(cs) && open_cell(cell_index(cs)) { s = snow[cell_index(cs)]; }
+    if in_grid(cw) && open_cell(cell_index(cw)) { w = snow[cell_index(cw)]; }
+    drift[k] = relax(own, n, e, s, w);
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -242,16 +261,25 @@ fn snow_diffuse_b(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let c = vec2<i32>(id.xy);
-    let own = drift[cell_index(c)];
+    let k = cell_index(c);
+    let own = drift[k];
+    if !open_cell(k) {
+        snow[k] = own;
+        return;
+    }
     var n = own;
     var e = own;
     var s = own;
     var w = own;
-    if in_grid(c + vec2<i32>(0, -1)) { n = drift[cell_index(c + vec2<i32>(0, -1))]; }
-    if in_grid(c + vec2<i32>(1, 0)) { e = drift[cell_index(c + vec2<i32>(1, 0))]; }
-    if in_grid(c + vec2<i32>(0, 1)) { s = drift[cell_index(c + vec2<i32>(0, 1))]; }
-    if in_grid(c + vec2<i32>(-1, 0)) { w = drift[cell_index(c + vec2<i32>(-1, 0))]; }
-    snow[cell_index(c)] = relax(own, n, e, s, w);
+    let cn = c + vec2<i32>(0, -1);
+    let ce = c + vec2<i32>(1, 0);
+    let cs = c + vec2<i32>(0, 1);
+    let cw = c + vec2<i32>(-1, 0);
+    if in_grid(cn) && open_cell(cell_index(cn)) { n = drift[cell_index(cn)]; }
+    if in_grid(ce) && open_cell(cell_index(ce)) { e = drift[cell_index(ce)]; }
+    if in_grid(cs) && open_cell(cell_index(cs)) { s = drift[cell_index(cs)]; }
+    if in_grid(cw) && open_cell(cell_index(cw)) { w = drift[cell_index(cw)]; }
+    snow[k] = relax(own, n, e, s, w);
 }
 
 @compute @workgroup_size(8, 8, 1)
