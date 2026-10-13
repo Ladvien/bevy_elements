@@ -9,6 +9,7 @@ mod flash;
 mod flora;
 mod fog;
 mod gpu;
+mod lightning;
 mod plugin;
 mod query;
 mod wind;
@@ -48,8 +49,12 @@ pub use fog::{
 // Clouds.
 pub use clouds::{CloudLayer, CloudPlugin, CloudQuality, CloudShadows, CloudWeatherMap};
 
-// Lightning flash, shared by the lightning and cloud domains.
+// Lightning and thunder; `LightningFlash` is shared with the cloud and precipitation passes.
 pub use flash::LightningFlash;
+pub use lightning::{
+    FLASH_LUMENS, LightningPlugin, LightningStrike, SPEED_OF_SOUND_MS, STRIKE_RADIUS_M,
+    StrikeLightning, Thunder,
+};
 
 // `bevy_flora` integration.
 #[cfg(feature = "flora")]

@@ -17,6 +17,7 @@ use crate::climate::{ClimatePlugin, Weather};
 use crate::clouds::CloudPlugin;
 use crate::fog::FogPlugin;
 use crate::gpu::readback::ReadbackPlugin;
+use crate::lightning::LightningPlugin;
 use crate::query::EnvironmentSnapshot;
 use crate::wind::{WindPlugin, WindState};
 
@@ -39,6 +40,7 @@ impl PluginGroup for ElementsPlugins {
             .add(WindPlugin)
             .add(FogPlugin)
             .add(CloudPlugin)
+            .add(LightningPlugin)
     }
 }
 
