@@ -24,6 +24,7 @@ const BASE_TEXELS: i32 = 512;
 const OCTAVE_GAIN: f32 = 0.35;
 const BASE_CELLS: f32 = 8.0;
 const FOAM_CELLS: f32 = 4.0;
+const FOAM_STRETCH: f32 = 2.5;
 
 // Height at integer texel `t` of the full-resolution map, wrapped. Octave `o` has `8·2^o` lattice
 // cells across the tile (wavelength `64/2^o` texels) and the same period, so the sum tiles.
@@ -53,6 +54,8 @@ fn water_normals(@builtin(global_invocation_id) id: vec3<u32>) {
     let hy = height(centre + vec2<i32>(0, 1)) - height(centre - vec2<i32>(0, 1));
     let n = normalize(vec3<f32>(-params.gain.x * hx, -params.gain.x * hy, 1.0));
     let u = (vec2<f32>(id.xy) + 0.5) / f32(edge);
-    let foam = 0.5 + 0.5 * fbm3_periodic(vec3<f32>(u * FOAM_CELLS, 7.3), i32(FOAM_CELLS), params.level.w);
+    // The periodic fbm is narrow (p10–p90 of 0.41–0.58 once centred), so it is stretched to use
+    // the range the patchiness thresholds of `water.wesl` select from.
+    let foam = 0.5 + 0.5 * clamp(FOAM_STRETCH * fbm3_periodic(vec3<f32>(u * FOAM_CELLS, 7.3), i32(FOAM_CELLS), params.level.w), -1.0, 1.0);
     textureStore(out_tex, vec2<i32>(id.xy), vec4<f32>(n * 0.5 + 0.5, clamp(foam, 0.0, 1.0)));
 }

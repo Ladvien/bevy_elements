@@ -115,8 +115,8 @@ fn setup(
         Transform::from_xyz(MARKER_X, bed_m(MARKER_X, 0.0) + 3.0, 0.0),
     ));
     commands.spawn(camera(
-        Vec3::new(-150.0, 22.0, 70.0),
-        Vec3::new(-120.0, 3.0, 0.0),
+        Vec3::new(-165.0, 14.0, 30.0),
+        Vec3::new(-150.0, 0.0, 0.0),
     ));
     director.force(WeatherPreset::Rain, Duration::ZERO);
 }

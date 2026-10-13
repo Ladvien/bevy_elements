@@ -169,6 +169,18 @@ fn gpu_water_normals_tile_and_have_the_cox_munk_slope() {
     // The foam patchiness in alpha is centred.
     let alpha = (0..n * n).map(|i| f32::from(bytes[i * 4 + 3]) / 255.0).sum::<f32>() / (n * n) as f32;
     println!("alpha mean: {alpha}");
+    let mut sorted: Vec<u8> = (0..n * n).map(|i| bytes[i * 4 + 3]).collect();
+    sorted.sort_unstable();
+    let percentile = |p: f32| f32::from(sorted[((n * n - 1) as f32 * p) as usize]) / 255.0;
+    println!(
+        "alpha percentiles: p10 {:.3} p25 {:.3} p50 {:.3} p75 {:.3} p90 {:.3} p95 {:.3}",
+        percentile(0.1),
+        percentile(0.25),
+        percentile(0.5),
+        percentile(0.75),
+        percentile(0.9),
+        percentile(0.95)
+    );
     assert!((0.3..=0.7).contains(&alpha), "alpha mean {alpha}");
     app.world_mut().write_message(AppExit::Success);
 }

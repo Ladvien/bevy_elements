@@ -377,7 +377,7 @@ fn mips_keep_the_expected_share_of_the_slope() {
     let mean = (0..4096)
         .map(|i| {
             let u = Vec2::new((i % 64) as f32, (i / 64) as f32 + 0.5) / 64.0;
-            0.5 + 0.5 * fbm3_periodic(Vec3::new(u.x * 4.0, u.y * 4.0, 7.3), 4, 4)
+            0.5 + 0.5 * (2.5 * fbm3_periodic(Vec3::new(u.x * 4.0, u.y * 4.0, 7.3), 4, 4)).clamp(-1.0, 1.0)
         })
         .sum::<f32>()
         / 4096.0;

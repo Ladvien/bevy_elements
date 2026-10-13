@@ -275,7 +275,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let t_eff = refracted_thickness(t_ray, cos_v, water.absorption.w);
 
     // Foam: fast flow, and the contact with anything the water meets (shoreline, rocks, posts).
-    let blotch = smoothstep(0.30, 0.65, flow.patch_noise);
+    let blotch = smoothstep(0.45, 0.75, flow.patch_noise);
     let f_speed = foam_from_speed(length(column.velocity)) * blotch;
     let f_contact = foam_from_thickness(t_ray) * mix(1.0, blotch, smoothstep(0.02, 0.03, t_ray));
     let foam = max(f_speed, f_contact);
