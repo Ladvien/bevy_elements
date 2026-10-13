@@ -13,7 +13,7 @@ use bevy::render::render_resource::ShaderType;
 use crate::celestial::{CelestialFrame, SunState, cloud_transmission, scene_illuminance};
 use crate::climate::{Weather, WeatherDirector, WeatherPreset};
 use crate::gpu::grid::storage_volume;
-use crate::plugin::{ElementsCamera, ElementsSystems, ElementsView, ensure_core};
+use crate::plugin::{ElementsCamera, ElementsSystems, ElementsView, ensure_gpu_core};
 
 /// Koschmieder's constant for a 2 % contrast threshold: extinction = 3.912 / visibility.
 pub const KOSCHMIEDER: f32 = 3.912;
@@ -109,7 +109,7 @@ pub struct FogPlugin;
 
 impl Plugin for FogPlugin {
     fn build(&self, app: &mut App) {
-        ensure_core(app);
+        ensure_gpu_core(app);
         embedded_asset!(app, "density.wesl");
         app.init_resource::<FogRuntime>()
             .add_systems(Startup, spawn_volume)

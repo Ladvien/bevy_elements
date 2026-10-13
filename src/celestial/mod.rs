@@ -13,7 +13,7 @@ pub(crate) use clock::plugin as clock_plugin;
 pub use clock::{CivilDate, GeoLocation, WorldClock};
 
 use crate::climate::Weather;
-use crate::plugin::{ElementsCamera, ElementsSystems, ensure_core};
+use crate::plugin::{ElementsCamera, ElementsSystems, ensure_gpu_core};
 
 /// Marks the sun's `DirectionalLight`.
 #[derive(Component, Clone, Copy, Debug, Default, Reflect)]
@@ -90,7 +90,7 @@ pub struct CelestialPlugin;
 
 impl Plugin for CelestialPlugin {
     fn build(&self, app: &mut App) {
-        ensure_core(app);
+        ensure_gpu_core(app);
         app.init_resource::<CelestialFrame>()
             .add_systems(Startup, spawn_lights)
             .add_systems(

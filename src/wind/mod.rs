@@ -16,7 +16,7 @@ use bevy::render::storage::ShaderBuffer;
 use crate::climate::{Climate, Weather};
 use crate::gpu::grid::{storage_buffer, storage_volume};
 use crate::gpu::readback::{Readbacks, decode};
-use crate::plugin::{ElementsQuality, ElementsSystems, ElementsView, ensure_core};
+use crate::plugin::{ElementsQuality, ElementsSystems, ElementsView, ensure_gpu_core};
 use crate::query::EnvironmentSnapshot;
 
 /// Wind cell edge, m (horizontal and vertical).
@@ -234,7 +234,7 @@ pub struct WindPlugin;
 
 impl Plugin for WindPlugin {
     fn build(&self, app: &mut App) {
-        ensure_core(app);
+        ensure_gpu_core(app);
         embedded_asset!(app, "sim.wesl");
         app.init_resource::<WindRuntime>()
             .add_message::<WindGust>()

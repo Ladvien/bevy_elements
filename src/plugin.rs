@@ -137,17 +137,14 @@ pub(crate) struct ElementsView {
     pub position: Vec3,
 }
 
-/// Shared setup every domain plugin needs: the system sets, the shared shader libraries, the
-/// snapshot, the quality knob and the camera observer. Added once by whichever domain comes first.
+/// Shared CPU setup every domain needs: the system sets, the clock, the followed view, the
+/// quality knob and the resources [`Environment`](crate::Environment) reads. Runs without a
+/// renderer (`MinimalPlugins`). Added once by whichever domain comes first.
 pub(crate) struct ElementsCorePlugin;
 
 impl Plugin for ElementsCorePlugin {
     fn build(&self, app: &mut App) {
-        load_shader_library!(app, "noise.wesl");
-        load_shader_library!(app, "grid.wesl");
-        load_shader_library!(app, "wind.wesl");
         clock_plugin(app);
-
         app.configure_sets(
             Update,
             (
@@ -165,9 +162,21 @@ impl Plugin for ElementsCorePlugin {
         .init_resource::<Weather>()
         .init_resource::<SunState>()
         .init_resource::<WindState>()
-        .add_plugins(ReadbackPlugin)
-        .add_observer(dress_camera)
         .add_systems(Update, follow_camera.in_set(ElementsSystems::Clock));
+    }
+}
+
+/// Shared rendering setup: the public WESL libraries, the readback scheduler and the camera
+/// dressing. Added once by whichever GPU domain comes first.
+pub(crate) struct ElementsGpuCorePlugin;
+
+impl Plugin for ElementsGpuCorePlugin {
+    fn build(&self, app: &mut App) {
+        ensure_core(app);
+        load_shader_library!(app, "noise.wesl");
+        load_shader_library!(app, "grid.wesl");
+        load_shader_library!(app, "wind.wesl");
+        app.add_plugins(ReadbackPlugin).add_observer(dress_camera);
     }
 }
 
@@ -175,6 +184,13 @@ impl Plugin for ElementsCorePlugin {
 pub(crate) fn ensure_core(app: &mut App) {
     if !app.is_plugin_added::<ElementsCorePlugin>() {
         app.add_plugins(ElementsCorePlugin);
+    }
+}
+
+/// Add [`ElementsGpuCorePlugin`] (and the CPU core) unless another domain already did.
+pub(crate) fn ensure_gpu_core(app: &mut App) {
+    if !app.is_plugin_added::<ElementsGpuCorePlugin>() {
+        app.add_plugins(ElementsGpuCorePlugin);
     }
 }
 
