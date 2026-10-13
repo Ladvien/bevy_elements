@@ -57,8 +57,12 @@ Hillaire 2015 (Frostbite volumetrics) is not in the corpus; the 2015 `froxel` hi
 |---|---|---|
 | `s2015-advances-ppt-944-mb-pdf-5-mb-2` ★ | Schneider 2015, *The real-time volumetric cloudscapes of Horizon Zero Dawn* | seed: Perlin-Worley, weather map, Beer–powder, temporal reprojection |
 | `s2017-advances-pdf-slides-13mb` | Schneider 2017, *Nubis: authoring real-time volumetric cloudscapes with the Decima engine* | improvements over 2015 |
-| `s2021-advances-pdf-66-mb` | Patry 2021 (Ghost of Tsushima clouds) | |
+| `s2021-advances-pdf-66-mb` | Patry 2021, *Real-time samurai cinema* (Ghost of Tsushima): atmospheric lighting ll. 1883–2060, cloud slides ll. 2181–2380 | shipped alternative: paraboloid cloud map time-sliced over 60 frames |
 | `eth-cgl-visualization-Rim17a`, `-Rim18a` | Rimensberger, *Visualization of clouds and atmospheric air flows* | |
+| `book_real_time_rendering_4th_akenine` §14.4.2 (ll. 17713–17895) | Real-Time Rendering 4th ed., *Clouds* | σ_t ranges for stratus and cumulus, 4×4 reprojection |
+| `10.48550_arxiv.2310.15364` | Sampling-pattern paper, §2 on interleaved gradient noise | why IGN suits temporal accumulation |
+
+Not in the corpus (read from PDFs or URLs, see `clouds.md`): Hillaire 2016 *Physically based sky, atmosphere and cloud rendering in Frostbite* (EA PDF), Högfeldt 2016 Chalmers MSc thesis, Häggström *Real-time rendering of volumetric clouds* (OpenAlex W2562034945, download stalls), Wrenninge et al. 2013 *Oz: the great and volumetric*, Kasten & Czeplak 1980. Not useful for clouds: `s2025-advances-materials*` (talk titles only), `eth-cgl-various-Ke24a`.
 
 ### Precipitation, lightning, wetness and puddles (M2, M4)
 
