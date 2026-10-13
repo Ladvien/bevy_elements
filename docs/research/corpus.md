@@ -108,6 +108,8 @@ Fetched for M3 (2026-10-13), text from `pdftotext -layout` in `/tmp/research/pdf
 | `10.1145_97880.97884` | Kass & Miller 1990, *Rapid, stable fluid dynamics for computer graphics* | SciDB, ingested |
 | `chentanez2010` | Chentanez & Müller 2010, *Real-time simulation of large bodies of water with small scale details* (SCA) | open PDF `matthias-research.github.io/pages/publications/hfFluid.pdf` |
 
+Also used by `hydrology.md` / `erosion.md`: `10.1145_3658213` (critical angle ≈ 30°, sediment-first layering), `10.1111_cgf.15033` (thermal law), `10.21203_rs.3.rs-4256563_v1`, `eth-cgl-sim_anim-Sol11b`, `10.5194_hess-29-1259-2025` (Oudin potential evapotranspiration). Not in the corpus: Cozzolino et al. 2020, *LInA* local-inertia scheme (`10.48550_arxiv.2009.11188`, the pipe-area and Manning terms); Bates et al. 2010 (abstract only).
+
 ### Water rendering (M3)
 
 | stem | what it is | use |
