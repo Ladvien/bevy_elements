@@ -49,7 +49,7 @@ $$ T(h,\mathrm{doy},z) = T_{mean} + A_{ann}\cos\frac{2\pi(\mathrm{doy}-d_{warm})
 
 **Scheduler hash.** $h = \mathrm{mix}\big(\mathrm{seed} \oplus (i\cdot \mathtt{0x9E3779B97F4A7C15}) \bmod 2^{64}\big)$ where mix is the SplitMix64 finaliser: $z \leftarrow (z \oplus z\gg 30)\cdot \mathtt{0xBF58476D1CE4E5B9}$; $z \leftarrow (z \oplus z\gg 27)\cdot \mathtt{0x94D049BB133111EB}$; $z \oplus z\gg 31$ (all mod $2^{64}$). The plan says "SplitMix64 over (seed ^ hour_index·0x9E37…)"; this note fixes the reading as *finaliser applied to that value with no additional state increment*. (With increment-then-mix, `hash64(0, 0)` would equal `mix(G)`; the finaliser-only reading gives `hash64(0, 1) = mix(G)`.) This is the plan's reading, recorded here so the golden is unambiguous.
 
-**Unspecified in the plan, fixed here as [INFERENCE]:** base neighbour weights are 1.0 before the multipliers above; `hour_index` counts game hours since the clock's start instant (the golden uses 2026-01-01 00:00 as index 0); a neighbour whose weight is 0 is removed, and if all are 0 the preset stays.
+**Unspecified in the plan, fixed during implementation:** base neighbour weights are 1.0 except Fog (0.3) and DustStorm (0.2), see Deviations; `hour_index` is absolute (local hours since 2000-01-01 00:00); a neighbour whose weight is 0 is removed, and if all are 0 the preset stays unless its own gate is shut (then Overcast).
 
 ## Parameters
 
@@ -100,7 +100,16 @@ CPU only. Climate, season curves, the scheduler, `Weather`, `WeatherDirector`, `
 
 ## Deviations from this plan
 
-None.
+1. **Base neighbour weights for Fog (0.3) and DustStorm (0.2).** The plan fixes the weight multipliers ($s_{fog}/0.08$, $s_{dust}/0.08$) but not the base weights, which this note first took as 1.0. With base 1.0 the scheduler spent 19.6 % of temperate hours in fog ($s_{fog}$ = 0.08) and 26.1 % of desert hours in dust storms ($s_{dust}$ = 0.08), because Fog neighbours three presets and DustStorm two. Calibrated over 8 seeds × 8760 h (implementation session, 2026-10-13), base weights 0.3 and 0.2 give temperate fog 8.8 %, alpine 7.2 % (share 0.06), tundra 7.5 % (0.05), desert dust 8.2 % (0.08); thunderstorms needed no calibration (temperate 4.3 % for 0.05, tropical 22.5 % for 0.20). The `*_share` fields are therefore documented as approximate fractions of hours, and `preset_climates_spend_about_their_share_in_fog_dust_and_storms` asserts ±3.5 points. No external source: this makes the plan's own parameter names true.
+
+## Implementation decisions (no plan text to deviate from)
+
+- `hour_index` is absolute: floor of local hours since 2000-01-01 00:00 (`WorldClock::hours_since_2000`), so a seed and a date always draw the same hour, wherever the clock started. The golden covers indices for 2026-01-01 00:00 + 0…8759 starting from Clear.
+- The chain starts at Clear on the first frame, already settled.
+- A preset whose own gate is shut (Snow/Blizzard above 1 °C, Rain/Drizzle/Thunderstorm below −1 °C, DustStorm with `dust_share` 0) cannot stay; if every neighbour is gated too it moves to Overcast, the hub of every precipitation preset.
+- The scheduler keeps stepping while weather is forced, so `release` blends to the preset an unforced run shows at that hour.
+- A transition blends from the current blended values, not the previous target, so interrupting a transition does not jump.
+- `WeatherChanged` is written only when the preset actually changes.
 
 ## Pending index
 

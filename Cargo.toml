@@ -29,6 +29,17 @@ serde = ["dep:serde"]
 # nothing; the list is the minimal set for which `cargo build --release` passes.
 bevy = { version = "0.20.0", default-features = false, features = [
     "std",
+    "bevy_asset",         # Assets<T>, Handle<T>, embedded shaders, RenderAssetUsages
+    "bevy_render",        # compute pipelines, ShaderBuffer, readback, RenderGraph schedule
+    "bevy_core_pipeline", # Core3d schedule, camera_driver, DepthPrepass
+    "bevy_pbr",           # AtmosphereSettings, DistanceFog, materials
+    "bevy_light",         # DirectionalLight, Atmosphere, SunDisk, FogVolume, VolumetricFog
+    "bevy_camera",        # Camera, Hdr, Exposure, Projection
+    "bevy_image",         # Image, 3D storage textures, samplers
+    "bevy_mesh",          # Mesh for the star field and the moon disc
+    "bevy_shader",        # Shader, load_shader_library!, ShaderCacheError
+    "bevy_log",           # warn!/error! for misconfiguration and failed kernels
+    "bevy_color",         # Color for lights and fog
 ] }
 serde = { version = "1", features = ["derive"], optional = true }
 # Plain-old-data casts for the GPU uniform structs and the readback decode.
