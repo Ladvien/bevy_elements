@@ -11,7 +11,7 @@ import bevy_elements::noise::{perlin3, perlin3_d, fbm3};
 import bevy_elements::terrain::common::TerrainParams;
 import bevy_pbr::render::{
     mesh_functions,
-    mesh_view_bindings::view,
+    mesh_view_bindings::{view, lights},
     view_transformations::position_world_to_clip,
     pbr_fragment::pbr_input_from_standard_material,
 };
@@ -39,6 +39,8 @@ struct TerrainMaterialParams {
     shadow: vec4<f32>,
     // xyz: unit direction toward the light the map was made for. w: 1 when a map is bound.
     light: vec4<f32>,
+    // xyz: the water's absorption (1/m). w: its refractive index (0 without water rendering).
+    absorption: vec4<f32>,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> material: TerrainMaterialParams;
@@ -145,6 +147,19 @@ fn cloud_shadow_ratio(p: vec3<f32>) -> f32 {
     return clamp(here / camera, 0.0, 4.0);
 }
 
+// The light's way down to the bed through `depth` metres of water, per channel (water-rendering.md,
+// "The bed under the water"): `exp(-σ d / μ')` with `μ'` the sine of the sun's elevation after
+// refraction at the surface. The view leg back up is the water's own absorb pass.
+fn bed_transmittance(depth: f32) -> vec3<f32> {
+    let n = material.absorption.w;
+    if n <= 1.0 || depth <= 0.0 || lights.n_directional_lights == 0u {
+        return vec3<f32>(1.0);
+    }
+    let mu = clamp(lights.directional_lights[0].direction_to_light.y, 0.05, 1.0);
+    let mu_r = sqrt(max(1.0 - (1.0 - mu * mu) / (n * n), 0.01));
+    return exp(-material.absorption.xyz * depth / mu_r);
+}
+
 @if(!PREPASS_PIPELINE || DEFERRED_PREPASS)
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
@@ -158,6 +173,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let c01 = terrain_cells[t.i01];
     let c11 = terrain_cells[t.i11];
     let sediment = mix(mix(c00.y, c10.y, t.w.x), mix(c01.y, c11.y, t.w.x), t.w.y);
+    let water_depth = mix(mix(c00.z, c10.z, t.w.x), mix(c01.z, c11.z, t.w.x), t.w.y);
     let g = mix(
         mix(unpack2x16float(bitcast<u32>(c00.w)), unpack2x16float(bitcast<u32>(c10.w)), t.w.x),
         mix(unpack2x16float(bitcast<u32>(c01.w)), unpack2x16float(bitcast<u32>(c11.w)), t.w.x),
@@ -184,7 +200,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     pbr_input.world_normal = n;
     pbr_input.N = n;
 
-    let ratio = cloud_shadow_ratio(p);
+    let ratio = vec3<f32>(cloud_shadow_ratio(p)) * bed_transmittance(water_depth);
 @if(PREPASS_PIPELINE) {
     // Deferred: the lighting runs later, so the shadow scales the albedo instead.
     pbr_input.material.base_color = vec4<f32>(albedo * ratio, 1.0);
