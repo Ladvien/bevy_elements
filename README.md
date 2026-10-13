@@ -2,14 +2,16 @@
 
 > ⚠️ **Vibe Coded** — written by an AI agent working from a human's direction. It is used in a shipping game and covered by tests, but it has had no line-by-line human audit. Read it before you trust it.
 
-**Living environments for Bevy 0.20.** A sun and moon placed by real ephemerides, the bright-star sky, a seeded climate that schedules hourly weather, a GPU wind field, distance and ground fog, and exposure that keeps night looking like night. Simulation runs in compute shaders; gameplay asks the `Environment` system parameter and is answered from a throttled async readback.
+**Living environments for Bevy 0.20.** A sun and moon placed by real ephemerides, the bright-star sky, a seeded climate that schedules hourly weather, a GPU wind field, volumetric clouds that shade the ground, rain and snow, lightning and thunder, distance and ground fog, and exposure that keeps night looking like night. Simulation runs in compute shaders; gameplay asks the `Environment` system parameter and is answered from a throttled async readback.
 
 | | | |
 |---|---|---|
-| ![Solstice noon at latitude 45°: a 68° sun, short shadows](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/noon.png) | ![19:30 on the solstice: a 2° sun, long warm shadows, the sky graded to the horizon](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/sunset.png) | ![23:00: stars from the Yale Bright Star Catalogue, a half moon low in the east, moon shadows](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/night.png) |
-| Noon, 21 June, 45° N | Sunset 19:30 | 23:00, half moon |
-| ![The Fog preset: a bright ground-fog bank hiding everything past 100 m, blue sky overhead](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/fog.png) | ![The Clear preset of the same scene](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/clear.png) | ![bevy_flora trees in autumn colour moved by this crate's wind and rain](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/flora_wind.png) |
-| `Fog` preset | `Clear` preset | with `bevy_flora` |
+| ![Partly cloudy at 10:00: domed cumulus with sunlit tops over the test scene](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/clouds.png) | ![The same sky at sunset: cloud bases lit pink and orange from below, distant clouds fading into haze](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/cloud_sunset.png) | ![A thunderstorm at 23:00 three frames into a strike: the cloud deck lit from inside, wind-driven rain, the ground lit by the flash](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/storm.png) |
+| `PartlyCloudy`, 10:00 | `PartlyCloudy`, sunset | `Thunderstorm` at night, mid-flash |
+| ![The Rain preset at 15:00: rain streaks, splash rings on the ground, a roof with a blocker keeping the rain off](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/rain.png) | ![Snowfall: flakes and haze under a grey sky](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/snowfall.png) | ![An overcast noon: a grey deck, soft light, no hard shadows](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/overcast.png) |
+| `Rain` | `Snow` | `Overcast` |
+| ![23:00: stars from the Yale Bright Star Catalogue, a half moon low in the east, moon shadows](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/night.png) | ![The Fog preset: a bright ground-fog bank hiding everything past 100 m](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/fog.png) | ![bevy_flora trees in autumn colour moved by this crate's wind and rain](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/flora_wind.png) |
+| 23:00, half moon | `Fog` | with `bevy_flora` |
 
 Every system was studied in the home-still paper library first. The note for each one, in [`docs/research/`](docs/research), names the papers, the equations adopted, every deviation from the plan with its source, and the numbers the tests assert.
 
@@ -193,21 +195,21 @@ Terrain at High (1024² cells, 2048 m, `hills(42)`), 3840 × 2160, the camera 30
 
 ## Platforms
 
-Native (Vulkan, Metal, DX12) and wasm WebGPU. WebGL2 is unsupported: the simulation needs compute. Simulation state lives in storage buffers and published fields in write-only `rgba16float` storage textures: the wind kernels share one layout of seven storage buffers and one storage texture, the fog kernel one storage texture, inside WebGPU's default limits of 8 and 4 per stage (devices limited to the `downlevel` 4 storage buffers are not supported). GPU timestamps for the bench exist on Vulkan and DX12 only.
+Native (Vulkan, Metal, DX12) and wasm WebGPU. WebGL2 is unsupported: the simulation needs compute. Simulation state lives in storage buffers and published fields in write-only `rgba16float` storage textures: the wind kernels share one layout of seven storage buffers and one storage texture, the fog kernel one storage texture, inside WebGPU's default limits of 8 and 4 per stage (devices limited to the `downlevel` 4 storage buffers are not supported). The cloud kernels bind at most one storage texture and two storage buffers each, the precipitation kernel four storage buffers; the precipitation draw reads its particles in the vertex stage, which needs `DownlevelFlags::VERTEX_STORAGE` (every Vulkan, Metal, DX12 and WebGPU device has it). GPU timestamps for the bench exist on Vulkan and DX12 only.
 
 ## What it deliberately does not do
 
 - Trees, foliage, leaf colour and snow on branches: `bevy_flora` owns them.
 - Isosurface and voxel meshing: `isomesh` owns it.
 - Oceans and FFT waves.
-- Bit-deterministic GPU simulation. Astronomy, the weather scheduler and (from 0.2) lightning are deterministic and seeded; GPU results are not.
+- Bit-deterministic GPU simulation. Astronomy, the weather scheduler and lightning are deterministic and seeded; GPU results are not.
 - A Purkinje shift or other low-light colour change: exposure keeps night dark, but colour handling is left to the tonemapper.
 
 ## Compatibility
 
 | bevy_elements | bevy |
 |---|---|
-| 0.1 | 0.20 |
+| 0.1, 0.2 | 0.20 |
 
 ## Research
 
@@ -232,8 +234,8 @@ Run with `cargo run --release --example <name>`. Every example takes `ELEMENTS_F
 | `terrain_tour` | The terrain presets; `ELEMENTS_PRESET=mountains`, `ELEMENTS_HOUR`, `ELEMENTS_EYE` / `ELEMENTS_LOOK` / `ELEMENTS_AGL`, `ELEMENTS_UNDERLAY=1` (a red plane under the terrain shows cracks) |
 | `external_ground` | A plain plane of your own shaded by `GroundExtension` over an `external()` terrain |
 | `day_night` | A solstice day at 45° N in two minutes; `ELEMENTS_HOUR=19.5` holds an hour |
-| `weather_tour` | Every preset for 20 s; `ELEMENTS_PRESET=Fog` holds one |
-| `storm` | A forced thunderstorm printing every strike and thunder; `ELEMENTS_HOUR=12` holds an hour, `ELEMENTS_STRIKE=1500` scripts a strike that far ahead on the last frame (for screenshots) |
+| `weather_tour` | Every preset for 20 s; `ELEMENTS_PRESET=Fog` holds one, `ELEMENTS_HOUR` holds an hour, `ELEMENTS_PITCH` / `ELEMENTS_HEADING` aim the camera (degrees) |
+| `storm` | A forced thunderstorm printing every strike and thunder; `ELEMENTS_HOUR=12` holds an hour, `ELEMENTS_STRIKE=1500` scripts a strike that far ahead on the last frame (for screenshots), `ELEMENTS_STRIKE_LEAD=3` that many frames earlier |
 | `rain` | Rain over a shelter with a blocker roof; `ELEMENTS_PRESET=Thunderstorm`, `ELEMENTS_HOUR=23` |
 | `snowfall` | The `Snow` preset (or `ELEMENTS_PRESET=Blizzard`); `ELEMENTS_HOUR` holds an hour |
 | `flora_wind` | `bevy_flora` trees in this crate's wind, season and rain (`--features flora`) |

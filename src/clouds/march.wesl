@@ -35,12 +35,18 @@ const FADE_START_M: f32 = 16000.0;
 /// mean cover (1 − 1/e of it at this length), m: a few cloud widths, so that under full cover
 /// the sky does not show through.
 const FAR_LENGTH_M: f32 = 4000.0;
-/// Optical depth toward the light of the far cloud the veil is lit like, at cover 0 and at cover
-/// 1: about a mean free path in for cumulus, the column depth of the model stratus at overcast.
-const FAR_TAU_CLEAR: f32 = 1.5;
-const FAR_TAU_OVERCAST: f32 = 6.0;
+/// Optical depth toward the light from the surface of the far cloud, along the vertical: the
+/// order of the model stratus's column depth (6.04, Validation 7), set to 5 by comparison with the
+/// marched cloud (Deviation 27 of the research note).
+const FAR_TAU: f32 = 5.0;
 /// Ray elevation (sine) below the horizon over which the far veil fades out.
 const HORIZON_BAND: f32 = 0.03;
+/// Cover over which the far field turns from broken cloud to a uniform deck, whose light path
+/// slants with the light.
+const DECK_COVER_FROM: f32 = 0.6;
+const DECK_COVER_TO: f32 = 0.95;
+/// Lowest sine of the light's elevation the deck's slanted light path is built for.
+const MIN_LIGHT_SINE: f32 = 0.1;
 
 fn medium_at(h: f32, xz: vec2<f32>, detail: bool) -> Medium {
     return cloud_medium(h, xz, detail, params, base_tex, detail_tex, weather_tex, smp_repeat);
@@ -106,25 +112,40 @@ fn aerial_perspective(uv: vec2<f32>, dir: vec3<f32>, depth: f32, o_r: f32) -> Ae
 }
 
 /// The cloud beyond the march and its fade: a uniform veil of the layer's mean cover over the
-/// path through the layer past `FADE_START_M`, lit like a cloud side one light mean free path in
-/// and seen through the air to the end of the march. Premultiplied exposed radiance (rgb) and
-/// transmittance (a). Under full cover the horizon keeps the cloud; at cover 0.05 it stays
-/// clear sky. Smooth in the ray, so it cannot alias (Deviation 26 of the research note).
+/// path through the layer past `FADE_START_M`, lit as the marched base is lit where the march
+/// fades and seen through the air to the cloud's own distance. Premultiplied exposed radiance
+/// (rgb) and transmittance (a). Under full cover the horizon keeps the cloud; at cover 0.05 it
+/// stays clear sky. Smooth in the ray, so it cannot alias (Deviations 26 and 27 of the research
+/// note).
 fn far_veil(uv: vec2<f32>, dir: vec3<f32>, shell: vec2<f32>, o_r: f32) -> vec4<f32> {
-    let length = shell.y - max(shell.x, FADE_START_M);
+    let t_start = max(shell.x, FADE_START_M);
+    let length = shell.y - t_start;
     let above = smoothstep(-HORIZON_BAND, 0.0, dir.y);
     let a = params.layer.w * (1.0 - exp(-max(length, 0.0) / FAR_LENGTH_M)) * above;
     if a <= 0.0 {
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
     }
     let l = params.light.xyz;
-    let h_mid = 0.5 * (params.layer.x + params.layer.y);
-    let sun = light_at(transmittance_lut, smp_clamp, h_mid, l.y, params);
+    // The surface the march sees at grazing angles is the base of the cloud: the optical depth
+    // toward the viewer reaches one within metres of it, so the sample is at the base, where the
+    // march's ambient gradient is `AMBIENT_BOTTOM`. A uniform deck lets the light in along the
+    // slant of its column; a broken layer lights its sides through about the column depth.
+    let h_b = params.layer.x;
+    let off = dir * t_start;
+    let mu_s = (dot(off.xz, l.xz) + (o_r + off.y) * l.y) / (params.camera.w + h_b);
+    let sun = light_at(transmittance_lut, smp_clamp, h_b, mu_s, params);
+    let deck = smoothstep(DECK_COVER_FROM, DECK_COVER_TO, params.layer.w);
+    let tau_l = FAR_TAU * mix(1.0, 1.0 / max(l.y, MIN_LIGHT_SINE), deck) * (1.0 + params.weather.w);
     let cos_t = dot(dir, l);
-    let ambient = params.light_e.w * (AMBIENT_BOTTOM + (1.0 - AMBIENT_BOTTOM) * 0.5);
-    let tau_l = mix(FAR_TAU_CLEAR, FAR_TAU_OVERCAST, params.layer.w);
-    let radiance = cloud_scatter(sun, tau_l, cos_t, clamp(0.5 - 0.5 * cos_t, 0.0, 1.0), ambient);
-    let air = aerial_perspective(uv, dir, max(shell.x, MAX_MARCH_M), o_r);
+    let radiance = cloud_scatter(
+        sun,
+        tau_l,
+        cos_t,
+        clamp(0.5 - 0.5 * cos_t, 0.0, 1.0),
+        params.light_e.w * AMBIENT_BOTTOM,
+    );
+    // The visible cloud of the veil lies about one build-up length past where it starts.
+    let air = aerial_perspective(uv, dir, t_start + FAR_LENGTH_M, o_r);
     return vec4<f32>(a * (radiance * air.transmittance + air.in_scatter) * view.exposure, 1.0 - a);
 }
 
