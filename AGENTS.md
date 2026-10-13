@@ -14,11 +14,12 @@ This repository, [`Ladvien/bevy_elements`](https://github.com/Ladvien/bevy_eleme
 
 No system is implemented without its `docs/research/<system>.md`, committed first. Protocol:
 
-1. Preflight with `hs status` (MCP `system_status`). If distill is down, run `hs restart` once; if it stays down, research continues without `distill_search` and `distill_index` is skipped and listed under the note's `Pending index`.
-2. For each seed DOI: `hs paper get --doi <doi>`, then MCP `paper_download {doi}`. Paywalled: skill `ingest-dois-via-anna-scidb`. Non-DOI sources: `hs paper search "<title>"`, else record the URL and read it.
-3. Convert with MCP `scribe_convert {stem}` (stem = lowercased DOI, `/` → `_`). Call it directly; do not wait for the watcher.
-4. Read with MCP `markdown_read {stem, page}`; index with `distill_index {stem}` when healthy.
-5. Write `docs/research/<system>.md` with headings: `## Sources`, `## Model adopted`, `## Parameters`, `## GPU mapping`, `## Validation targets`, `## Deviations from this plan`, `## Pending index`. A default changes only with a cited source recorded under `Deviations`.
+1. **Search the corpus first.** The library already holds 12 178 converted documents, many under non-DOI stems (SIGGRAPH *Advances* course notes as `s<year>-advances-*`, books as `book_*`). `docs/research/corpus.md` lists what is there per domain and how to sync and search it (`~/.cache/bevy_elements_corpus/markdown`, phrase search, not catalog titles). Every note cites the relevant corpus documents, not only the plan's seeds.
+2. Preflight with `hs status` (MCP `system_status`). If distill is down, run `hs restart` once; if it stays down, research continues without `distill_search` and `distill_index` is skipped and listed under the note's `Pending index`.
+3. For each seed DOI not in the corpus: `hs paper get --doi <doi>`, then `hs paper download --doi <doi>` (MCP `paper_download`). Paywalled: skill `ingest-dois-via-anna-scidb`. Non-DOI sources: `hs paper search "<title>"`, else record the URL and read it.
+4. Convert with `hs scribe convert <pdf> --out <md>` (MCP `scribe_convert {stem}`; stem = lowercased DOI, `/` → `_`). If scribe drops regions, read the PDF's text directly and say so in the note.
+5. Read with MCP `markdown_read {stem, page}` or the synced file; index with `distill_index {stem}` when healthy.
+6. Write `docs/research/<system>.md` with headings: `## Sources`, `## Model adopted`, `## Parameters`, `## GPU mapping`, `## Validation targets`, `## Deviations from this plan`, `## Pending index`. A default changes only with a cited source recorded under `Deviations`.
 
 ## Plays well with the family
 
