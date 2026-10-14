@@ -147,17 +147,18 @@ fn setup(
     quality: Res<ElementsQuality>,
 ) {
     let lake = std::env::var("ELEMENTS_TERRAIN").as_deref() == Ok("lake");
-    let eye = commands.spawn(if lake {
-        // The lake fills half the frame.
-        camera(Vec3::new(-75.0, 45.0, 0.0), Vec3::new(0.0, 0.0, 0.0))
-    } else {
-        camera(
-            Vec3::new(0.0, 30.0, 0.0),
-            // Looking 20° above the horizon: about half the frame is cloud.
-            Vec3::new(150.0, 91.9, 80.0),
-        )
-    })
-    .id();
+    let eye = commands
+        .spawn(if lake {
+            // The lake fills half the frame.
+            camera(Vec3::new(-75.0, 45.0, 0.0), Vec3::new(0.0, 0.0, 0.0))
+        } else {
+            camera(
+                Vec3::new(0.0, 30.0, 0.0),
+                // Looking 20° above the horizon: about half the frame is cloud.
+                Vec3::new(150.0, 91.9, 80.0),
+            )
+        })
+        .id();
     // A terrain at the quality's full simulation resolution with a river's worth of water, so
     // hydrology and erosion run their full substeps every frame; `none` is the flat test scene.
     if lake {

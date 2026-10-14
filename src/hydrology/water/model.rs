@@ -20,7 +20,11 @@ const FADE_DEPTH: f32 = 0.03;
 
 /// `beer_lambert` of `water.wesl`.
 fn beer_lambert(sigma: Vec3, t: f32) -> Vec3 {
-    Vec3::new((-sigma.x * t).exp(), (-sigma.y * t).exp(), (-sigma.z * t).exp())
+    Vec3::new(
+        (-sigma.x * t).exp(),
+        (-sigma.y * t).exp(),
+        (-sigma.z * t).exp(),
+    )
 }
 
 /// `fresnel` of `water.wesl`: Schlick's approximation with `F₀ = 0.02`.
@@ -209,7 +213,11 @@ fn thickness_is_reconstructed_from_the_depth_prepass() {
     // Off the optical axis the thickness is along the ray, not along the view z.
     let off_axis = 20f32.to_radians();
     let ray_z = -off_axis.cos();
-    let t = thickness(-30.0 * off_axis.cos(), -(30.0 + 4.0) * off_axis.cos(), ray_z);
+    let t = thickness(
+        -30.0 * off_axis.cos(),
+        -(30.0 + 4.0) * off_axis.cos(),
+        ray_z,
+    );
     assert!(close(t, 4.0, 0.04), "off axis {t}");
     for (deg, ratio) in [(0.0f32, 1.000), (30.0, 0.935), (60.0, 0.659), (75.0, 0.377)] {
         let got = refracted_thickness(1.0, deg.to_radians().cos(), 1.33);
@@ -226,7 +234,11 @@ fn absorb_and_surface_composite_to_the_radiance_model() {
         let t = Vec3::new(rng.next(), rng.next(), rng.next());
         let foam = rng.next();
         let a = rng.next();
-        let dst = Vec3::new(rng.range(0.0, 5.0), rng.range(0.0, 5.0), rng.range(0.0, 5.0));
+        let dst = Vec3::new(
+            rng.range(0.0, 5.0),
+            rng.range(0.0, 5.0),
+            rng.range(0.0, 5.0),
+        );
         let s = Vec3::new(rng.next(), rng.next(), rng.next());
         // The absorb shader writes (X·a, a): `out = dst·src.rgb + (1 − src.a)·dst`.
         let x = (1.0 - f) * t * (1.0 - foam);
@@ -294,7 +306,10 @@ fn flow_phases_hide_the_restart() {
     let uv = Vec2::new(0.3, 0.7);
     let earlier = uv - o * 0.2;
     let later = uv - o * 0.4;
-    assert!((later - earlier).dot(v) < 0.0, "the coordinate moves against +v");
+    assert!(
+        (later - earlier).dot(v) < 0.0,
+        "the coordinate moves against +v"
+    );
     // The pattern sampled at the coordinate therefore moves with +v: a feature at `f` shows at
     // the position `x` with `x/L − o·p = f`, i.e. `x = L (f + o·p)`.
     assert!((o * 0.4 - o * 0.2).dot(v) > 0.0);
@@ -312,7 +327,11 @@ fn map_height(t: IVec2, octaves: u32) -> f32 {
     let mut amplitude = 1.0;
     for o in 0..octaves {
         let cells = 8.0 * (1u32 << o) as f32;
-        h += amplitude * perlin3_periodic(Vec3::new(u.x * cells, u.y * cells, 0.5 + o as f32), cells as i32);
+        h += amplitude
+            * perlin3_periodic(
+                Vec3::new(u.x * cells, u.y * cells, 0.5 + o as f32),
+                cells as i32,
+            );
         amplitude *= 0.35;
     }
     h
@@ -378,7 +397,8 @@ fn mips_keep_the_expected_share_of_the_slope() {
     let mean = (0..4096)
         .map(|i| {
             let u = Vec2::new((i % 64) as f32, (i / 64) as f32 + 0.5) / 64.0;
-            0.5 + 0.5 * (2.5 * fbm3_periodic(Vec3::new(u.x * 4.0, u.y * 4.0, 7.3), 4, 4)).clamp(-1.0, 1.0)
+            0.5 + 0.5
+                * (2.5 * fbm3_periodic(Vec3::new(u.x * 4.0, u.y * 4.0, 7.3), 4, 4)).clamp(-1.0, 1.0)
         })
         .sum::<f32>()
         / 4096.0;
@@ -392,7 +412,10 @@ fn the_normal_map_tiles_without_a_seam() {
     let n = NORMAL_TEXELS as i32;
     let k = NORMAL_SLOPE_GAIN;
     let mean_diff = |a: &dyn Fn(i32) -> Vec2, b: &dyn Fn(i32) -> Vec2| {
-        (0..n).map(|i| (a(i) - b(i)).abs().element_sum()).sum::<f32>() / n as f32
+        (0..n)
+            .map(|i| (a(i) - b(i)).abs().element_sum())
+            .sum::<f32>()
+            / n as f32
     };
     let slope = |x: i32, y: i32| map_slope(IVec2::new(x, y), 0, k);
     // Across the seam (column 511 to 0) against across the interior (columns 255 to 256).
@@ -400,7 +423,10 @@ fn the_normal_map_tiles_without_a_seam() {
     let interior_x = mean_diff(&|y| slope(255, y), &|y| slope(256, y));
     let seam_y = mean_diff(&|x| slope(x, n - 1), &|x| slope(x, 0));
     let interior_y = mean_diff(&|x| slope(x, 255), &|x| slope(x, 256));
-    assert!(seam_x <= 1.5 * interior_x, "columns: {seam_x} vs {interior_x}");
+    assert!(
+        seam_x <= 1.5 * interior_x,
+        "columns: {seam_x} vs {interior_x}"
+    );
     assert!(seam_y <= 1.5 * interior_y, "rows: {seam_y} vs {interior_y}");
 }
 
@@ -412,7 +438,11 @@ fn foam_follows_the_plan_thresholds() {
     assert!(close(foam_from_speed(1.5, s.foam_speed_ms), 0.5, 1e-6));
     assert_eq!(foam_from_speed(1.8, s.foam_speed_ms), 1.0);
     assert_eq!(foam_from_thickness(0.02, s.foam_thickness_m), 1.0);
-    assert!(close(foam_from_thickness(0.05, s.foam_thickness_m), 0.5, 1e-6));
+    assert!(close(
+        foam_from_thickness(0.05, s.foam_thickness_m),
+        0.5,
+        1e-6
+    ));
     assert_eq!(foam_from_thickness(0.08, s.foam_thickness_m), 0.0);
     // Froude 1 at 1.5 m/s: v²/g.
     assert!(close(1.5f32 * 1.5 / 9.81, 0.229, 5e-4));
@@ -438,9 +468,7 @@ fn the_surface_pass_sorts_after_its_absorb_pass() {
     let mut rng = Lcg(10);
     // `Transparent3d` sorts ascending by `distance + depth_bias`; the surface material's
     // `depth_bias` is 1.
-    let key = |range: &ViewRangefinder3d, centre: Vec3, bias: f32| {
-        range.distance(&centre) + bias
-    };
+    let key = |range: &ViewRangefinder3d, centre: Vec3, bias: f32| range.distance(&centre) + bias;
     for _ in 0..10_000 {
         let eye = Vec3::new(
             rng.range(-500.0, 500.0),
@@ -452,13 +480,24 @@ fn the_surface_pass_sorts_after_its_absorb_pass() {
             .looking_at(target, Vec3::Y)
             .compute_affine();
         let range = ViewRangefinder3d::from_world_from_view(&world_from_view);
-        let a = Vec3::new(rng.range(-500.0, 500.0), rng.range(0.0, 50.0), rng.range(-500.0, 500.0));
+        let a = Vec3::new(
+            rng.range(-500.0, 500.0),
+            rng.range(0.0, 50.0),
+            rng.range(-500.0, 500.0),
+        );
         let absorb = key(&range, a, 0.0);
         let surface = key(&range, a, 1.0);
-        assert!(surface > absorb, "the surface item sorts after its absorb item");
+        assert!(
+            surface > absorb,
+            "the surface item sorts after its absorb item"
+        );
         // Another patch whose centre is more than the bias away in view depth is not
         // interleaved with this one.
-        let b = Vec3::new(rng.range(-500.0, 500.0), rng.range(0.0, 50.0), rng.range(-500.0, 500.0));
+        let b = Vec3::new(
+            rng.range(-500.0, 500.0),
+            rng.range(0.0, 50.0),
+            rng.range(-500.0, 500.0),
+        );
         let (b_absorb, b_surface) = (key(&range, b, 0.0), key(&range, b, 1.0));
         if (b_absorb - absorb).abs() > 1.0 {
             let a_first = absorb < b_absorb;

@@ -49,12 +49,8 @@ pub(crate) struct NormalParams {
 /// normal, flat, with a foam alpha of 0.5.
 pub(crate) fn octaves_kept(level: u32) -> (u32, u32) {
     let two = 2u32 << level;
-    let height = (0..NORMAL_OCTAVES)
-        .filter(|o| (64u32 >> o) >= two)
-        .count() as u32;
-    let foam = (0..FOAM_OCTAVES)
-        .filter(|j| (128u32 >> j) >= two)
-        .count() as u32;
+    let height = (0..NORMAL_OCTAVES).filter(|o| (64u32 >> o) >= two).count() as u32;
+    let foam = (0..FOAM_OCTAVES).filter(|j| (128u32 >> j) >= two).count() as u32;
     (height, foam)
 }
 
@@ -97,7 +93,13 @@ fn normals_layout() -> BindGroupLayoutDescriptor {
 fn init_pipelines(mut commands: Commands, assets: Res<AssetServer>, cache: Res<PipelineCache>) {
     let shader = load_embedded_asset!(assets.as_ref(), "water_normals.wesl");
     commands.insert_resource(WaterPipelines {
-        normals: queue_kernel(&cache, shader, "water_normals", normals_layout(), Vec::new()),
+        normals: queue_kernel(
+            &cache,
+            shader,
+            "water_normals",
+            normals_layout(),
+            Vec::new(),
+        ),
     });
 }
 

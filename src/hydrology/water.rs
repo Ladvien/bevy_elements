@@ -505,8 +505,12 @@ pub(crate) fn water_params(
     wind_ms: f32,
 ) -> WaterParams {
     let u10 = settings.wind_speed_ms.unwrap_or(wind_ms);
-    let silt = Color::srgb(settings.silt_tint.x, settings.silt_tint.y, settings.silt_tint.z)
-        .to_linear();
+    let silt = Color::srgb(
+        settings.silt_tint.x,
+        settings.silt_tint.y,
+        settings.silt_tint.z,
+    )
+    .to_linear();
     WaterParams {
         terrain,
         lod,

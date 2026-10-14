@@ -32,7 +32,11 @@ fn pin_weather(mut weather: ResMut<Weather>) {
 #[derive(Resource)]
 struct Target(Handle<Image>);
 
-fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut director: ResMut<WeatherDirector>) {
+fn setup(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    mut director: ResMut<WeatherDirector>,
+) {
     let mut target = Image::new_target_texture(TARGET, TARGET, TextureFormat::Rgba16Float, None);
     target.texture_descriptor.usage |= TextureUsages::COPY_SRC;
     let image = images.add(target);
@@ -54,7 +58,9 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut director
 fn build() -> App {
     let mut app = App::new();
     app.add_plugins((support::headless_plugins(), ElementsPlugins))
-        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(DT)))
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            DT,
+        )))
         .insert_resource(ElementsQuality::Ultra)
         .insert_resource(HydrologySettings {
             boundary: HydrologyBoundary::Closed,
@@ -159,12 +165,23 @@ fn gpu_water_normals_tile_and_have_the_cox_munk_slope() {
     let interior_x = mean(&|y| (slope(255, y), slope(256, y)));
     let seam_y = mean(&|x| (slope(x, n - 1), slope(x, 0)));
     let interior_y = mean(&|x| (slope(x, 255), slope(x, 256)));
-    println!("seam {seam_x:.4} / interior {interior_x:.4} (columns), {seam_y:.4} / {interior_y:.4} (rows)");
-    assert!(seam_x <= 1.5 * interior_x, "column seam {seam_x} vs {interior_x}");
-    assert!(seam_y <= 1.5 * interior_y, "row seam {seam_y} vs {interior_y}");
+    println!(
+        "seam {seam_x:.4} / interior {interior_x:.4} (columns), {seam_y:.4} / {interior_y:.4} (rows)"
+    );
+    assert!(
+        seam_x <= 1.5 * interior_x,
+        "column seam {seam_x} vs {interior_x}"
+    );
+    assert!(
+        seam_y <= 1.5 * interior_y,
+        "row seam {seam_y} vs {interior_y}"
+    );
 
     // The foam patchiness in alpha is centred.
-    let alpha = (0..n * n).map(|i| f32::from(bytes[i * 4 + 3]) / 255.0).sum::<f32>() / (n * n) as f32;
+    let alpha = (0..n * n)
+        .map(|i| f32::from(bytes[i * 4 + 3]) / 255.0)
+        .sum::<f32>()
+        / (n * n) as f32;
     println!("alpha mean: {alpha}");
     let mut sorted: Vec<u8> = (0..n * n).map(|i| bytes[i * 4 + 3]).collect();
     sorted.sort_unstable();
@@ -256,11 +273,15 @@ fn gpu_water_absorption() {
             buffer.extend_from_slice(&vec![depth; (cells.x * cells.y) as usize]);
         }
         app.update();
-        app.world_mut().resource_mut::<HydrologySettings>().time_scale = 1.2 * 16.0;
+        app.world_mut()
+            .resource_mut::<HydrologySettings>()
+            .time_scale = 1.2 * 16.0;
         for _ in 0..30 {
             app.update();
         }
-        app.world_mut().resource_mut::<HydrologySettings>().time_scale = 0.0;
+        app.world_mut()
+            .resource_mut::<HydrologySettings>()
+            .time_scale = 0.0;
         for _ in 0..30 {
             app.update();
         }
@@ -278,7 +299,11 @@ fn gpu_water_absorption() {
     let surface: Vec<Entity> = {
         let world = app.world_mut();
         let mut query = world.query::<(Entity, &WaterPatch)>();
-        query.iter(world).filter(|(_, p)| p.surface).map(|(e, _)| e).collect()
+        query
+            .iter(world)
+            .filter(|(_, p)| p.surface)
+            .map(|(e, _)| e)
+            .collect()
     };
     for entity in surface {
         app.world_mut().despawn(entity);
