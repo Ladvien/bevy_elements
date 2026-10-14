@@ -11,7 +11,7 @@
 mod gpu;
 #[cfg(test)]
 mod gpu_tests;
-mod lod;
+pub(crate) mod lod;
 mod material;
 pub(crate) mod model;
 
@@ -41,7 +41,7 @@ pub use material::{
     GroundExtension, GroundMaterial, GroundParams, TerrainExtension, TerrainMaterial,
     TerrainMaterialParams,
 };
-pub(crate) use material::{NO_TERRAIN, insert_placeholder};
+pub(crate) use material::{NO_TERRAIN, insert_placeholder, lod_uniform, shadow_inputs};
 use model::{
     F_HALF, GAIN, LACUNARITY, LEAF_CELLS, OCTAVE_ROTATION, R_LOW, R_SPAN, octave_count,
     resolve_resolution, seed_mix,
@@ -353,7 +353,7 @@ struct PoolSlot {
 
 /// Main-world bookkeeping of the active terrain.
 #[derive(Resource, Default)]
-struct TerrainRuntime {
+pub(crate) struct TerrainRuntime {
     /// What the current resources were built from.
     active: Option<(Entity, Terrain, ElementsQuality)>,
     /// A terrain that failed validation: not retried until it changes.
@@ -362,7 +362,7 @@ struct TerrainRuntime {
     warned_transform: bool,
     warned_capacity: bool,
     /// The quadtree geometry of the active terrain.
-    lod: Option<LodConfig>,
+    pub(crate) lod: Option<LodConfig>,
     /// Min and max heights of every node, from the last bounds readback (before the first, the
     /// generator's analytic range).
     bounds: Option<BoundsTree>,
@@ -370,6 +370,13 @@ struct TerrainRuntime {
     /// The owned render's patch pool, empty for an external terrain.
     pool: Vec<PoolSlot>,
     patch_mesh: Option<Handle<Mesh>>,
+    /// The patches the last selection chose (the owned pool's contents, or what it would hold
+    /// for an external terrain): the water pool draws the wet ones.
+    pub(crate) selected: Vec<Patch>,
+    /// Surface min and water-surface max of every node, for the water patches' boxes.
+    pub(crate) water_box: Option<BoundsTree>,
+    /// Water depth max of every node (both entries): `get(..).1` is the deepest cell's depth.
+    pub(crate) water_depth: Option<BoundsTree>,
 }
 
 /// Heightmap formats the generator reads linearly, and whether the kernel is the integer one.
@@ -629,6 +636,9 @@ fn ensure_terrain(
     let lod = LodConfig::new(size.as_vec2() * cell, cell);
     let (low, high) = analytic_range(&terrain.source);
     runtime.bounds = Some(BoundsTree::uniform(&lod, low, high));
+    runtime.water_box = Some(BoundsTree::uniform(&lod, low, high));
+    runtime.water_depth = Some(BoundsTree::uniform(&lod, 0.0, 0.0));
+    runtime.selected.clear();
     runtime.bounds_version = 0;
     runtime.lod = Some(lod);
     if terrain.render == TerrainRender::Owned {
@@ -646,6 +656,7 @@ fn ensure_terrain(
             extension: TerrainExtension {
                 params: TerrainMaterialParams::default(),
                 cells: cells_handle,
+                cover: NO_TERRAIN,
                 cloud_shadow: None,
             },
         });
@@ -706,7 +717,7 @@ fn analytic_range(source: &TerrainSource) -> (f32, f32) {
 /// The patch every pool entity shares: a unit square of 32 × 32 quads (33 × 33 vertices,
 /// `u16` indices) in the XZ plane. The vertex shader places the vertices; only the grid index
 /// (position × 32) matters.
-fn patch_mesh() -> Mesh {
+pub(crate) fn patch_mesh() -> Mesh {
     const N: u16 = 32;
     let mut positions = Vec::with_capacity(usize::from((N + 1) * (N + 1)));
     for z in 0..=N {
@@ -733,10 +744,61 @@ fn patch_mesh() -> Mesh {
     .with_inserted_indices(Indices::U16(indices))
 }
 
+/// Slots for the `wanted` patches of a pool whose slots currently hold `current`: a patch keeps
+/// the slot it already has, the others take the free ones (the farthest are dropped when there
+/// are none). Returns the assignment and which slots are in use.
+pub(crate) fn assign_slots(
+    wanted: Vec<Patch>,
+    current: &[Option<Patch>],
+) -> (Vec<(Patch, usize)>, Vec<bool>) {
+    let slot_of: HashMap<Patch, usize> = current
+        .iter()
+        .enumerate()
+        .filter_map(|(i, patch)| patch.map(|p| (p, i)))
+        .collect();
+    let mut used = vec![false; current.len()];
+    let mut assigned: Vec<(Patch, usize)> = Vec::with_capacity(wanted.len());
+    let mut unmatched = Vec::new();
+    for patch in wanted {
+        match slot_of.get(&patch) {
+            Some(&i) => {
+                used[i] = true;
+                assigned.push((patch, i));
+            }
+            None => unmatched.push(patch),
+        }
+    }
+    let mut free = (0..used.len())
+        .filter(|i| !used[*i])
+        .collect::<Vec<_>>()
+        .into_iter();
+    for patch in unmatched {
+        if let Some(i) = free.next() {
+            used[i] = true;
+            assigned.push((patch, i));
+        }
+    }
+    (assigned, used)
+}
+
+/// The transform of a patch relative to the terrain entity: its corner on the grid, scaled to
+/// its edge.
+pub(crate) fn patch_transform(lod: &LodConfig, extent: Vec2, patch: Patch) -> (Vec3, Vec3) {
+    let size = lod.node_m(patch.level);
+    (
+        Vec3::new(
+            patch.ix as f32 * size - extent.x * 0.5,
+            0.0,
+            patch.iz as f32 * size - extent.y * 0.5,
+        ),
+        Vec3::new(size, 1.0, size),
+    )
+}
+
 /// Select the patches for the followed camera and write them into the pool, touching only the
 /// slots whose patch, transform or bounds changed. Idles without a camera and keeps the last
 /// pool. Runs before transform propagation so the new transforms are drawn this frame.
-fn update_patches(
+pub(crate) fn update_patches(
     mut runtime: ResMut<TerrainRuntime>,
     state: Option<Res<TerrainState>>,
     view: Res<ElementsView>,
@@ -746,7 +808,7 @@ fn update_patches(
     let (Some(state), Some(lod)) = (state, runtime.lod) else {
         return;
     };
-    if runtime.pool.is_empty() || view.entity.is_none() {
+    if view.entity.is_none() {
         return;
     }
     if let Some(leaves) = snapshot
@@ -759,6 +821,16 @@ fn update_patches(
         // The ranges follow the steepest node of every level.
         runtime.lod = Some(lod.derive(Some(&tree)));
         runtime.bounds = Some(tree);
+        runtime.water_box = Some(BoundsTree::from_leaves(
+            &lod,
+            leaves.dims,
+            leaves.bounds.iter().map(|b| (b.x, b.z)),
+        ));
+        runtime.water_depth = Some(BoundsTree::from_leaves(
+            &lod,
+            leaves.dims,
+            leaves.bounds.iter().map(|b| (b.w, b.w)),
+        ));
         runtime.bounds_version = leaves.version;
     }
     let Some(lod) = runtime.lod else {
@@ -784,35 +856,13 @@ fn update_patches(
         }
         wanted.truncate(POOL_CAPACITY);
     }
-    // Keep a patch in the slot it already has; give the others the free slots.
-    let mut slot_of: HashMap<Patch, usize> = HashMap::new();
-    for (i, slot) in runtime.pool.iter().enumerate() {
-        if let Some(patch) = slot.patch {
-            slot_of.insert(patch, i);
-        }
+    runtime.selected.clone_from(&wanted);
+    if runtime.pool.is_empty() {
+        runtime.bounds = Some(tree);
+        return;
     }
-    let mut used = vec![false; runtime.pool.len()];
-    let mut assigned: Vec<(Patch, usize)> = Vec::with_capacity(wanted.len());
-    let mut unmatched = Vec::new();
-    for patch in wanted {
-        match slot_of.get(&patch) {
-            Some(&i) => {
-                used[i] = true;
-                assigned.push((patch, i));
-            }
-            None => unmatched.push(patch),
-        }
-    }
-    let mut free = (0..used.len())
-        .filter(|i| !used[*i])
-        .collect::<Vec<_>>()
-        .into_iter();
-    for patch in unmatched {
-        if let Some(i) = free.next() {
-            used[i] = true;
-            assigned.push((patch, i));
-        }
-    }
+    let current: Vec<Option<Patch>> = runtime.pool.iter().map(|s| s.patch).collect();
+    let (assigned, used) = assign_slots(wanted, &current);
     let extent = grid.extent();
     for (i, slot) in runtime.pool.iter_mut().enumerate() {
         if used[i] {
@@ -831,13 +881,7 @@ fn update_patches(
         let Ok((mut transform, mut visibility, mut tag, mut aabb)) = patches.get_mut(entity) else {
             continue;
         };
-        let size = lod.node_m(patch.level);
-        let translation = Vec3::new(
-            patch.ix as f32 * size - extent.x * 0.5,
-            0.0,
-            patch.iz as f32 * size - extent.y * 0.5,
-        );
-        let scale = Vec3::new(size, 1.0, size);
+        let (translation, scale) = patch_transform(&lod, extent, patch);
         if transform.translation != translation || transform.scale != scale {
             transform.translation = translation;
             transform.scale = scale;

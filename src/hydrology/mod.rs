@@ -14,7 +14,14 @@
 //! readback interval old.
 
 mod gpu;
+pub(crate) use gpu::{HydrologyDispatch, HydrologyPipelines};
 pub(crate) mod model;
+mod water;
+mod water_gpu;
+
+pub use water::{
+    WaterExtension, WaterMaterial, WaterParams, WaterPatch, WaterPlugin, WaterSettings, WaterState,
+};
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -34,6 +41,7 @@ use crate::plugin::{ElementsQuality, ElementsSystems, ElementsView, ensure_gpu_c
 use crate::precipitation::{BlockerGpu, PrecipitationBlocker, nearest_blockers};
 use crate::query::EnvironmentSnapshot;
 use crate::terrain::{TerrainGpu, TerrainGrid, TerrainState};
+pub(crate) use gpu::HydrologyDispatch;
 pub use model::{MAX_WATER_SOURCES, evaporation_mm_h};
 use model::{
     MM_H_TO_M_S, QuantumAccumulator, Scheduler, THERMAL_PERIOD, depth_cap_m, source_entry,
@@ -106,8 +114,9 @@ pub struct ErosionSettings {
     /// The smallest slope sine used for the capacity, so flat water still carries a little.
     /// Default 0.05 (2.9°).
     pub min_tilt: f32,
-    /// The angle of repose, degrees: thermal erosion moves material from slopes steeper than
-    /// this. Bedrock moves only above this plus 10°. Default 35.
+    /// The angle of repose, degrees: thermal erosion moves loose sediment from slopes steeper
+    /// than this. Bedrock moves only above this plus 10°, and only during an [`ErodeTerrain`]
+    /// bake: a rock face stands at any angle on game time. Default 35.
     pub talus_deg: f32,
     /// The fraction of the largest stable transfer that one thermal pass (every 4th substep)
     /// moves. Default 0.15.
@@ -264,6 +273,38 @@ pub(crate) struct HydroParams {
     thermal: Vec4,
     /// x: terrain y0. y: depth readback downsample.
     extra: Vec4,
+}
+
+impl HydroParams {
+    /// The uniform of a thermal pass that is not hydrology's: the grid, the talus and the
+    /// thermal fraction. Bedrock moves only above `talus_deg + bedrock_extra_deg`, and an
+    /// excess that reaches 90° pins the threshold out of reach (no tangent), so the pass moves
+    /// loose sediment only.
+    pub(crate) fn avalanche(
+        grid: &TerrainGrid,
+        talus_deg: f32,
+        bedrock_extra_deg: f32,
+        rate: f32,
+    ) -> Self {
+        let bedrock_angle = talus_deg + bedrock_extra_deg;
+        let tan_bedrock = if bedrock_angle >= 89.9 {
+            model::UNREACHABLE_TAN
+        } else {
+            bedrock_angle.to_radians().tan()
+        };
+        Self {
+            origin: grid.origin,
+            cell: grid.cell_m,
+            size: grid.size,
+            thermal: Vec4::new(
+                talus_deg.to_radians().tan(),
+                tan_bedrock,
+                rate.clamp(0.0, 1.0),
+                0.0,
+            ),
+            ..Self::default()
+        }
+    }
 }
 
 /// The readback targets of the active terrain.
@@ -666,9 +707,15 @@ fn run_hydrology(
 
     let cell = grid.cell_m;
     let tan_talus = erosion.talus_deg.to_radians().tan();
-    let tan_bedrock = (erosion.talus_deg + model::BEDROCK_EXTRA_DEG)
-        .to_radians()
-        .tan();
+    // Rock faces collapse on geological time, so only a bake moves bedrock (erosion.md
+    // Deviation 15); on game time thermal erosion is the slumping of loose sediment.
+    let tan_bedrock = if runtime.bake.is_some() {
+        (erosion.talus_deg + model::BEDROCK_EXTRA_DEG)
+            .to_radians()
+            .tan()
+    } else {
+        model::UNREACHABLE_TAN
+    };
     gpu.params = HydroParams {
         origin: grid.origin,
         cell,

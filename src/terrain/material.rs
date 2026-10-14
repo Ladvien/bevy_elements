@@ -13,6 +13,8 @@ use bevy::shader::ShaderRef;
 use super::lod::{LodConfig, MAX_LEVELS};
 use super::{TerrainParamsGpu, TerrainState};
 use crate::clouds::CloudShadows;
+use crate::cover::{CoverState, WetnessSettings};
+use crate::weathered::ElementsGlobals;
 
 /// A one-cell `terrain_cells` stand-in for shaders that bind the terrain before one exists. Its
 /// uniform says "no terrain" (`TerrainParams::misc.z = 0`).
@@ -41,6 +43,14 @@ pub struct TerrainMaterialParams {
     pub(crate) shadow: Vec4,
     /// Unit direction toward the light; w = 1 with a map.
     pub(crate) light: Vec4,
+    /// The water's absorption σ (m⁻¹) in xyz and its refractive index in w (0: no sun-leg
+    /// attenuation under water).
+    pub(crate) absorption: Vec4,
+    /// Ground cover: x 1 when the cover maps are bound, y rain intensity `min(1, R_liquid / 20)`,
+    /// z puddle start depth (m), w full-puddle depth (m).
+    pub(crate) cover: Vec4,
+    /// Phase of each of the four ripple layers, 0–1 (zero while it does not rain).
+    pub(crate) ripple: Vec4,
 }
 
 /// The extension that turns a `StandardMaterial` into the terrain's displaced, layer-blended
@@ -51,6 +61,10 @@ pub struct TerrainExtension {
     pub(crate) params: TerrainMaterialParams,
     #[storage(101, read_only)]
     pub(crate) cells: Handle<ShaderBuffer>,
+    /// The cover pack (snow depth, wetness, SWE): read by the vertex stage for the snow
+    /// displacement too.
+    #[storage(102, read_only)]
+    pub(crate) cover: Handle<ShaderBuffer>,
     #[texture(103)]
     #[sampler(104)]
     pub(crate) cloud_shadow: Option<Handle<Image>>,
@@ -93,12 +107,19 @@ pub struct GroundParams {
     pub(crate) shadow: Vec4,
     /// Unit direction toward the light; w = 1 with a map.
     pub(crate) light: Vec4,
+    /// The water's absorption σ (m⁻¹) in xyz and its refractive index in w.
+    pub(crate) absorption: Vec4,
+    /// As `TerrainMaterialParams::cover`.
+    pub(crate) cover: Vec4,
+    /// As `TerrainMaterialParams::ripple`.
+    pub(crate) ripple: Vec4,
 }
 
 /// Shades a consumer's own mesh as the terrain's ground
-/// ([`TerrainRender::External`](crate::TerrainRender::External)): the ground darkens where water
-/// stands and cloud shadows fall on it, both by world XZ. It does not displace or blend layers;
-/// the mesh keeps its own geometry and vertex shader.
+/// ([`TerrainRender::External`](crate::TerrainRender::External)): snow covers it, it darkens and
+/// glosses when wet, water standing on it shows as a puddle with ripples while it rains, and
+/// cloud shadows fall on it, all by world XZ. It does not displace or blend layers; the mesh
+/// keeps its own geometry and vertex shader (so snow whitens it but does not raise it).
 ///
 /// Use it as `ExtendedMaterial<StandardMaterial, GroundExtension>` with
 /// `GroundExtension::default()`; the crate keeps its buffer, grid and shadow map current every
@@ -110,6 +131,8 @@ pub struct GroundExtension {
     pub(crate) params: GroundParams,
     #[storage(101, read_only)]
     pub(crate) terrain: Handle<ShaderBuffer>,
+    #[storage(102, read_only)]
+    pub(crate) cover: Handle<ShaderBuffer>,
     #[texture(103)]
     #[sampler(104)]
     pub(crate) cloud_shadow: Option<Handle<Image>>,
@@ -120,6 +143,7 @@ impl Default for GroundExtension {
         Self {
             params: GroundParams::default(),
             terrain: NO_TERRAIN,
+            cover: NO_TERRAIN,
             cloud_shadow: None,
         }
     }
@@ -136,7 +160,7 @@ pub type GroundMaterial = ExtendedMaterial<StandardMaterial, GroundExtension>;
 
 /// The cloud shadow part of both uniforms: map origin and extent, the camera's transmittance, the
 /// light direction, and the map handle.
-fn shadow_inputs(shadows: Option<&CloudShadows>) -> (Vec4, Vec4, Option<Handle<Image>>) {
+pub(crate) fn shadow_inputs(shadows: Option<&CloudShadows>) -> (Vec4, Vec4, Option<Handle<Image>>) {
     match shadows {
         Some(s) => (
             Vec4::new(s.origin.x, s.origin.y, s.extent, s.camera_transmittance),
@@ -151,42 +175,90 @@ fn shadow_inputs(shadows: Option<&CloudShadows>) -> (Vec4, Vec4, Option<Handle<I
     }
 }
 
+/// The per-level morph ranges and the coarsest level, as the vertex shaders read them.
+pub(crate) fn lod_uniform(config: &LodConfig) -> ([Vec4; MAX_LEVELS], Vec4) {
+    (
+        std::array::from_fn(|k| {
+            if (k as u32) < config.levels {
+                Vec4::new(
+                    config.morph_start_m(k as u32),
+                    config.range_m(k as u32),
+                    0.0,
+                    0.0,
+                )
+            } else {
+                Vec4::ZERO
+            }
+        }),
+        Vec4::new((config.levels - 1) as f32, 0.0, 0.0, 0.0),
+    )
+}
+
+/// The cover part of both uniforms: the live flag, the rain intensity and the puddle depths, and
+/// the ripple phases (frozen at zero while it does not rain, so a dry scene re-prepares nothing).
+fn cover_inputs(
+    live: bool,
+    wetness: Option<&WetnessSettings>,
+    globals: Option<&ElementsGlobals>,
+) -> (Vec4, Vec4) {
+    let defaults = WetnessSettings::default();
+    let wetness = wetness.unwrap_or(&defaults);
+    let rain = globals.map_or(0.0, |g| g.rain_intensity);
+    let ripple = match globals {
+        Some(g) if rain > 0.0 => Vec4::from_array(g.ripple_phase),
+        _ => Vec4::ZERO,
+    };
+    (
+        Vec4::new(
+            f32::from(u8::from(live)),
+            rain,
+            wetness.puddle_min_m,
+            wetness.puddle_full_m,
+        ),
+        ripple,
+    )
+}
+
 /// Keep every terrain and ground material's uniform, buffer and shadow map current. Writes an
 /// asset only when something changed, so a still scene re-prepares nothing.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn update_materials(
     state: Option<Res<TerrainState>>,
     runtime: Res<super::TerrainRuntime>,
     shadows: Option<Res<CloudShadows>>,
+    cover: Option<Res<CoverState>>,
+    wetness: Option<Res<WetnessSettings>>,
+    globals: Option<Res<ElementsGlobals>>,
     mut terrain_materials: ResMut<Assets<TerrainMaterial>>,
     mut ground_materials: ResMut<Assets<GroundMaterial>>,
+    water: Option<Res<crate::hydrology::WaterSettings>>,
 ) {
     let (shadow, light, map) = shadow_inputs(shadows.as_deref());
+    let absorption = water.map_or(Vec4::ZERO, |w| w.absorption.extend(w.refractive_index));
     let live = state.as_ref().is_some_and(|s| s.is_live());
     let terrain_params = state
         .as_ref()
         .map(|s| TerrainParamsGpu::new(&s.grid, 1, live))
         .unwrap_or_default();
     let cells = state.as_ref().map_or(NO_TERRAIN, |s| s.cells.clone());
+    let cover_cells = cover.as_ref().map_or(NO_TERRAIN, |c| c.cover_cells.clone());
+    let (cover_params, ripple) = cover_inputs(
+        cover.is_some() && live,
+        wetness.as_deref(),
+        globals.as_deref(),
+    );
 
     if let (Some(state), Some(config)) = (state.as_ref(), runtime.lod.as_ref()) {
-        let config: &LodConfig = config;
+        let (lod, top) = lod_uniform(config);
         let params = TerrainMaterialParams {
             terrain: terrain_params,
-            lod: std::array::from_fn(|k| {
-                if (k as u32) < config.levels {
-                    Vec4::new(
-                        config.morph_start_m(k as u32),
-                        config.range_m(k as u32),
-                        0.0,
-                        0.0,
-                    )
-                } else {
-                    Vec4::ZERO
-                }
-            }),
-            top: Vec4::new((config.levels - 1) as f32, 0.0, 0.0, 0.0),
+            lod,
+            top,
             shadow,
             light,
+            absorption,
+            cover: cover_params,
+            ripple,
         };
         let ids: Vec<_> = terrain_materials.iter().map(|(id, _)| id).collect();
         for id in ids {
@@ -194,11 +266,15 @@ pub(super) fn update_materials(
                 continue;
             };
             let e = &material.extension;
-            if (e.params != params || e.cells != state.cells || e.cloud_shadow != map)
+            if (e.params != params
+                || e.cells != state.cells
+                || e.cover != cover_cells
+                || e.cloud_shadow != map)
                 && let Some(mut material) = terrain_materials.get_mut(id)
             {
                 material.extension.params = params;
                 material.extension.cells = state.cells.clone();
+                material.extension.cover = cover_cells.clone();
                 material.extension.cloud_shadow = map.clone();
             }
         }
@@ -208,6 +284,9 @@ pub(super) fn update_materials(
         terrain: terrain_params,
         shadow,
         light,
+        absorption,
+        cover: cover_params,
+        ripple,
     };
     let ids: Vec<_> = ground_materials.iter().map(|(id, _)| id).collect();
     for id in ids {
@@ -215,11 +294,15 @@ pub(super) fn update_materials(
             continue;
         };
         let e = &material.extension;
-        if (e.params != params || e.terrain != cells || e.cloud_shadow != map)
+        if (e.params != params
+            || e.terrain != cells
+            || e.cover != cover_cells
+            || e.cloud_shadow != map)
             && let Some(mut material) = ground_materials.get_mut(id)
         {
             material.extension.params = params;
             material.extension.terrain = cells.clone();
+            material.extension.cover = cover_cells.clone();
             material.extension.cloud_shadow = map.clone();
         }
     }

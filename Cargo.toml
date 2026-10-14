@@ -77,12 +77,16 @@ dbg_macro = "deny"
 
 # Simulation and rendering in a debug build is 20-50x slower and makes it look as if the algorithm
 # is wrong rather than the profile. Examples are always run with --release; this keeps a debug run
-# merely slow rather than unusable.
+# merely slow rather than unusable. debuginfo 0 rather than the default 2: a Bevy example's
+# debuginfo link ran CI's 7 GB runner out of memory (`ld terminated with signal 7 [Bus
+# error]`, twice, on `weathered_town` and `erosion_bake`; bevy_isomesh measured the same
+# size at ~2 GB per example). A backtrace still has function names without line numbers.
 [profile.dev.package."*"]
 opt-level = 3
 
 [profile.dev]
 opt-level = 1
+debug = 0
 
 # Bevy's wasm binary is size-bound, not arithmetic-bound, so `s` beats `3` and `thin` beats `fat`:
 # fat LTO on a 30 MB module costs minutes per example. `strip = "debuginfo"` rather than `true`

@@ -1,10 +1,12 @@
-// Precipitation draw pass: rain streaks, snowflakes and splash rings as procedural quads (no
-// vertex buffers), blended premultiplied into the HDR main texture after the main pass and soft
-// faded against the depth prepass. See docs/research/precipitation.md ("Rendering geometry",
-// "Coverage-preserving alpha", "Lighting", "Fades").
+// Precipitation draw pass: rain streaks, snowflakes, dust sprites and splash rings as procedural
+// quads (no vertex buffers), blended premultiplied into the HDR main texture after the main pass
+// and soft faded against the depth prepass. See docs/research/precipitation.md ("Rendering
+// geometry", "Coverage-preserving alpha", "Lighting", "Fades") and docs/research/dust.md
+// ("Particles").
 //
 // Streaks and flakes are screen-space capsules from the particle's head to its tail
-// p − (v − v_cam)·T. Splashes are horizontal quads on the ground.
+// p − (v − v_cam)·T. A dust sprite is drawn as a flake of the dust's albedo. Splashes are
+// horizontal quads on the ground.
 
 import bevy_render::view::View;
 import bevy_elements::precipitation::common::{particle_rand, drop_diameter_mm};
@@ -37,6 +39,8 @@ struct DrawParams {
     rain: vec4<f32>,
     // x: snow albedo. y: ring radius, m. z: ring life, s. w: shader clock, s.
     snow: vec4<f32>,
+    // rgb: dust albedo. w: dust sprite diameter, m.
+    dust: vec4<f32>,
     // xyz: camera velocity, m/s. w: box half edge, m.
     camera: vec4<f32>,
 }
@@ -118,7 +122,7 @@ fn particle_vertex(
 ) -> VertexOut {
     let p = particles[ii];
     let kind = p.kind & 3u;
-    if kind > 1u {
+    if kind > 2u {
         return degenerate();
     }
     let epoch = p.kind >> 2u;
@@ -130,13 +134,15 @@ fn particle_vertex(
     var diameter_m: f32;
     if kind == 0u {
         diameter_m = drop_diameter_mm(particle_rand(ii, epoch, 0u), draw.rain.x) * 1e-3;
-    } else {
+    } else if kind == 1u {
         diameter_m = (4.0 + 4.0 * particle_rand(ii, epoch, 1u).w) * 1e-3;
+    } else {
+        diameter_m = draw.dust.w;
     }
     // The world streak: the drop's path in the exposure time. A flake is a soft disc: its
     // streak is capped at `SNOW_MAX_STRETCH` diameters, so wind does not draw it as a dash.
     var streak = v_rel * draw.rain.z;
-    if kind == 1u {
+    if kind != 0u {
         streak *= min(1.0, SNOW_MAX_STRETCH * diameter_m / max(length(streak), 1e-6));
     }
     var head = view.clip_from_world * vec4<f32>(p.pos, 1.0);
@@ -155,7 +161,7 @@ fn particle_vertex(
     // Half width in px: the drop's own, but at least half a pixel (a flake's `SNOW_MIN_HALF_WIDTH`);
     // opacity follows the true coverage, relative to that minimum, so a sub-pixel drop fades as
     // 1/z (Garg & Nayar 2007, Eqs. 21–22).
-    let min_half_width = select(0.5, SNOW_MIN_HALF_WIDTH, kind == 1u);
+    let min_half_width = select(SNOW_MIN_HALF_WIDTH, 0.5, kind == 0u);
     let true_half_width = 0.5 * diameter_m * focal_px / z;
     let half_width = max(true_half_width, min_half_width);
     let coverage = min(1.0, true_half_width / min_half_width);
@@ -183,17 +189,19 @@ fn particle_vertex(
     let ray = normalize(p.pos - view.world_position);
     let flash = flash_at(p.pos);
     let sky = draw.ambient.x + flash;
-    var radiance: f32;
+    var radiance: vec3<f32>;
     var opacity: f32;
     if kind == 0u {
-        radiance = sky / PI
+        radiance = vec3<f32>(sky / PI
             + draw.sun.w * henyey_greenstein(dot(to_sun, ray), RAIN_PHASE_G)
-            + draw.moon.w * henyey_greenstein(dot(to_moon, ray), RAIN_PHASE_G);
+            + draw.moon.w * henyey_greenstein(dot(to_moon, ray), RAIN_PHASE_G));
         // Tatarchuk §3.6.2: rain turns more transparent under a flash.
         let flash_share = flash / max(sky, 1e-6);
         opacity = min(draw.rain.y * coverage, 0.9) * (1.0 - 0.5 * flash_share);
     } else {
-        radiance = draw.snow.x * (sky + draw.sun.w * abs(dot(to_sun, ray))
+        // A flake or a dust sprite scatters diffusely, with its own albedo.
+        let albedo = select(draw.dust.xyz, vec3<f32>(draw.snow.x), kind == 1u);
+        radiance = albedo * (sky + draw.sun.w * abs(dot(to_sun, ray))
             + draw.moon.w * abs(dot(to_moon, ray))) / PI;
         opacity = SNOW_ALPHA * coverage;
     }
@@ -208,8 +216,8 @@ fn particle_vertex(
         1.0,
     );
     out.local = vec2<f32>(side * margin, along_offset);
-    out.shape = vec4<f32>(half_width, length_px, z, select(KIND_RAIN, KIND_SNOW, kind == 1u));
-    out.colour = vec4<f32>(vec3<f32>(radiance) * view.exposure * transmittance, opacity);
+    out.shape = vec4<f32>(half_width, length_px, z, select(KIND_RAIN, KIND_SNOW, kind != 0u));
+    out.colour = vec4<f32>(radiance * view.exposure * transmittance, opacity);
     return out;
 }
 
