@@ -148,11 +148,13 @@ fn setup(
                 .into_iter()
                 .find(|p| format!("{p:?}").eq_ignore_ascii_case(&name))
         })
-        .unwrap_or(if matches!(std::env::var("ELEMENTS_TERRAIN").as_deref(), Ok("dunes")) {
-            WeatherPreset::DustStorm
-        } else {
-            WeatherPreset::PartlyCloudy
-        });
+        .unwrap_or(
+            if matches!(std::env::var("ELEMENTS_TERRAIN").as_deref(), Ok("dunes")) {
+                WeatherPreset::DustStorm
+            } else {
+                WeatherPreset::PartlyCloudy
+            },
+        );
     director.force(preset, std::time::Duration::ZERO);
     // Roofs scattered through the particle box: each particle tests every uploaded blocker.
     let blockers: usize = std::env::var("ELEMENTS_BLOCKERS")

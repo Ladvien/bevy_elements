@@ -255,12 +255,7 @@ fn run_dust(
         step: Vec4::new(settings.saturation_length_m.max(1e-3), bed_s, 0.0, 0.0),
     };
     // The bedrock threshold is pinned out of reach: only loose sand avalanches.
-    gpu.avalanche = HydroParams::avalanche(
-        &grid,
-        settings.talus_deg,
-        90.0,
-        model::AVALANCHE_RATE,
-    );
+    gpu.avalanche = HydroParams::avalanche(&grid, settings.talus_deg, 90.0, model::AVALANCHE_RATE);
     gpu.avalanche_passes = settings.avalanche_passes;
     gpu.run = true;
     runtime.scheduled += 1;

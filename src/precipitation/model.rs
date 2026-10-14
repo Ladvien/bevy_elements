@@ -432,9 +432,17 @@ mod tests {
         assert!((dust(0.9) - 60_000).abs() <= 1);
         assert!((dust(0.45) - 30_000).abs() <= 1);
         assert_eq!(dust(0.0), 0);
-        assert_eq!(dust(1.0), 60_000, "above the preset the fraction stays at 0.4");
+        assert_eq!(
+            dust(1.0),
+            60_000,
+            "above the preset the fraction stays at 0.4"
+        );
         let storm = particle_counts(150_000, 0.0, 0.0, 0.9);
-        assert_eq!((storm.rain, storm.snow), (0, 0), "no rain or snow without precipitation");
+        assert_eq!(
+            (storm.rain, storm.snow),
+            (0, 0),
+            "no rain or snow without precipitation"
+        );
         // Dust and heavy rain together: 1.0 + 0.4 normalised to 0.714 + 0.286.
         let both = particle_counts(150_000, 30.0, 0.0, 0.9);
         assert!(i64::from(both.total()) <= high);

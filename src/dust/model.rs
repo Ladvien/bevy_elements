@@ -197,7 +197,11 @@ pub(crate) mod mirror {
                 let mut arriving = 0.0f32;
                 for m in 0..n {
                     let i = if forward { m } else { n - 1 - m };
-                    let k = if axis == 0 { line * n + i } else { i * n + line };
+                    let k = if axis == 0 {
+                        line * n + i
+                    } else {
+                        i * n + line
+                    };
                     let mut q = 0.0;
                     if a[axis] > 1e-6 {
                         let relaxed = arriving + (cap[k] * a[axis] - arriving) * rho;
@@ -392,7 +396,8 @@ mod tests {
         let c = n as f32 * 0.5;
         for y in 0..n {
             for x in 0..n {
-                let r2 = ((x as f32 + 0.5 - c).powi(2) + (y as f32 + 0.5 - c).powi(2)) * cell * cell;
+                let r2 =
+                    ((x as f32 + 0.5 - c).powi(2) + (y as f32 + 0.5 - c).powi(2)) * cell * cell;
                 sediment[y * n + x] = 3.0 * (-r2 / (2.0 * 20.0 * 20.0)).exp();
             }
         }
@@ -437,7 +442,10 @@ mod tests {
         let x0 = com(&field);
         run(&mut field, 200);
         let after = field.volume();
-        assert!((after - before).abs() / before < 1e-5, "{before} -> {after}");
+        assert!(
+            (after - before).abs() / before < 1e-5,
+            "{before} -> {after}"
+        );
         assert!(field.sediment.iter().all(|h| *h >= 0.0));
         assert!(com(&field) > x0 + 5.0, "{x0} -> {}", com(&field));
         // Open boundary: what is gone left through the downwind edge.
@@ -501,7 +509,7 @@ mod tests {
             last_slope = slope;
         }
         assert!((heights.iter().sum::<f32>() - total).abs() < 1e-6);
-        assert!(last_slope < 40.0 && last_slope >= 34.0 - 1e-3, "{last_slope}");
+        assert!((34.0 - 1e-3..40.0).contains(&last_slope), "{last_slope}");
         // The first pass moves ½ · 0.15 · (2 tan 40° − 2 tan 34°).
         let e = 2.0 * 40f32.to_radians().tan() - 2.0 * 34f32.to_radians().tan();
         let (first, _, _) = crate::hydrology::model::thermal_moves(

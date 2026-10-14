@@ -438,14 +438,24 @@ fn a_dust_storm_fills_forty_percent_of_the_buffer_with_wind_driven_sprites() {
         (w.wind_speed_ms, w.wind_direction, w.dust)
     };
     let all = particles(&mut app);
-    let (rain, snow, dust) = (count_kind(&all, 0), count_kind(&all, 1), count_kind(&all, 2));
+    let (rain, snow, dust) = (
+        count_kind(&all, 0),
+        count_kind(&all, 1),
+        count_kind(&all, 2),
+    );
     let parked = count_kind(&all, 3);
-    println!("dust {dust_level}: {rain} rain, {snow} snow, {dust} dust, {parked} parked of {}", all.len());
+    println!(
+        "dust {dust_level}: {rain} rain, {snow} snow, {dust} dust, {parked} parked of {}",
+        all.len()
+    );
     assert_eq!((rain, snow), (0, 0));
     assert!((dust_level - 0.9).abs() < 1e-3, "weather dust {dust_level}");
     assert!(dust.abs_diff(60_000) <= 1, "{dust} dust sprites");
     assert_eq!(dust + parked, all.len(), "every other record is parked");
-    assert_eq!(app.world().resource::<PrecipitationState>().dust as usize, dust);
+    assert_eq!(
+        app.world().resource::<PrecipitationState>().dust as usize,
+        dust
+    );
     // The dust records are the first after rain and snow: indices 0..dust.
     assert!(all[..dust].iter().all(|p| p.kind & 3 == 2));
 
@@ -458,7 +468,10 @@ fn a_dust_storm_fills_forty_percent_of_the_buffer_with_wind_driven_sprites() {
         / n;
     let vy = sprites.iter().map(|p| p.vel.y).sum::<f32>() / n;
     println!("wind {speed} m/s: mean along-wind velocity {along:.2}, mean v_y {vy:.3}");
-    assert!((along - speed).abs() < 0.25 * speed, "mean horizontal velocity {along}");
+    assert!(
+        (along - speed).abs() < 0.25 * speed,
+        "mean horizontal velocity {along}"
+    );
     assert!(vy.abs() < 0.5, "mean vertical velocity {vy}");
     // Heights above the ground plane follow the exponential of scale 60 m truncated to the part
     // of the box above it: 0 to 31.7 m for a camera at 1.7 m.
@@ -473,6 +486,10 @@ fn a_dust_storm_fills_forty_percent_of_the_buffer_with_wind_driven_sprites() {
         (mean_height - mean_expected).abs() < 0.15 * mean_expected,
         "{mean_height} vs {mean_expected}"
     );
-    assert!(sprites.iter().all(|p| p.pos.y > -0.2 && p.pos.y < top + 0.01));
+    assert!(
+        sprites
+            .iter()
+            .all(|p| p.pos.y > -0.2 && p.pos.y < top + 0.01)
+    );
     finish(app);
 }

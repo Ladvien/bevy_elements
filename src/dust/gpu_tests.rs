@@ -117,7 +117,10 @@ impl Rig {
             {
                 break;
             }
-            assert!(std::time::Instant::now() < deadline, "timed out waiting for the terrain");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for the terrain"
+            );
         }
         let terrain = app.world().resource::<TerrainState>().clone();
         Self {
@@ -206,9 +209,15 @@ impl Rig {
                 }
             })
             .id();
-        self.run_until("a buffer readback", |_| slot.lock().expect("lock").is_some());
+        self.run_until("a buffer readback", |_| {
+            slot.lock().expect("lock").is_some()
+        });
         self.app.world_mut().despawn(entity);
-        let bytes = slot.lock().expect("lock").take().expect("the readback completed");
+        let bytes = slot
+            .lock()
+            .expect("lock")
+            .take()
+            .expect("the readback completed");
         bytemuck::pod_collect_to_vec::<u8, f32>(&bytes[..self.n * self.n * 4])
     }
 
@@ -366,9 +375,14 @@ fn gpu_aeolian_matches_the_cpu_mirror() {
             .zip(&sediment)
             .map(|(a, b)| (a - b).abs())
             .fold(0.0f32, f32::max);
-        println!("{steps} steps: worst GPU-CPU difference {worst:.2e} m, largest change {moved:.2e} m");
+        println!(
+            "{steps} steps: worst GPU-CPU difference {worst:.2e} m, largest change {moved:.2e} m"
+        );
         assert!(moved > 1e-3, "the sand did not move: {moved}");
-        assert!(worst < 1e-3 * moved.max(1e-2) + 2e-4, "{steps} steps: {worst} m apart");
+        assert!(
+            worst < 1e-3 * moved.max(1e-2) + 2e-4,
+            "{steps} steps: {worst} m apart"
+        );
     }
     rig.finish();
 }
@@ -490,8 +504,14 @@ fn gpu_aeolian_avalanches_a_steep_pile_to_the_repose_angle() {
     let drift = (volume(&after_layer, cell) - before).abs() / before;
     println!("steepest slope {p99_before:.1}° -> {p99_after:.1}°, volume drift {drift:.2e}");
     assert!(p99_before > 40.0, "the cone is not steep: {p99_before}");
-    assert!(p99_after < p99_before - 3.0, "the pile did not relax: {p99_after}");
-    assert!(p99_after <= 37.0 + 3.0, "slope {p99_after}° after the avalanche");
+    assert!(
+        p99_after < p99_before - 3.0,
+        "the pile did not relax: {p99_after}"
+    );
+    assert!(
+        p99_after <= 37.0 + 3.0,
+        "slope {p99_after}° after the avalanche"
+    );
     assert!(drift < 1e-5, "volume drift {drift}");
     assert_eq!(rig.bedrock(), bedrock0, "bedrock changed");
     rig.finish();
@@ -600,8 +620,14 @@ fn assert_front(label: &str, result: (f64, f64, f64, f64, f64)) {
         (0.4 * predicted..=1.6 * predicted).contains(&measured),
         "{label}: shift {measured} m outside [0.4, 1.6] × {predicted}"
     );
-    assert!(measured >= 6.0, "{label}: shift {measured} m is under three cells");
-    assert!((after - before).abs() / before < 1e-3, "{label}: volume {before} -> {after}");
+    assert!(
+        measured >= 6.0,
+        "{label}: shift {measured} m is under three cells"
+    );
+    assert!(
+        (after - before).abs() / before < 1e-3,
+        "{label}: volume {before} -> {after}"
+    );
 }
 
 /// Validation 7 on level ground: the stripped front of a 4 m sand sheet moves by `Q_eff · 60 s / H`.
@@ -613,7 +639,10 @@ fn gpu_aeolian_strips_a_sand_sheet_by_the_predicted_distance() {
         .with_extent(Vec2::splat(1024.0))
         .with_resolution(UVec2::splat(512));
     // `flat` has no sand: lay the 4 m sheet the dunes preset has.
-    assert_front("flat", front_migration(terrain, ElementsQuality::High, Some(4.0)));
+    assert_front(
+        "flat",
+        front_migration(terrain, ElementsQuality::High, Some(4.0)),
+    );
 }
 
 /// Validation 7 on `ProceduralTerrain::dunes(7)`, the example's terrain and sand sheet.
@@ -624,7 +653,10 @@ fn gpu_aeolian_strips_the_dunes_sheet_by_the_predicted_distance() {
     let terrain = Terrain::procedural(ProceduralTerrain::dunes(7))
         .with_extent(Vec2::splat(1024.0))
         .with_resolution(UVec2::splat(512));
-    assert_front("dunes(7)", front_migration(terrain, ElementsQuality::High, None));
+    assert_front(
+        "dunes(7)",
+        front_migration(terrain, ElementsQuality::High, None),
+    );
 }
 
 /// `ProceduralTerrain::dunes` is the preset the note names.
@@ -632,7 +664,12 @@ fn gpu_aeolian_strips_the_dunes_sheet_by_the_predicted_distance() {
 fn the_dunes_preset_is_the_one_the_note_names() {
     let dunes = ProceduralTerrain::dunes(7);
     assert_eq!(
-        (dunes.feature_size_m, dunes.relief_m, dunes.ridged, dunes.initial_sand_m),
+        (
+            dunes.feature_size_m,
+            dunes.relief_m,
+            dunes.ridged,
+            dunes.initial_sand_m
+        ),
         (300.0, 40.0, 0.0, 4.0)
     );
     // A desert climate has dust storms, and the preset's wind is above the threshold.

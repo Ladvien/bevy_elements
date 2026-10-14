@@ -184,10 +184,7 @@ fn prepare(
             transport.as_entire_buffer_binding(),
         )),
     );
-    commands.insert_resource(DustBindGroups {
-        aeolian,
-        avalanche,
-    });
+    commands.insert_resource(DustBindGroups { aeolian, avalanche });
 }
 
 fn dispatch(
@@ -207,20 +204,13 @@ fn dispatch(
     if !gpu.run || !terrain.generated.load(Ordering::Relaxed) {
         return;
     }
-    let (
-        Some(capacity),
-        Some(flux),
-        Some(mov),
-        Some(avalanche_flux),
-        Some(avalanche_apply),
-    ) = (
+    let (Some(capacity), Some(flux), Some(mov), Some(avalanche_flux), Some(avalanche_apply)) = (
         ready(&cache, &pipelines.capacity),
         ready(&cache, &pipelines.flux),
         ready(&cache, &pipelines.mov),
         ready(&cache, &thermal.thermal_flux),
         ready(&cache, &thermal.thermal_apply),
-    )
-    else {
+    ) else {
         return;
     };
     let size = gpu.params.size;
@@ -228,17 +218,19 @@ fn dispatch(
     let group = &bind_groups.aeolian;
     let diagnostics = ctx.diagnostic_recorder();
     let diagnostics = diagnostics.as_deref();
-    let mut run = |label: &'static str, record: &mut dyn FnMut(&mut bevy::render::render_resource::ComputePass)| {
-        let mut pass = ctx
-            .command_encoder()
-            .begin_compute_pass(&ComputePassDescriptor {
-                label: Some(label),
-                ..default()
-            });
-        let span = diagnostics.pass_span(&mut pass, label);
-        record(&mut pass);
-        span.end(&mut pass);
-    };
+    let mut run =
+        |label: &'static str,
+         record: &mut dyn FnMut(&mut bevy::render::render_resource::ComputePass)| {
+            let mut pass = ctx
+                .command_encoder()
+                .begin_compute_pass(&ComputePassDescriptor {
+                    label: Some(label),
+                    ..default()
+                });
+            let span = diagnostics.pass_span(&mut pass, label);
+            record(&mut pass);
+            span.end(&mut pass);
+        };
     run("elements_aeolian_capacity", &mut |pass| {
         pass.set_pipeline(capacity);
         pass.set_bind_group(0, group, &[]);

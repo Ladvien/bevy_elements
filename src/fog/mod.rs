@@ -421,10 +421,17 @@ mod tests {
         assert_eq!(split.precipitation, 0.0);
         // Albedo 0.95 → 0.9 with dust (0.905 at the preset's 0.9), colour toward the dust's.
         assert_eq!(haze_albedo(0.0), FOG_ALBEDO);
-        assert!((haze_albedo(0.9) - 0.9).abs() < 0.006, "{}", haze_albedo(0.9));
+        assert!(
+            (haze_albedo(0.9) - 0.9).abs() < 0.006,
+            "{}",
+            haze_albedo(0.9)
+        );
         assert!((haze_albedo(1.0) - DUST_SINGLE_SCATTER).abs() < 1e-6);
         let colour = Vec3::ONE.lerp(DUST_ALBEDO, 0.9);
-        assert!((colour - Vec3::new(0.784, 0.64, 0.478)).length() < 1e-3, "{colour}");
+        assert!(
+            (colour - Vec3::new(0.784, 0.64, 0.478)).length() < 1e-3,
+            "{colour}"
+        );
         // The camera's distance fog takes the same hue at the preset's dust.
         let hue = fog_hue(45.0, 0.9);
         assert!(hue.x > hue.y && hue.y > hue.z, "{hue}");
