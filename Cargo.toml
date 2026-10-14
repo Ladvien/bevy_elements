@@ -25,6 +25,8 @@ default = []
 serde = ["dep:serde"]
 # Drive `bevy_flora`'s global wind, season and wetness from this crate (`ElementsFloraPlugin`).
 flora = ["dep:bevy_flora"]
+# Volumetric snow on `bevy_isomesh` voxel volumes (`VoxelPlugin`, `VoxelGround`, `SnowyField`).
+isomesh = ["dep:bevy_isomesh", "dep:isomesh"]
 
 [dependencies]
 # The umbrella with defaults off. Features unify with the game's full bevy, so this costs a consumer
@@ -49,6 +51,8 @@ bytemuck = { version = "1", features = ["derive"] }
 # Optional sibling: trees and their wind, season and wetness belong to `bevy_flora`; this crate
 # only writes its public resources (feature `flora`). Same Bevy minor (0.20).
 bevy_flora = { version = "0.30", optional = true, default-features = false }
+bevy_isomesh = { version = "0.0.11", optional = true }
+isomesh = { version = "0.0.11", optional = true }
 
 # **Tests and examples only.** The examples need a window and the full 3D pipeline, so they take the
 # full umbrella here, where it cannot reach a consumer's dependency graph. `tests/leaf.rs` reads
@@ -64,6 +68,10 @@ bevy = { version = "0.20.0", default-features = false, features = ["web", "webgp
 [[example]]
 name = "flora_wind"
 required-features = ["flora"]
+
+[[example]]
+name = "voxel_snow"
+required-features = ["isomesh"]
 
 [lints.rust]
 missing_docs = "warn"

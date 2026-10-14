@@ -40,7 +40,7 @@ pub struct ElementsPlugins;
 
 impl PluginGroup for ElementsPlugins {
     fn build(self) -> PluginGroupBuilder {
-        PluginGroupBuilder::start::<Self>()
+        let group = PluginGroupBuilder::start::<Self>()
             .add(ClimatePlugin)
             .add(CelestialPlugin)
             .add(WindPlugin)
@@ -53,7 +53,12 @@ impl PluginGroup for ElementsPlugins {
             .add(CloudPlugin)
             .add(LightningPlugin)
             .add(PrecipitationPlugin)
-            .add(WeatheredPlugin)
+            .add(WeatheredPlugin);
+        // Snow on `bevy_isomesh` voxel volumes; it needs the terrain, hydrology and cover
+        // plugins above, so it comes last.
+        #[cfg(feature = "isomesh")]
+        let group = group.add(crate::voxel::VoxelPlugin);
+        group
     }
 }
 

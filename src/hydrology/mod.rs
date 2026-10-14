@@ -124,6 +124,18 @@ pub struct ErosionSettings {
     pub strength: f32,
 }
 
+/// Present while a voxel ground owns the terrain (`VoxelGround`, feature `isomesh`): erosion is
+/// off whatever [`ErosionSettings::enabled`] says, because the volume's field is the truth and
+/// erosion would rewrite only the heightfield under it.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+#[cfg_attr(not(feature = "isomesh"), allow(dead_code))]
+pub(crate) struct ErosionLocked;
+
+/// Whether the hydrology kernels erode: the setting, unless a voxel ground locks it off.
+pub(crate) fn erosion_enabled(erosion: &ErosionSettings, locked: bool) -> bool {
+    erosion.enabled && !locked
+}
+
 impl Default for ErosionSettings {
     fn default() -> Self {
         Self {
@@ -518,6 +530,7 @@ struct Inputs<'w> {
     climate: Res<'w, Climate>,
     view: Res<'w, ElementsView>,
     time: Res<'w, Time<Real>>,
+    erosion_locked: Option<Res<'w, ErosionLocked>>,
 }
 
 /// The raw descriptions of the sources and sinks, in a deterministic order, and whether the cap
@@ -577,7 +590,9 @@ fn run_hydrology(
         climate,
         view,
         time,
+        erosion_locked,
     } = inputs;
+    let erosion_on = erosion_enabled(&erosion, erosion_locked.is_some());
     let grid = terrain.grid;
     let step_s = settings.step_s.max(1e-4);
 
@@ -741,7 +756,7 @@ fn run_hydrology(
         ),
         flags: UVec4::new(
             u32::from(settings.boundary == HydrologyBoundary::Closed),
-            u32::from(erosion.enabled),
+            u32::from(erosion_on),
             runtime.sources.len() as u32,
             runtime.blockers.len() as u32,
         ),
@@ -761,7 +776,7 @@ fn run_hydrology(
     };
     gpu.substeps = n;
     gpu.thermal_phase = (runtime.scheduled % THERMAL_PERIOD) as u32;
-    gpu.thermal = erosion.enabled;
+    gpu.thermal = erosion_on;
     // Never an empty binding: the counts say how many entries are real.
     gpu.sources = if runtime.sources.is_empty() {
         vec![Vec4::ZERO]

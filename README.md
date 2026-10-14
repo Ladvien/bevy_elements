@@ -34,9 +34,10 @@ Every system was studied in the home-still paper library first. The note for eac
 | `WaterPlugin` | `hydrology` | Draws the hydrology's water over the terrain (`WaterSettings`): a second CDLOD patch pool displaced to bedrock + sediment + water, a per-channel Beer–Lambert *absorb* pass (`AlphaMode::Multiply`, thickness from the depth prepass with Snell's refraction) and a *surface* pass (`AlphaMode::Add`: Fresnel reflection of the sky and sun, silt body colour, foam), flow-mapped ripples (Vlachos 2010, two phases) from the simulated velocity, and the sun's path through the water to the bed; the pool also draws for `TerrainRender::External` |
 | `GroundCoverPlugin` | `cover` | Snow and wetness maps on the terrain grid: snow accumulates at each cell's own rain–snow split and shelter, densifies, drifts with the wind, smooths and melts into hydrology's water (degree-day, Hock 2003), wetness follows rain and evaporation; the terrain and ground materials shade snow, wet darkening and gloss, and puddles with ripples; `SurfaceWeathering` becomes the map's mean around the camera; `Environment::snow_depth` and `wetness` |
 | `DustPlugin` | `dust` | Wind-blown sand on the terrain's `sediment` layer: a capacity `k u² (u − u_t)` from the 10 m wind with Venturi speed-up and 15° lee shadow (Paris et al. 2019), a line scan that relaxes the flux over the saturation length and moves the bed by the flux divergence (conserving sand exactly), then hydrology's thermal kernels avalanche it at 34°; runs only while the wind can exceed 8 m/s. `Weather::dust` also fills 40 % of the precipitation particle buffer with tan sprites (`kind = 2`) and tints the ground fog |
+| `VoxelPlugin` (feature `isomesh`) | `voxel` | Snow on `bevy_isomesh` voxel volumes: `VoxelGround` on a `VoxelVolume` scans the column tops into an external `Terrain` the snow, wetness and hydrology maps run on, and `SnowyField` adds the snow depth back as a slab over the tops, swapped per column when it moves half a voxel, remeshing only the chunks that changed; tunnels stay clear; erosion is off for voxel ground |
 | `ElementsFloraPlugin` (feature `flora`) | `flora` | Drives `bevy_flora`'s wind, gusts, season and wetness, and `FloraGround` from the terrain's height snapshot |
 
-`ElementsPlugins` adds every plugin above except `ElementsFloraPlugin`. Each is public on its own, so `ElementsPlugins.build().disable::<FogPlugin>()` works.
+`ElementsPlugins` adds every plugin above except `ElementsFloraPlugin`, and adds `VoxelPlugin` with the feature `isomesh`. Each is public on its own, so `ElementsPlugins.build().disable::<FogPlugin>()` works.
 
 ## Install
 
@@ -225,6 +226,48 @@ The stripped upwind edge of the sand sheet, 10 s and 70 s into the `dust_storm` 
 
 ![Edge of the sand sheet at 10 s](docs/dust_front_10s.png) ![Edge of the sand sheet at 70 s](docs/dust_front_70s.png)
 
+### Snow on voxel volumes
+
+With the feature `isomesh` (`bevy_elements = { version = "0.1", features = ["isomesh"] }`, `bevy_isomesh` and `isomesh` 0.0.11), `ElementsPlugins` also adds `VoxelPlugin`. The snow maps are heightfields, so a `VoxelVolume` gets one of its own: put `VoxelGround { resolution }` on the volume's entity and the crate scans the top of every column (the first sign change from the top, then bisection to a millimetre), spawns the crate's `Terrain` (`TerrainRender::External`) over the volume's XZ extent with those heights, and wraps the volume's field in a `SnowyField`. Hydrology, snow, wetness, wind and rain then run on it unchanged.
+
+`SnowyField` is `min(base(p), max(p.y − (top + snow), (top − c) − p.y))`: the union of your field with a slab from one voxel `c` below the column top to the snow surface, so the mesh grows a cap while everything at least a voxel under the top, a tunnel under the hill, keeps the sign of your field exactly and never gets snow. The snow depth is the last cover readback, held per column: a column's depth is swapped only when it has moved more than half a voxel from the one the mesh was made from, the new field is installed with `replace_field`, and only the chunks the changed columns can reach are marked `NeedsRemesh`, so the seams between chunks stay closed. Edits to the volume are seen: order the system that calls `replace_field` and marks the chunks `.before(VoxelGroundSystems)`, and the tops under the marked chunks are rescanned and written to the terrain before the chunks are meshed, in the same frame.
+
+```rust,no_run
+# use bevy::prelude::*;
+# #[cfg(feature = "isomesh")]
+# mod voxel {
+# use bevy::prelude::*;
+# use bevy_elements::*;
+# use bevy_isomesh::{NeedsRemesh, VoxelChunk, VoxelVolume};
+# use isomesh::chunk::{ChunkId, ChunkLayout};
+fn setup(mut commands: Commands, mut grounds: ResMut<Assets<GroundMaterial>>) {
+    // 64 m of 0.5 m voxels: one terrain cell is one voxel wide.
+    let Ok(layout) = ChunkLayout::new(16, 0.5, [-32.0, -8.0, -32.0]) else {
+        return;
+    };
+    let volume = commands
+        .spawn((
+            VoxelVolume::new(layout, isomesh::fields::Sphere { center: [0.0; 3], radius: 6.0 }),
+            VoxelGround::new(UVec2::splat(128)),
+        ))
+        .id();
+    commands.spawn((VoxelChunk { id: ChunkId::new([4, 1, 4]), volume }, NeedsRemesh));
+    // The material of the volume's chunk meshes stops snow and wetness a voxel under the column top.
+    let _ground = grounds.add(GroundMaterial {
+        base: StandardMaterial::default(),
+        extension: GroundExtension::default().with_column_gate_m(0.5),
+    });
+}
+# }
+# fn main() {}
+```
+
+`ErosionSettings::enabled` is ignored for voxel ground (one warning is logged when it is on): erosion would rewrite only the heightfield under the volume, whose field is the truth. Water still flows, snow melts into it, and `ErodeTerrain` bakes run without erosion. `VoxelGround` owns the crate's single terrain, so spawn no other `Terrain` and no second `VoxelGround`; the grid is frozen to the chunk entities present at the first scan, the voxel size must be a power of two (isomesh's seam rule), and the chunk entities need identity transforms. The ground material of the chunk meshes needs `GroundExtension::with_column_gate_m(c)`, or the walls of a tunnel are shaded white wherever the map above them has snow. Limits (`docs/research/voxel-snow.md`): the maps are heightfields, so a ledge below the highest crossing gets no snow and the floor of a shaft open to the sky does; a roof thinner than a voxel is thickened to one under the slab; a carve leaves the snow depth that was on the carved surface until the snow's own dynamics sort it out; wasm meshes on the main thread, so keep `MeshBudget::max_in_flight` low there.
+
+![Snow on the voxel hill, tunnels dark](docs/voxel_snow.png)
+
+`voxel_snow` after 25 game hours of forced snow, the sky cleared: a cap of snow over the hill and over the mouths of the two tunnels, and none inside them.
+
 ## Gameplay queries
 
 ```rust
@@ -250,7 +293,7 @@ fn seek_shelter(env: Environment) {
 ## Plays well with
 
 - **`bevy_flora`** (feature `flora`): add `ElementsFloraPlugin` next to `FloraPlugin`. It writes `FloraWind` (direction, strength = 10 m speed / 20 m/s, turbulence, gust strength, and every `WindGust` as a `GustFront`), `FloraSeason` (autumn, leaf fall, blossom, snow = `SurfaceWeathering::snow_cover`) and `FloraWetness`. Trees and their sway stay `bevy_flora`'s.
-- **`isomesh` / `bevy_isomesh`**: volumetric snow on voxel ground arrives in 0.5.
+- **`isomesh` / `bevy_isomesh`** (feature `isomesh`): add `IsomeshPlugin` next to `ElementsPlugins` and put `VoxelGround` on a `VoxelVolume` for snow on voxel ground (above). Meshing, chunks and the volume stay `bevy_isomesh`'s.
 - **`bevy_carnage`, `bevy_light_grid`** (Bevy 0.19): no dependency either way. Glue in the game copies plain data across, e.g. `SurfaceWeathering::wetness` into a blood-drying rate, or `Environment::sun()` into a light grid's sky term.
 
 ## Performance
@@ -347,6 +390,7 @@ Native (Vulkan, Metal, DX12) and wasm WebGPU. WebGL2 is unsupported: the simulat
 - [Water rendering](docs/research/water-rendering.md) — Vlachos 2010 (Portal 2 water flow), Chentanez & Müller 2010, Mei et al. 2007, Jákó & Tóth 2011, Pope & Fry 1997, Real-Time Rendering.
 - [Snow cover](docs/research/snow-cover.md) — Hock 2003, Fearing 2000, Festenberg & Gumhold 2011, Pomeroy & Gray 1990, Li & Pomeroy 1997, Judson & Doesken 2000.
 - [Wetness](docs/research/wetness.md) — Lagarde 2013, Jensen et al. 1999, Tatarchuk 2006, Cichocki 2017, FAO-56.
+- [Voxel snow](docs/research/voxel-snow.md) — the column-top terrain `VoxelGround` feeds the snow maps, the snow slab of `SnowyField` over isomesh's signed distance fields, per-column sample-and-hold swaps and the chunks they dirty; Festenberg & Gumhold 2011, Lorensen & Cline 1987, Tereshin et al. 2021.
 
 ## Examples
 
@@ -371,6 +415,7 @@ Run with `cargo run --release --example <name>`. Every example takes `ELEMENTS_F
 | `ground_cover` | Snow and wet ground on the hills: `ELEMENTS_COVER=snow` (default: ten game minutes a second, the snow stops after `ELEMENTS_SNOW_FRAMES`) or `rain` (an `ErodeTerrain` bake fills the hollows while the Rain preset wets the ground); `ELEMENTS_TERRAIN=mountains`, `ELEMENTS_PRESET`, `ELEMENTS_AGL`, `ELEMENTS_QUALITY`; prints the snow, wetness and water under the camera every second |
 | `bench_elements` | Per-pass GPU time; `ELEMENTS_QUALITY`, `ELEMENTS_RESOLUTION`, `ELEMENTS_PRESET`, `ELEMENTS_BLOCKERS`, `ELEMENTS_TERRAIN=hills\|mountains\|none` (`ELEMENTS_PRESET=Blizzard` for the snow chain's drift) |
 | `dust_storm` | `Climate::desert()`, `ProceduralTerrain::dunes(7)` and a forced `DustStorm`: tan haze, dust sprites, and the wind stripping the sand sheet's upwind edge downwind; prints the migration the note predicts; `ELEMENTS_HOUR`, `ELEMENTS_EYE` / `ELEMENTS_LOOK`; with `ELEMENTS_FRAMES` frames run at a fixed 1/60 s, so `600` and `4200` are two shots 60 s apart |
+| `voxel_snow` | A `bevy_isomesh` hill carved by a gyroid labyrinth with two tunnels through it, `VoxelGround` on its volume and forced Snow at 3 600 game seconds a second (`--features isomesh`): a cap of snow grows on the hill, remeshed each time the depth moves by half a voxel, and the tunnels stay dark; prints the crest's snow depth every second; `ELEMENTS_HOUR`, `ELEMENTS_EYE` / `ELEMENTS_LOOK`, `ELEMENTS_TIME_SCALE`, and `ELEMENTS_SNOW_FRAMES` stops the snow and clears the sky after that many frames |
 | `bench_elements` | Per-pass GPU time; `ELEMENTS_QUALITY`, `ELEMENTS_RESOLUTION`, `ELEMENTS_PRESET`, `ELEMENTS_BLOCKERS`, `ELEMENTS_TERRAIN=hills\|mountains\|dunes\|none` |
 
 ## License
