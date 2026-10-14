@@ -5,8 +5,9 @@
 import bevy_render::view::View;
 import bevy_elements::noise::hash31;
 import bevy_elements::clouds::common::{
-    CloudParams, Medium, MAX_MARCH_M, PI, altitude, cloud_medium, coarse_shape, light_at,
-    phase_octave, ray_dir, sample_transmittance, scene_distance, shell_range, slot_offset,
+    CloudParams, Medium, MAX_MARCH_M, PI, altitude, cloud_medium, coarse_shape,
+    ground_before_layer, light_at, phase_octave, ray_dir, sample_transmittance, scene_distance,
+    shell_range, slot_offset,
 };
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -39,14 +40,14 @@ const FAR_LENGTH_M: f32 = 4000.0;
 /// order of the model stratus's column depth (6.04, Validation 7), set to 5 by comparison with the
 /// marched cloud (Deviation 27 of the research note).
 const FAR_TAU: f32 = 5.0;
-/// Ray elevation (sine) below the horizon over which the far veil fades out.
-const HORIZON_BAND: f32 = 0.03;
 /// Cover over which the far field turns from broken cloud to a uniform deck, whose light path
 /// slants with the light.
 const DECK_COVER_FROM: f32 = 0.6;
 const DECK_COVER_TO: f32 = 0.95;
 /// Lowest sine of the light's elevation the deck's slanted light path is built for.
 const MIN_LIGHT_SINE: f32 = 0.1;
+/// Ray elevation (sine) below the horizon over which the far veil fades out.
+const HORIZON_BAND: f32 = 0.03;
 
 fn medium_at(h: f32, xz: vec2<f32>, detail: bool) -> Medium {
     return cloud_medium(h, xz, detail, params, base_tex, detail_tex, weather_tex, smp_repeat);
@@ -111,13 +112,29 @@ fn aerial_perspective(uv: vec2<f32>, dir: vec3<f32>, depth: f32, o_r: f32) -> Ae
     return Aerial(t_ap, beam + (vec3<f32>(1.0) - t_ap) * params.sky.yzw);
 }
 
+/// A ray that meets the planet before the layer (past the edge of a finite ground): no cloud, and
+/// the air to the ground is the camera's distance fog, as on every mesh, `scene · T + fog · (1 −
+/// T)` with `T = exp(−σ d)` (bevy_pbr's atmospheric fog with equal extinction and in-scattering).
+/// Bevy's sky pixel there is the planet lit by the sun light, which under cloud carries only the
+/// beam; the fog's colour carries the diffuse light. The transmittance LUT cannot give this path:
+/// it holds rays that leave the atmosphere (Deviation 28 of the research note).
+fn ground_haze(ground_m: f32) -> vec4<f32> {
+    let t = exp(-params.haze.w * ground_m);
+    return vec4<f32>(params.haze.xyz * (1.0 - t), t);
+}
+
 /// The cloud beyond the march and its fade: a uniform veil of the layer's mean cover over the
 /// path through the layer past `FADE_START_M`, lit as the marched base is lit where the march
 /// fades and seen through the air to the cloud's own distance. Premultiplied exposed radiance
 /// (rgb) and transmittance (a). Under full cover the horizon keeps the cloud; at cover 0.05 it
 /// stays clear sky. Smooth in the ray, so it cannot alias (Deviations 26 and 27 of the research
-/// note).
+/// note). A ray that meets the planet first sees no cloud, only the air to the ground
+/// (`ground_haze`).
 fn far_veil(uv: vec2<f32>, dir: vec3<f32>, shell: vec2<f32>, o_r: f32) -> vec4<f32> {
+    let ground = ground_before_layer(o_r, dir.y, shell.x, params.camera.w);
+    if ground > 0.0 {
+        return ground_haze(ground);
+    }
     let t_start = max(shell.x, FADE_START_M);
     let length = shell.y - t_start;
     let above = smoothstep(-HORIZON_BAND, 0.0, dir.y);

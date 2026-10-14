@@ -17,6 +17,7 @@ use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerD
 use bevy::light::Atmosphere;
 use bevy::light::light_consts::lux;
 use bevy::math::DVec2;
+use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
 use bevy::render::RenderApp;
 use bevy::render::extract_component::ExtractComponent;
@@ -266,6 +267,9 @@ pub(crate) struct CloudParams {
     pub misc: Vec4,
     /// x: first noise slice of this frame.
     pub tail: UVec4,
+    /// xyz: the camera's `DistanceFog` colour (linear, after exposure). w: its extinction, m⁻¹
+    /// (0 without distance fog).
+    pub haze: Vec4,
 }
 
 /// The per-view images: this frame's march result and the two history textures.
@@ -615,6 +619,7 @@ fn update_gpu(
     layer: Res<CloudLayer>,
     atmospheres: Query<&Atmosphere>,
     exposures: Query<&Exposure>,
+    fogs: Query<&DistanceFog>,
     mut runtime: ResMut<CloudRuntime>,
     mut gpu: ResMut<CloudGpu>,
     mut map: ResMut<CloudWeatherMap>,
@@ -706,7 +711,20 @@ fn update_gpu(
         sizes: UVec4::new(size.x, size.y, low.x, low.y),
         misc: Vec4::new(exposure_ratio, 0.0, 0.0, if reset { 1.0 } else { 0.0 }),
         tail: UVec4::ZERO,
+        haze: fogs.get(entity).map_or(Vec4::ZERO, haze),
     };
+}
+
+/// The distance fog as the clouds' ground haze: its linear colour and its grey extinction
+/// (`fog::distance_fog_falloff` sets extinction and in-scattering equal).
+fn haze(fog: &DistanceFog) -> Vec4 {
+    let extinction = match fog.falloff {
+        FogFalloff::Atmospheric { extinction, .. } => extinction.x,
+        FogFalloff::Exponential { density } => density,
+        FogFalloff::ExponentialSquared { .. } | FogFalloff::Linear { .. } => 0.0,
+    };
+    let c = fog.color.to_linear();
+    Vec4::new(c.red, c.green, c.blue, extinction)
 }
 
 #[cfg(test)]
