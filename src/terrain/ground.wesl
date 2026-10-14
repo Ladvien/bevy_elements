@@ -5,6 +5,7 @@
 
 import bevy_elements::grid::{GridParams, grid_taps};
 import bevy_elements::terrain::common::{TerrainParams, terrain_live};
+import bevy_elements::surface_cover::{weather_surface, ripple_weights, ripple_offset};
 import bevy_pbr::render::{
     mesh_view_bindings::lights,
     pbr_fragment::pbr_input_from_standard_material,
@@ -20,10 +21,18 @@ struct GroundParams {
     light: vec4<f32>,
     // xyz: the water's absorption (1/m). w: its refractive index (0 without water rendering).
     absorption: vec4<f32>,
+    // x: 1 when the cover maps are bound. y: rain intensity min(1, R_liquid / 20). z: puddle start
+    // depth (m). w: full-puddle depth (m).
+    cover: vec4<f32>,
+    // Phase of each of the four ripple layers, 0–1.
+    ripple: vec4<f32>,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> ground: GroundParams;
 @group(constants::MATERIAL_BIND_GROUP) @binding(101) var<storage, read> terrain_cells: array<vec4<f32>>;
+// (snow depth m, wetness 0–1, snow water equivalent m, —) per cell; a one-cell placeholder while
+// `ground.cover.x` is 0.
+@group(constants::MATERIAL_BIND_GROUP) @binding(102) var<storage, read> cover_cells: array<vec4<f32>>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(103) var cloud_map: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(104) var cloud_sampler: sampler;
 
@@ -67,6 +76,20 @@ fn bed_transmittance(depth: f32) -> vec3<f32> {
     return exp(-ground.absorption.xyz * depth / mu_r);
 }
 
+// (snow depth m, wetness) at world XZ; zero without the maps.
+fn cover_at(xz: vec2<f32>) -> vec2<f32> {
+    if ground.cover.x < 0.5 || !terrain_live(ground.terrain) {
+        return vec2<f32>(0.0);
+    }
+    let t = grid_taps(ground.terrain.grid, xz);
+    if !t.inside {
+        return vec2<f32>(0.0);
+    }
+    let a = mix(cover_cells[t.i00].xy, cover_cells[t.i10].xy, t.w.x);
+    let b = mix(cover_cells[t.i01].xy, cover_cells[t.i11].xy, t.w.x);
+    return mix(a, b, t.w.y);
+}
+
 fn cloud_shadow_ratio(p: vec3<f32>) -> f32 {
     let l = ground.light.xyz;
     var t = 1.0;
@@ -84,10 +107,26 @@ fn cloud_shadow_ratio(p: vec3<f32>) -> f32 {
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
     var pbr_input = pbr_input_from_standard_material(in, is_front);
-    let depth = water_depth(in.world_position.xz);
-    let wet = smoothstep(0.0, 0.02, depth);
-    pbr_input.material.base_color = vec4<f32>(pbr_input.material.base_color.rgb * (1.0 - 0.5 * wet), pbr_input.material.base_color.a);
+    let xz = in.world_position.xz;
+    let cover = cover_at(xz);
+    let puddle = smoothstep(ground.cover.z, ground.cover.w, water_depth(xz));
+    var ripple = vec2<f32>(0.0);
+    if puddle > 0.0 && ground.cover.y > 0.0 {
+        ripple = ripple_offset(xz, ground.ripple, ripple_weights(ground.cover.y));
+    }
+    let m = pbr_input.material;
+    let surface = weather_surface(
+        m.base_color.rgb, m.perceptual_roughness, m.metallic, m.reflectance, pbr_input.N,
+        cover.y, puddle, smoothstep(0.0, 0.05, cover.x), ripple,
+    );
+    pbr_input.material.base_color = vec4<f32>(surface.base_color, m.base_color.a);
+    pbr_input.material.perceptual_roughness = surface.roughness;
+    pbr_input.material.metallic = surface.metallic;
+    pbr_input.material.reflectance = surface.reflectance;
+    pbr_input.N = surface.normal;
+    pbr_input.world_normal = surface.normal;
     var out: FragmentOutput;
+    let depth = water_depth(xz);
     out.color = apply_pbr_lighting(pbr_input);
     out.color = vec4<f32>(out.color.rgb * cloud_shadow_ratio(in.world_position.xyz) * bed_transmittance(depth), out.color.a);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);

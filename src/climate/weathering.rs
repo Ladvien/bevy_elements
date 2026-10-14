@@ -44,6 +44,12 @@ pub struct SurfaceWeathering {
 }
 
 impl SurfaceWeathering {
+    /// Snow water equivalent of the point model, mm.
+    #[cfg(test)]
+    pub(crate) fn snow_water_mm(&self) -> f32 {
+        self.snow_water_mm
+    }
+
     /// Advance by `hours` of game time under `weather`, with the sun `sun_factor` (0–1) above
     /// the horizon.
     pub(crate) fn step(&mut self, weather: &Weather, sun_factor: f32, hours: f32) {

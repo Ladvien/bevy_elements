@@ -656,6 +656,7 @@ fn ensure_terrain(
             extension: TerrainExtension {
                 params: TerrainMaterialParams::default(),
                 cells: cells_handle,
+                cover: NO_TERRAIN,
                 cloud_shadow: None,
             },
         });

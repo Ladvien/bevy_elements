@@ -4,6 +4,7 @@
 mod celestial;
 mod climate;
 mod clouds;
+mod cover;
 mod flash;
 #[cfg(feature = "flora")]
 mod flora;
@@ -79,6 +80,9 @@ pub use hydrology::{
     HydrologyStats, MAX_WATER_SOURCES, TerrainBaked, WaterExtension, WaterMaterial, WaterParams,
     WaterPatch, WaterPlugin, WaterSettings, WaterSink, WaterSource, WaterState, evaporation_mm_h,
 };
+
+// Ground cover: snow and wetness maps.
+pub use cover::{CoverState, CoverStats, GroundCoverPlugin, SnowSettings, WetnessSettings};
 
 // `bevy_flora` integration.
 #[cfg(feature = "flora")]

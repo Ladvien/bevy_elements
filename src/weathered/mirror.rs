@@ -99,6 +99,7 @@ pub(crate) fn ripple_layer(xz: Vec2, layer: u32, phase: f32, weight: f32) -> Vec
     d / dist.max(1e-5) * (ring * RIPPLE_STRENGTH)
 }
 
+#[allow(dead_code)]
 pub(crate) fn ripple_offset(xz: Vec2, phases: [f32; 4], weights: [f32; 4]) -> Vec2 {
     (0..4u32)
         .map(|k| ripple_layer(xz, k, phases[k as usize], weights[k as usize]))

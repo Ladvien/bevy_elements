@@ -9,7 +9,11 @@
 //! many precipitation blockers around the camera). `ELEMENTS_TERRAIN=hills|mountains|lake|none`
 //! (default `hills`): a 2 km terrain at the quality's full simulation resolution with a 50 m³/s
 //! water source, so hydrology and erosion run their full substeps every frame
-//! (`elements_hydrology`) and the terrain repacks its layers every frame (`elements_terrain`);
+//! (`elements_hydrology`) and the terrain repacks its layers every frame (`elements_terrain`); the
+//! snow chain (`elements_snow`: source, drift and two diffusion passes per step, with
+//! `ELEMENTS_PRESET=Blizzard` for the wind that drifts), the wetness update with the cover pack and
+//! readback (`elements_wetness`) and the shelter mask (`elements_shelter`, once per change of the
+//! blockers) run at most 20 times a second;
 //! `none` is the flat test scene with neither, and `lake` a 256 m plain with a round basin that a
 //! 200 m³/s source fills, viewed from 45 m up so the water covers half the frame
 //! (`main_transparent_pass_3d` then holds both water passes; `ELEMENTS_WATER=off` leaves the
@@ -46,6 +50,9 @@ const PASSES: [&str; 13] = [
     "elements_precip_sim",
     "elements_precip_draw",
     "elements_hydrology",
+    "elements_snow",
+    "elements_wetness",
+    "elements_shelter",
     "elements_terrain",
     "elements_water_normals",
 ];
