@@ -12,7 +12,7 @@ readme = "README.md"
 # `bevy` first: it is the term a Bevy user searches, and crates.io weights keyword position.
 keywords = ["bevy", "weather", "terrain", "erosion", "atmosphere"]
 categories = ["game-development", "graphics", "rendering"]
-exclude = ["docs/*.gif", "docs/*.png", "tools/*"]
+exclude = ["docs/*.gif", "docs/*.png", "docs/research/*", "tools/*"]
 
 # docs.rs builds with every feature so the optional integrations are visible to someone choosing
 # the crate, not only to someone who has already checked out the source.
