@@ -76,7 +76,8 @@ pub use terrain::{
 // Hydrology and erosion.
 pub use hydrology::{
     ErodeTerrain, ErosionSettings, HydrologyBoundary, HydrologyPlugin, HydrologySettings,
-    HydrologyStats, MAX_WATER_SOURCES, TerrainBaked, WaterSink, WaterSource, evaporation_mm_h,
+    HydrologyStats, MAX_WATER_SOURCES, TerrainBaked, WaterExtension, WaterMaterial, WaterParams,
+    WaterPatch, WaterPlugin, WaterSettings, WaterSink, WaterSource, WaterState, evaporation_mm_h,
 };
 
 // `bevy_flora` integration.

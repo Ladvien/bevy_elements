@@ -41,6 +41,9 @@ pub struct TerrainMaterialParams {
     pub(crate) shadow: Vec4,
     /// Unit direction toward the light; w = 1 with a map.
     pub(crate) light: Vec4,
+    /// The water's absorption σ (m⁻¹) in xyz and its refractive index in w (0: no sun-leg
+    /// attenuation under water).
+    pub(crate) absorption: Vec4,
 }
 
 /// The extension that turns a `StandardMaterial` into the terrain's displaced, layer-blended
@@ -93,6 +96,8 @@ pub struct GroundParams {
     pub(crate) shadow: Vec4,
     /// Unit direction toward the light; w = 1 with a map.
     pub(crate) light: Vec4,
+    /// The water's absorption σ (m⁻¹) in xyz and its refractive index in w.
+    pub(crate) absorption: Vec4,
 }
 
 /// Shades a consumer's own mesh as the terrain's ground
@@ -136,7 +141,7 @@ pub type GroundMaterial = ExtendedMaterial<StandardMaterial, GroundExtension>;
 
 /// The cloud shadow part of both uniforms: map origin and extent, the camera's transmittance, the
 /// light direction, and the map handle.
-fn shadow_inputs(shadows: Option<&CloudShadows>) -> (Vec4, Vec4, Option<Handle<Image>>) {
+pub(crate) fn shadow_inputs(shadows: Option<&CloudShadows>) -> (Vec4, Vec4, Option<Handle<Image>>) {
     match shadows {
         Some(s) => (
             Vec4::new(s.origin.x, s.origin.y, s.extent, s.camera_transmittance),
@@ -151,6 +156,25 @@ fn shadow_inputs(shadows: Option<&CloudShadows>) -> (Vec4, Vec4, Option<Handle<I
     }
 }
 
+/// The per-level morph ranges and the coarsest level, as the vertex shaders read them.
+pub(crate) fn lod_uniform(config: &LodConfig) -> ([Vec4; MAX_LEVELS], Vec4) {
+    (
+        std::array::from_fn(|k| {
+            if (k as u32) < config.levels {
+                Vec4::new(
+                    config.morph_start_m(k as u32),
+                    config.range_m(k as u32),
+                    0.0,
+                    0.0,
+                )
+            } else {
+                Vec4::ZERO
+            }
+        }),
+        Vec4::new((config.levels - 1) as f32, 0.0, 0.0, 0.0),
+    )
+}
+
 /// Keep every terrain and ground material's uniform, buffer and shadow map current. Writes an
 /// asset only when something changed, so a still scene re-prepares nothing.
 pub(super) fn update_materials(
@@ -159,8 +183,10 @@ pub(super) fn update_materials(
     shadows: Option<Res<CloudShadows>>,
     mut terrain_materials: ResMut<Assets<TerrainMaterial>>,
     mut ground_materials: ResMut<Assets<GroundMaterial>>,
+    water: Option<Res<crate::hydrology::WaterSettings>>,
 ) {
     let (shadow, light, map) = shadow_inputs(shadows.as_deref());
+    let absorption = water.map_or(Vec4::ZERO, |w| w.absorption.extend(w.refractive_index));
     let live = state.as_ref().is_some_and(|s| s.is_live());
     let terrain_params = state
         .as_ref()
@@ -169,24 +195,14 @@ pub(super) fn update_materials(
     let cells = state.as_ref().map_or(NO_TERRAIN, |s| s.cells.clone());
 
     if let (Some(state), Some(config)) = (state.as_ref(), runtime.lod.as_ref()) {
-        let config: &LodConfig = config;
+        let (lod, top) = lod_uniform(config);
         let params = TerrainMaterialParams {
             terrain: terrain_params,
-            lod: std::array::from_fn(|k| {
-                if (k as u32) < config.levels {
-                    Vec4::new(
-                        config.morph_start_m(k as u32),
-                        config.range_m(k as u32),
-                        0.0,
-                        0.0,
-                    )
-                } else {
-                    Vec4::ZERO
-                }
-            }),
-            top: Vec4::new((config.levels - 1) as f32, 0.0, 0.0, 0.0),
+            lod,
+            top,
             shadow,
             light,
+            absorption,
         };
         let ids: Vec<_> = terrain_materials.iter().map(|(id, _)| id).collect();
         for id in ids {
@@ -208,6 +224,7 @@ pub(super) fn update_materials(
         terrain: terrain_params,
         shadow,
         light,
+        absorption,
     };
     let ids: Vec<_> = ground_materials.iter().map(|(id, _)| id).collect();
     for id in ids {

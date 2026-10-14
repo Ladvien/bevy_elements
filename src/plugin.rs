@@ -17,7 +17,7 @@ use crate::climate::{ClimatePlugin, Weather};
 use crate::clouds::CloudPlugin;
 use crate::fog::FogPlugin;
 use crate::gpu::readback::ReadbackPlugin;
-use crate::hydrology::HydrologyPlugin;
+use crate::hydrology::{HydrologyPlugin, WaterPlugin};
 use crate::lightning::LightningPlugin;
 use crate::precipitation::PrecipitationPlugin;
 use crate::query::EnvironmentSnapshot;
@@ -44,6 +44,7 @@ impl PluginGroup for ElementsPlugins {
             .add(WindPlugin)
             .add(TerrainPlugin)
             .add(HydrologyPlugin)
+            .add(WaterPlugin)
             .add(FogPlugin)
             .add(CloudPlugin)
             .add(LightningPlugin)

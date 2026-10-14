@@ -15,6 +15,12 @@
 
 mod gpu;
 pub(crate) mod model;
+mod water;
+mod water_gpu;
+
+pub use water::{
+    WaterExtension, WaterMaterial, WaterParams, WaterPatch, WaterPlugin, WaterSettings, WaterState,
+};
 
 use std::collections::VecDeque;
 use std::sync::Arc;
