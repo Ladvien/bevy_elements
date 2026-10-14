@@ -14,6 +14,7 @@
 //! readback interval old.
 
 mod gpu;
+pub(crate) use gpu::{HydrologyDispatch, HydrologyPipelines};
 pub(crate) mod model;
 mod water;
 mod water_gpu;
@@ -272,6 +273,38 @@ pub(crate) struct HydroParams {
     thermal: Vec4,
     /// x: terrain y0. y: depth readback downsample.
     extra: Vec4,
+}
+
+impl HydroParams {
+    /// The uniform of a thermal pass that is not hydrology's: the grid, the talus and the
+    /// thermal fraction. Bedrock moves only above `talus_deg + bedrock_extra_deg`, and an
+    /// excess that reaches 90° pins the threshold out of reach (no tangent), so the pass moves
+    /// loose sediment only.
+    pub(crate) fn avalanche(
+        grid: &TerrainGrid,
+        talus_deg: f32,
+        bedrock_extra_deg: f32,
+        rate: f32,
+    ) -> Self {
+        let bedrock_angle = talus_deg + bedrock_extra_deg;
+        let tan_bedrock = if bedrock_angle >= 89.9 {
+            model::UNREACHABLE_TAN
+        } else {
+            bedrock_angle.to_radians().tan()
+        };
+        Self {
+            origin: grid.origin,
+            cell: grid.cell_m,
+            size: grid.size,
+            thermal: Vec4::new(
+                talus_deg.to_radians().tan(),
+                tan_bedrock,
+                rate.clamp(0.0, 1.0),
+                0.0,
+            ),
+            ..Self::default()
+        }
+    }
 }
 
 /// The readback targets of the active terrain.
