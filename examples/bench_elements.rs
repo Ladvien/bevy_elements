@@ -43,7 +43,7 @@ const WARMUP_FRAMES: u32 = 240;
 const AEOLIAN_FRAME_SHARE: f64 = 20.0 / 60.0;
 
 /// The crate's GPU passes, by diagnostic span name.
-const PASSES: [&str; 19] = [
+const PASSES: [&str; 20] = [
     "elements_wind",
     "elements_fog",
     "elements_clouds_noise",
@@ -304,7 +304,7 @@ fn report(
                 let mean = d.average().unwrap_or(f64::NAN);
                 // The noise volumes are generated once, in the first frames: not a per-frame cost.
                 // The terrain repacks every frame while hydrology runs, so it counts.
-19:                if !pass.ends_with("_noise") && !pass.ends_with("_normals") {
+                if !pass.ends_with("_noise") && !pass.ends_with("_normals") {
                     if pass.starts_with("elements_aeolian") {
                         aeolian += min;
                         total += min * AEOLIAN_FRAME_SHARE;

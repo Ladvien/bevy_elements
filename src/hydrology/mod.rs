@@ -41,7 +41,6 @@ use crate::plugin::{ElementsQuality, ElementsSystems, ElementsView, ensure_gpu_c
 use crate::precipitation::{BlockerGpu, PrecipitationBlocker, nearest_blockers};
 use crate::query::EnvironmentSnapshot;
 use crate::terrain::{TerrainGpu, TerrainGrid, TerrainState};
-pub(crate) use gpu::HydrologyDispatch;
 pub use model::{MAX_WATER_SOURCES, evaporation_mm_h};
 use model::{
     MM_H_TO_M_S, QuantumAccumulator, Scheduler, THERMAL_PERIOD, depth_cap_m, source_entry,
@@ -142,7 +141,7 @@ impl Default for ErosionSettings {
 
 /// Pours water into the terrain: `rate_m3_s` spread evenly over the cells within `radius_m` of
 /// the entity's position (at least the cell under it). A source off the terrain does nothing. At
-/// most [`MAX_WATER_SOURCES`] sources and as many [`WaterSink`]s are used (lowest
+/// most [`crate::MAX_WATER_SOURCES`] sources and as many [`WaterSink`]s are used (lowest
 /// `Entity` first).
 #[derive(Component, Clone, Copy, Debug, PartialEq, Reflect)]
 #[require(Transform)]
