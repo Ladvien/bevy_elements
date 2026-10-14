@@ -304,7 +304,7 @@ fn report(
                 let mean = d.average().unwrap_or(f64::NAN);
                 // The noise volumes are generated once, in the first frames: not a per-frame cost.
                 // The terrain repacks every frame while hydrology runs, so it counts.
-19:                if !pass.ends_with("_noise") && !pass.ends_with("_normals") {
+                if !pass.ends_with("_noise") && !pass.ends_with("_normals") {
                     if pass.starts_with("elements_aeolian") {
                         aeolian += min;
                         total += min * AEOLIAN_FRAME_SHARE;

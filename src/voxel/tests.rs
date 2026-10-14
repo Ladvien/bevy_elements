@@ -173,7 +173,10 @@ fn the_first_scan_spawns_the_terrain_and_wraps_the_field() {
     assert_eq!(state.columns_rescanned, 32 * 32);
     assert_ne!(field_ptr(&app, volume), base_ptr, "the field is wrapped");
     assert!(Arc::ptr_eq(
-        &app.world().get::<VoxelVolume>(volume).expect("volume").field,
+        &app.world()
+            .get::<VoxelVolume>(volume)
+            .expect("volume")
+            .field,
         &state.installed
     ));
 
@@ -185,7 +188,10 @@ fn the_first_scan_spawns_the_terrain_and_wraps_the_field() {
     assert_eq!(terrain.render, TerrainRender::External);
     assert_eq!(terrain.extent_m, Vec2::splat(16.0));
     assert_eq!(terrain.resolution, UVec2::splat(32));
-    let transform = app.world().get::<Transform>(terrain_entity).expect("transform");
+    let transform = app
+        .world()
+        .get::<Transform>(terrain_entity)
+        .expect("transform");
     assert_eq!(transform.translation, Vec3::new(8.0, 0.0, 8.0));
     let TerrainSource::Heightmap {
         image,
@@ -202,7 +208,11 @@ fn the_first_scan_spawns_the_terrain_and_wraps_the_field() {
         .expect("the image");
     let data = image.data.as_ref().expect("the pixels");
     let heights: &[f32] = bytemuck::cast_slice(data);
-    assert_eq!(heights, &state.top[..], "the image holds the tops to the bit");
+    assert_eq!(
+        heights,
+        &state.top[..],
+        "the image holds the tops to the bit"
+    );
     // The resolved grid is the one the terrain will build.
     let (size, cell, adjusted) = resolve_resolution(Vec2::splat(16.0), UVec2::splat(32), 512);
     assert_eq!((size, cell, adjusted), (UVec2::splat(32), 0.5, false));
@@ -232,7 +242,10 @@ fn swap_threshold_and_hold() {
     assert_eq!(s.swaps, 1);
     assert_eq!(s.snow[column], 0.26);
     assert!(
-        s.snow.iter().enumerate().all(|(i, d)| i == column || *d == 0.0),
+        s.snow
+            .iter()
+            .enumerate()
+            .all(|(i, d)| i == column || *d == 0.0),
         "every other column holds what it held"
     );
     assert_ne!(field_ptr(&app, volume), base_ptr);
@@ -348,7 +361,10 @@ fn carve_the_top_lowers_the_top() {
     assert!(dirty.load(std::sync::atomic::Ordering::Relaxed));
     assert!(
         Arc::ptr_eq(
-            &app.world().get::<VoxelVolume>(volume).expect("volume").field,
+            &app.world()
+                .get::<VoxelVolume>(volume)
+                .expect("volume")
+                .field,
             &s.installed
         ),
         "the field is the SnowyField, not the bare base"
@@ -373,7 +389,10 @@ fn removing_the_ground_restores_the_field() {
     app.update();
     assert_eq!(field_ptr(&app, volume), base_ptr);
     assert!(app.world().get::<VoxelGroundState>(volume).is_none());
-    assert!(app.world().get_entity(terrain).is_err(), "the terrain is gone");
+    assert!(
+        app.world().get_entity(terrain).is_err(),
+        "the terrain is gone"
+    );
     assert_eq!(marked_ids(&mut app).len(), 12, "every chunk is remeshed");
 }
 
@@ -430,4 +449,102 @@ fn settle(app: &mut App) {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     panic!("meshing did not settle");
+}
+
+/// Validation 9 (CPU rows): what the voxel ground costs at the example's size, 128² columns by
+/// 48 cells. Timing, so ignored by default: `cargo test --release --features isomesh --lib --
+/// --ignored --nocapture voxel_cost`.
+#[test]
+#[ignore = "timing: run in release"]
+fn voxel_cost() {
+    use std::time::Instant;
+
+    use isomesh::MeshBuffer;
+    use isomesh::chunk::dirty::{DirtySet, mark_edit};
+    use isomesh::marching_cubes::MarchingCubes;
+
+    use super::field::SnowyField;
+    use super::gpu_tests::HillWorld;
+    use super::model::{Columns, box_indices, scan_columns};
+
+    let layout = ChunkLayout::new(16, 0.5, [-32.0, -8.0, -32.0]).expect("a valid layout");
+    let grid = TerrainGrid {
+        origin: Vec2::splat(-32.0),
+        cell_m: 0.5,
+        size: UVec2::splat(128),
+        y0: 0.0,
+    };
+    let columns = Columns {
+        grid,
+        y_lo: -8.0,
+        y_hi: 16.0,
+        cell: 0.5,
+    };
+    // (a) the initial scan of every column.
+    let mut tops = vec![0.0_f32; columns.len()];
+    let began = Instant::now();
+    scan_columns(&HillWorld, &columns, 0..columns.len(), &mut tops);
+    let scan_ms = began.elapsed().as_secs_f64() * 1000.0;
+    // (b) one chunk column's rescan.
+    let range = columns
+        .columns_in(&layout, ChunkId::new([4, 0, 4]))
+        .expect("inside");
+    let mut rescan_ms = f64::INFINITY;
+    for _ in 0..20 {
+        let began = Instant::now();
+        let n = scan_columns(
+            &HillWorld,
+            &columns,
+            box_indices(grid.size, range),
+            &mut tops,
+        );
+        rescan_ms = rescan_ms.min(began.elapsed().as_secs_f64() * 1000.0);
+        assert_eq!(n, 256, "16 × 16 columns under a chunk column");
+    }
+    // (c) one surface chunk on a worker: Marching Cubes of the crest chunk against the field
+    // with half a metre of snow.
+    let snow: Arc<[f32]> = vec![0.5_f32; columns.len()].into();
+    let top: Arc<[f32]> = tops.clone().into();
+    let field = SnowyField::new(Arc::new(HillWorld), 0.5, top, grid, snow, grid);
+    let shape = layout.sample_shape().expect("a shape");
+    let id = ChunkId::new([4, 2, 4]);
+    let mut mesh_ms = f64::INFINITY;
+    let mut triangles = 0;
+    for _ in 0..20 {
+        let mut out = MeshBuffer::<f32>::new();
+        let began = Instant::now();
+        MarchingCubes::<f32>::new()
+            .extract(&field, &shape, layout.sample_origin(id), 0.5, &mut out)
+            .expect("a mesh");
+        mesh_ms = mesh_ms.min(began.elapsed().as_secs_f64() * 1000.0);
+        triangles = out.triangle_count();
+    }
+    // (d) `mark_changed_chunks` over the whole volume, which the column rule replaces.
+    let bare = SnowyField::new(
+        Arc::new(HillWorld),
+        0.5,
+        field.top().clone(),
+        grid,
+        vec![0.0_f32; columns.len()].into(),
+        grid,
+    );
+    let mut dirty = DirtySet::new();
+    let began = Instant::now();
+    mark_edit(
+        &layout,
+        &bare,
+        &field,
+        [0, 0, 0],
+        [127, 47, 127],
+        &mut dirty,
+    )
+    .expect("an edit");
+    let mark_ms = began.elapsed().as_secs_f64() * 1000.0;
+    println!(
+        "RESULT cost: initial scan {scan_ms:.1} ms (16 384 columns), one chunk column rescan {rescan_ms:.3} ms (256 columns), one surface chunk {mesh_ms:.3} ms ({triangles} triangles), mark_changed_chunks over the volume {mark_ms:.1} ms ({} chunks)",
+        dirty.iter().count()
+    );
+    assert!(scan_ms <= 150.0, "the initial scan: {scan_ms} ms");
+    assert!(rescan_ms <= 2.0, "a chunk column rescan: {rescan_ms} ms");
+    assert!(mesh_ms <= 2.0, "a surface chunk: {mesh_ms} ms");
 }

@@ -261,6 +261,9 @@ mod tests {
             grid,
         );
         let g = field.gradient([0.0, 10.25, 0.0]);
-        assert!(g[0].abs() < 1e-2 && (g[1] - 1.0).abs() < 1e-2 && g[2].abs() < 1e-2, "{g:?}");
+        assert!(
+            g[0].abs() < 1e-2 && (g[1] - 1.0).abs() < 1e-2 && g[2].abs() < 1e-2,
+            "{g:?}"
+        );
     }
 }

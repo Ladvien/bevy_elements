@@ -111,25 +111,37 @@ fn vec3_env(name: &str) -> Option<Vec3> {
 fn main() {
     let hour = f64::from(env_f32("ELEMENTS_HOUR", 8.0));
     let mut app = App::new();
-    app.add_plugins((DefaultPlugins, ElementsPlugins, IsomeshPlugin, ExampleHarness))
-        .insert_resource(
-            WorldClock::new(CivilDate::new(2026, 1, 15))
-                .at_hour(hour)
-                .with_time_scale(env_f32("ELEMENTS_TIME_SCALE", 3600.0)),
-        )
-        .insert_resource(Climate::temperate())
-        // Uniform accumulation, so the slab is the same depth over the whole crest.
-        .insert_resource(SnowSettings {
-            drift: false,
-            ..default()
-        })
-        // Meshing is budgeted as in isomesh's `game_showcase`.
-        .insert_resource(MeshBudget {
-            per_frame: Duration::from_millis(3),
-            max_in_flight: 8,
-        })
-        .add_systems(Startup, setup)
-        .add_systems(Update, (attach, report.after(ElementsSystems::Readback)));
+    app.add_plugins((
+        DefaultPlugins,
+        ElementsPlugins,
+        IsomeshPlugin,
+        ExampleHarness,
+    ))
+    .insert_resource(
+        WorldClock::new(CivilDate::new(2026, 1, 15))
+            .at_hour(hour)
+            .with_time_scale(env_f32("ELEMENTS_TIME_SCALE", 3600.0)),
+    )
+    .insert_resource(Climate::temperate())
+    // Uniform accumulation, so the slab is the same depth over the whole crest.
+    .insert_resource(SnowSettings {
+        drift: false,
+        ..default()
+    })
+    // Meshing is budgeted as in isomesh's `game_showcase`.
+    .insert_resource(MeshBudget {
+        per_frame: Duration::from_millis(3),
+        max_in_flight: 8,
+    })
+    .add_systems(Startup, setup)
+    .add_systems(
+        Update,
+        (
+            attach,
+            clear_after_snow,
+            report.after(ElementsSystems::Readback),
+        ),
+    );
     if std::env::var("ELEMENTS_FRAMES").is_ok() {
         app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
             1.0 / 60.0,
@@ -183,21 +195,41 @@ fn setup(
     director.force(WeatherPreset::Snow, Duration::ZERO);
 }
 
-/// Give every chunk mesh, new or rebuilt, the ground material.
+/// Give every chunk mesh, new or rebuilt, the ground material. A chunk that is all rock or all
+/// air meshes to nothing and gets no `Mesh3d`.
 fn attach(
     mut commands: Commands,
     rock: Option<Res<Rock>>,
+    meshes: Res<Assets<Mesh>>,
     fresh: Query<(Entity, &ChunkMesh), Changed<ChunkMesh>>,
 ) {
     let Some(rock) = rock else {
         return;
     };
     for (entity, chunk) in &fresh {
+        if meshes.get(&chunk.0).is_none_or(|m| m.count_vertices() == 0) {
+            commands.entity(entity).try_remove::<Mesh3d>();
+            continue;
+        }
         commands.entity(entity).try_insert((
             Mesh3d(chunk.0.clone()),
             MeshMaterial3d(rock.0.clone()),
             Transform::default(),
         ));
+    }
+}
+
+/// After `ELEMENTS_SNOW_FRAMES` frames (default: never) the snow stops, the sky clears and the
+/// clock slows to a minute a second, so the cap can be seen under a clear sky.
+fn clear_after_snow(
+    mut director: ResMut<WeatherDirector>,
+    mut clock: ResMut<WorldClock>,
+    mut frame: Local<u32>,
+) {
+    *frame += 1;
+    if *frame == env_f32("ELEMENTS_SNOW_FRAMES", f32::MAX) as u32 {
+        director.force(WeatherPreset::Clear, Duration::ZERO);
+        clock.time_scale = 60.0;
     }
 }
 

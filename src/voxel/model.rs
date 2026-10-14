@@ -175,11 +175,7 @@ pub(crate) fn box_indices(
 /// The Y interval whose chunks a change of a column's slab can reach, m, as `(low, high)`.
 /// Each slab is `[t − c, t + s]`; the interval is the union of the old and the new one (a slab
 /// exists only over a real top) with a cell of halo.
-pub(crate) fn slab_span(
-    columns: &Columns,
-    old: (f32, f32),
-    new: (f32, f32),
-) -> Option<(f32, f32)> {
+pub(crate) fn slab_span(columns: &Columns, old: (f32, f32), new: (f32, f32)) -> Option<(f32, f32)> {
     let c = columns.cell;
     let mut span: Option<(f32, f32)> = None;
     for (top, snow) in [old, new] {
@@ -293,9 +289,8 @@ pub(crate) fn hold_swap(
     fresh: impl Fn(usize) -> f32,
 ) -> Option<Swap> {
     let threshold = SWAP_CELLS * columns.cell;
-    let over = |i: usize| {
-        columns.has_top(tops[i]) && (fresh(i).max(0.0) - held[i]).abs() > threshold
-    };
+    let over =
+        |i: usize| columns.has_top(tops[i]) && (fresh(i).max(0.0) - held[i]).abs() > threshold;
     if !(0..held.len()).any(over) {
         return None;
     }
@@ -373,7 +368,11 @@ mod tests {
         assert!((top - 2.0).abs() <= 2e-3, "{top}");
         // `⌊(y_hi − t)/c⌋ + 2` scan samples (the two that bracket it) and the bisections. (The
         // note counts one fewer scan sample: Deviation 11.)
-        assert!(sphere.1.get() <= 6 + BISECTIONS, "{} evaluations", sphere.1.get());
+        assert!(
+            sphere.1.get() <= 6 + BISECTIONS,
+            "{} evaluations",
+            sphere.1.get()
+        );
         assert!(column_top(&sphere, 3.0, 3.0, 4.0, -4.0, 0.5).is_none());
 
         let roof = Layers(|p: [f32; 3]| {
@@ -453,11 +452,17 @@ mod tests {
         let layout = layout();
         let columns = columns(&layout, 32, (-8.0, 16.0));
         let (lo, hi) = slab_span(&columns, (3.0, 0.0), (3.0, 0.3)).expect("a top");
-        assert!((lo - 2.0).abs() < 1e-6 && (hi - 3.8).abs() < 1e-6, "{lo} {hi}");
+        assert!(
+            (lo - 2.0).abs() < 1e-6 && (hi - 3.8).abs() < 1e-6,
+            "{lo} {hi}"
+        );
         // A column with no top before has only the new slab.
         let none = columns.no_top();
         let (lo, hi) = slab_span(&columns, (none, 0.0), (3.0, 0.3)).expect("a top");
-        assert!((lo - 2.0).abs() < 1e-6 && (hi - 3.8).abs() < 1e-6, "{lo} {hi}");
+        assert!(
+            (lo - 2.0).abs() < 1e-6 && (hi - 3.8).abs() < 1e-6,
+            "{lo} {hi}"
+        );
         assert!(slab_span(&columns, (none, 0.0), (none, 0.0)).is_none());
     }
 
@@ -480,11 +485,25 @@ mod tests {
             .expect("a swap");
         assert_eq!(swap.changed, vec![(5, 0.0, 0.26)]);
         assert_eq!(swap.snow[5], 0.26);
-        assert!(swap.snow.iter().enumerate().all(|(i, s)| i == 5 || *s == 0.0));
+        assert!(
+            swap.snow
+                .iter()
+                .enumerate()
+                .all(|(i, s)| i == 5 || *s == 0.0)
+        );
         // The same readback again: no swap.
-        assert!(hold_swap(&columns, &tops, &swap.snow, |i| if i == 5 { 0.26 } else { 0.10 }).is_none());
+        assert!(
+            hold_swap(&columns, &tops, &swap.snow, |i| if i == 5 {
+                0.26
+            } else {
+                0.10
+            })
+            .is_none()
+        );
         // 0.26 to 0.52 swaps (more than 0.25 since the last swap), 0.26 to 0.50 does not.
-        assert!(hold_swap(&columns, &tops, &swap.snow, |_| 0.50).is_some_and(|s| s.changed.len() == 15));
+        assert!(
+            hold_swap(&columns, &tops, &swap.snow, |_| 0.50).is_some_and(|s| s.changed.len() == 15)
+        );
         let only_5 = |i: usize| if i == 5 { 0.50 } else { 0.10 };
         assert!(hold_swap(&columns, &tops, &swap.snow, only_5).is_none());
         let only_5 = |i: usize| if i == 5 { 0.52 } else { 0.10 };
@@ -509,6 +528,10 @@ mod tests {
             .columns_in(&layout, ChunkId::new([1, 0, 0]))
             .expect("inside");
         assert_eq!((i0, i1, j0, j1), (16, 31, 0, 15));
-        assert!(columns.columns_in(&layout, ChunkId::new([2, 0, 0])).is_none());
+        assert!(
+            columns
+                .columns_in(&layout, ChunkId::new([2, 0, 0]))
+                .is_none()
+        );
     }
 }

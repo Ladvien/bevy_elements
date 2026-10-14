@@ -192,11 +192,8 @@ pub(crate) fn voxel_ground_build(
         }
         let extent = Vec2::new(max[0] - min[0], max[2] - min[2]);
         let centre = Vec2::new(0.5 * (max[0] + min[0]), 0.5 * (max[2] + min[2]));
-        let (size, terrain_cell, _) = resolve_resolution(
-            extent,
-            ground.resolution,
-            quality.terrain_max_resolution(),
-        );
+        let (size, terrain_cell, _) =
+            resolve_resolution(extent, ground.resolution, quality.terrain_max_resolution());
         // The terrain centres its grid on its transform exactly this way.
         let grid = crate::terrain::TerrainGrid {
             origin: centre - size.as_vec2() * terrain_cell * 0.5,
