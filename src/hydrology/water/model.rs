@@ -367,6 +367,7 @@ fn mips_keep_the_expected_share_of_the_slope() {
     let mip0 = rms_slope(0, k, 7);
     let mip3 = rms_slope(3, k, 1);
     let ratio = mip3 / mip0;
+    println!("mip 3 / mip 0 rms slope: {ratio}");
     assert!(close(ratio, 0.953, 0.02), "mip 3 / mip 0 = {ratio}");
     // The closed form: the share of the amplitudes of the kept octaves.
     let weights = |n: u32| (0..n).map(|o| 0.49f32.powi(o as i32)).sum::<f32>();

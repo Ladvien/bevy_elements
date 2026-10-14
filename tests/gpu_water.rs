@@ -184,7 +184,9 @@ fn gpu_water_normals_tile_and_have_the_cox_munk_slope() {
 
 fn half_pixels(bytes: &[u8]) -> Vec<[f32; 3]> {
     bytes
-        .chunks_exact(8)
+        .as_chunks::<8>()
+        .0
+        .iter()
         .map(|p| {
             let h = |i: usize| support::half(u16::from_le_bytes([p[i], p[i + 1]]));
             [h(0), h(2), h(4)]
