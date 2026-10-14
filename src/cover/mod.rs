@@ -173,8 +173,12 @@ impl CoverSnapshot {
     /// within `radius_m` of `centre` (world XZ); `None` when there are none.
     pub(crate) fn mean_around(&self, centre: Vec2, radius_m: f32) -> Option<(f32, f32, f32)> {
         let g = &self.grid;
-        let lo = ((centre - radius_m - g.origin) / g.cell_m - 0.5).floor().as_ivec2();
-        let hi = ((centre + radius_m - g.origin) / g.cell_m - 0.5).ceil().as_ivec2();
+        let lo = ((centre - radius_m - g.origin) / g.cell_m - 0.5)
+            .floor()
+            .as_ivec2();
+        let hi = ((centre + radius_m - g.origin) / g.cell_m - 0.5)
+            .ceil()
+            .as_ivec2();
         let size = g.size.as_ivec2();
         let (mut depth, mut cover, mut wet, mut n) = (0.0_f64, 0.0_f64, 0.0_f64, 0u32);
         for y in lo.y.max(0)..=hi.y.min(size.y - 1) {
@@ -462,11 +466,13 @@ fn run_cover(
     let ready = gpu.ready.load(Ordering::Relaxed)
         && terrain.is_live()
         && terrain_gpu.generated.load(Ordering::Relaxed);
-    let due = snow.max_rate_hz <= 0.0
-        || runtime.since_step.as_secs_f32() * snow.max_rate_hz >= 1.0;
+    let due = snow.max_rate_hz <= 0.0 || runtime.since_step.as_secs_f32() * snow.max_rate_hz >= 1.0;
     let mut steps = 0;
     let mut dt_s = 0.0;
-    if ready && due && let Some((n, dt)) = plan_steps(runtime.pending_s) {
+    if ready
+        && due
+        && let Some((n, dt)) = plan_steps(runtime.pending_s)
+    {
         steps = n;
         dt_s = dt;
         runtime.pending_s = 0.0;

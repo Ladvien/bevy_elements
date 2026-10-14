@@ -16,8 +16,8 @@ mod plugin;
 mod precipitation;
 mod query;
 mod terrain;
-mod wind;
 mod weathered;
+mod wind;
 
 // Plugin group, system sets, camera, quality.
 pub use plugin::{ElementsCamera, ElementsPlugins, ElementsQuality, ElementsSystems};
@@ -81,9 +81,7 @@ pub use hydrology::{
 };
 
 // Ground cover: snow and wetness maps.
-pub use cover::{
-    CoverState, CoverStats, GroundCoverPlugin, SnowSettings, WetnessSettings,
-};
+pub use cover::{CoverState, CoverStats, GroundCoverPlugin, SnowSettings, WetnessSettings};
 
 // `bevy_flora` integration.
 #[cfg(feature = "flora")]

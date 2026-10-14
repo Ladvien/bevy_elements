@@ -373,8 +373,17 @@ fn gpu_snow_accumulates_and_melts() {
         let elapsed_h = (sim.stats().simulated_s - base) / 3600.0;
         let want = swe0 - 1.666_667e-3 * elapsed_h as f32;
         let swe = mean(sim.snow().iter().map(|c| c[1]));
-        println!("RESULT melt {elapsed_h:.3} h: SWE {:.4} mm, formula {:.4} mm", swe * 1000.0, want * 1000.0);
-        close(swe, want, 0.02, &format!("SWE after {elapsed_h:.2} h of melt"));
+        println!(
+            "RESULT melt {elapsed_h:.3} h: SWE {:.4} mm, formula {:.4} mm",
+            swe * 1000.0,
+            want * 1000.0
+        );
+        close(
+            swe,
+            want,
+            0.02,
+            &format!("SWE after {elapsed_h:.2} h of melt"),
+        );
     }
     let depth_4_5 = {
         sim.advance_to(600.0, base + 8.0 * 3600.0);
@@ -384,7 +393,8 @@ fn gpu_snow_accumulates_and_melts() {
     sim.advance_to(600.0, base + 9.01 * 3600.0);
     let snow = sim.snow();
     assert!(
-        snow.iter().all(|c| c[0] == 0.0 && c[1] == 0.0 && c[2] == 0.0),
+        snow.iter()
+            .all(|c| c[0] == 0.0 && c[1] == 0.0 && c[2] == 0.0),
         "melted out at 9.01 h"
     );
     sim.advance_to(2400.0, base + 48.0 * 3600.0);
@@ -435,7 +445,13 @@ fn gpu_snow_settles_like_the_cell_model() {
     };
     let steps = 3 * 24 * 60;
     for _ in 0..steps {
-        cell.step(&settings, (seconds / steps as f64 / 3600.0) as f32, 0.0, -5.0, 1.0);
+        cell.step(
+            &settings,
+            (seconds / steps as f64 / 3600.0) as f32,
+            0.0,
+            -5.0,
+            1.0,
+        );
     }
     println!(
         "RESULT settle 3 d: GPU depth {:.5} m density {:.2}, CPU depth {:.5} m",
@@ -444,7 +460,12 @@ fn gpu_snow_settles_like_the_cell_model() {
         cell.depth
     );
     close(snow[0][0], cell.depth, 0.005, "depth");
-    close(1000.0 * snow[0][1] / snow[0][0], 226.4, 0.01, "density after 3 days");
+    close(
+        1000.0 * snow[0][1] / snow[0][0],
+        226.4,
+        0.01,
+        "density after 3 days",
+    );
     sim.finish();
 }
 
@@ -518,7 +539,12 @@ fn gpu_snow_drift_conserves_and_moves_downwind() {
             x += f64::from(c[1]) * f64::from(at(i).x);
             z += f64::from(c[1]) * f64::from(at(i).y);
         }
-        (total, x / total, z / total, snow.iter().map(|c| f64::from(c[0])).sum::<f64>())
+        (
+            total,
+            x / total,
+            z / total,
+            snow.iter().map(|c| f64::from(c[0])).sum::<f64>(),
+        )
     };
     let before = centre(&sim.snow());
     let start = sim.stats().steps;
@@ -540,11 +566,25 @@ fn gpu_snow_drift_conserves_and_moves_downwind() {
         after.1 - before.1,
         after.2 - before.2
     );
-    assert!((after.0 / before.0 - 1.0).abs() < 1e-5, "SWE {} -> {}", before.0, after.0);
-    assert!((after.3 / before.3 - 1.0).abs() < 1e-5, "depth {} -> {}", before.3, after.3);
+    assert!(
+        (after.0 / before.0 - 1.0).abs() < 1e-5,
+        "SWE {} -> {}",
+        before.0,
+        after.0
+    );
+    assert!(
+        (after.3 / before.3 - 1.0).abs() < 1e-5,
+        "depth {} -> {}",
+        before.3,
+        after.3
+    );
     let shift = after.1 - before.1;
     assert!(shift > 0.5, "the patch moved {shift} m downwind");
-    assert!((after.2 - before.2).abs() < 0.05 * shift, "lateral shift {}", after.2 - before.2);
+    assert!(
+        (after.2 - before.2).abs() < 0.05 * shift,
+        "lateral shift {}",
+        after.2 - before.2
+    );
     assert!(snow.iter().all(|c| c[0] >= 0.0 && c[1] >= 0.0));
     sim.finish();
 }
@@ -568,7 +608,9 @@ fn gpu_snow_deposits_in_the_lee_of_a_step() {
     let grid = sim.terrain.grid;
     let x_of = |i: usize| grid.origin.x + ((i % cells) as f32 + 0.5) * grid.cell_m;
     // The plateau (x < 0) is 4 m high; the wind blows toward +x over its edge.
-    let bedrock: Vec<f32> = (0..n).map(|i| if x_of(i) < 0.0 { 4.0 } else { 0.0 }).collect();
+    let bedrock: Vec<f32> = (0..n)
+        .map(|i| if x_of(i) < 0.0 { 4.0 } else { 0.0 })
+        .collect();
     let bedrock_handle = sim.terrain.bedrock.clone();
     sim.write(&bedrock_handle, &bedrock);
     let pack: Vec<f32> = (0..n)
@@ -606,7 +648,9 @@ fn gpu_snow_deposits_in_the_lee_of_a_step() {
     let lee = zone(&after, 0.0, 10.0) - zone(&before, 0.0, 10.0);
     let plateau = zone(&after, -60.0, 0.0) - zone(&before, -60.0, 0.0);
     let total = zone(&after, -200.0, 200.0) / zone(&before, -200.0, 200.0) - 1.0;
-    println!("RESULT lee: lee {lee:+.5}, plateau {plateau:+.5}, total {total:+.2e} (SWE m summed over cells)");
+    println!(
+        "RESULT lee: lee {lee:+.5}, plateau {plateau:+.5}, total {total:+.2e} (SWE m summed over cells)"
+    );
     assert!(lee > 0.0, "the lee gained {lee}");
     assert!(plateau < 0.0, "the plateau lost {plateau}");
     assert!(total.abs() < 1e-5, "total changed by {total}");
@@ -631,7 +675,8 @@ fn gpu_roofs_shelter_the_ground_from_snow_and_rain() {
     let flat = 2.0e-3 * hours as f32;
     let cells = grid.size.x as usize;
     for (i, c) in snow.iter().enumerate() {
-        let p = grid.origin + (Vec2::new((i % cells) as f32, (i / cells) as f32) + 0.5) * grid.cell_m;
+        let p =
+            grid.origin + (Vec2::new((i % cells) as f32, (i / cells) as f32) + 0.5) * grid.cell_m;
         let under = p.x.abs() <= 5.0 && p.y.abs() <= 5.0;
         if under {
             assert_eq!(c[1], 0.0, "snow under the roof at {p}");
@@ -658,7 +703,8 @@ fn gpu_roofs_shelter_the_ground_from_snow_and_rain() {
     assert!((rain_fall - 4.39).abs() < 0.02, "{rain_fall}");
     let (mut sheltered_cells, mut mismatches) = (0, 0);
     for (i, s) in gpu_shelter.iter().enumerate() {
-        let p = grid.origin + (Vec2::new((i % cells) as f32, (i / cells) as f32) + 0.5) * grid.cell_m;
+        let p =
+            grid.origin + (Vec2::new((i % cells) as f32, (i / cells) as f32) + 0.5) * grid.cell_m;
         let cpu = sheltered(
             Vec3::new(p.x, 0.0, p.y),
             Vec2::new(7.0, 0.0),
@@ -670,11 +716,17 @@ fn gpu_roofs_shelter_the_ground_from_snow_and_rain() {
         // A cell well inside or outside the band: the GPU's fall speed may differ from the CPU's
         // by a quantum, so only cells on the band's edge may disagree.
     }
-    println!("RESULT shelter: {sheltered_cells} sheltered cells, {mismatches} differ from the CPU slab test");
+    println!(
+        "RESULT shelter: {sheltered_cells} sheltered cells, {mismatches} differ from the CPU slab test"
+    );
     assert!(sheltered_cells > 100, "{sheltered_cells} sheltered cells");
-    assert!(mismatches <= 6, "{mismatches} cells differ from the CPU slab test");
+    assert!(
+        mismatches <= 6,
+        "{mismatches} cells differ from the CPU slab test"
+    );
     for (i, w) in wetness.iter().enumerate() {
-        let p = grid.origin + (Vec2::new((i % cells) as f32, (i / cells) as f32) + 0.5) * grid.cell_m;
+        let p =
+            grid.origin + (Vec2::new((i % cells) as f32, (i / cells) as f32) + 0.5) * grid.cell_m;
         if p.y.abs() < 4.0 && (4.0..12.0).contains(&p.x) {
             assert!(*w < 0.05, "wet at {p} under the slanted roof shadow: {w}");
         }
@@ -744,11 +796,7 @@ fn gpu_surface_weathering_follows_the_map() {
     let mut point = SurfaceWeathering::default();
     let scale = 1200.0_f32;
     sim.set_scale(scale);
-    let mut last_hours = sim
-        .app
-        .world()
-        .resource::<WorldClock>()
-        .hours_since_2000();
+    let mut last_hours = sim.app.world().resource::<WorldClock>().hours_since_2000();
     let mut compared = 0;
     let mut worst = (0.0_f32, 0.0_f32, 0.0_f32);
     let schedule = [
@@ -788,7 +836,9 @@ fn gpu_surface_weathering_follows_the_map() {
             if elapsed >= next_mark {
                 next_mark += 1.0;
                 let ground = *sim.app.world().resource::<SurfaceWeathering>();
-                worst.0 = worst.0.max((ground.snow_depth_m - point.snow_depth_m).abs());
+                worst.0 = worst
+                    .0
+                    .max((ground.snow_depth_m - point.snow_depth_m).abs());
                 worst.1 = worst.1.max((ground.snow_cover - point.snow_cover).abs());
                 worst.2 = worst.2.max((ground.wetness - point.wetness).abs());
                 let depth_ok = (ground.snow_depth_m - point.snow_depth_m).abs()

@@ -102,9 +102,19 @@ fn the_shading_numbers_are_the_notes() {
 
     // A puddle: roughness 0.02 and Bevy's F0 = 0.16 · reflectance² = 0.02.
     let s = surface(base, 0.9, 0.0, 0.0, 1.0, 0.0);
-    close(s.roughness, mirror::PUDDLE_ROUGHNESS, 1e-6, "puddle roughness");
+    close(
+        s.roughness,
+        mirror::PUDDLE_ROUGHNESS,
+        1e-6,
+        "puddle roughness",
+    );
     close(s.reflectance.x, 0.354, 1e-3, "puddle reflectance");
-    close(0.16 * s.reflectance.x * s.reflectance.x, 0.02, 1e-4, "puddle F0");
+    close(
+        0.16 * s.reflectance.x * s.reflectance.x,
+        0.02,
+        1e-4,
+        "puddle F0",
+    );
     // A puddle shows the ground beneath it darkened with w_e = 1.
     close(s.base_color.x, 0.3, 1e-6, "puddle albedo");
     assert_eq!(s.normal, Vec3::Y, "a level, unrippled puddle");
@@ -113,7 +123,11 @@ fn the_shading_numbers_are_the_notes() {
     for wet in [0.0, 0.5, 1.0] {
         for puddle in [0.0, 1.0] {
             let s = surface(base, 0.3, 1.0, wet, puddle, 1.0);
-            assert_eq!(s.base_color, mirror::SNOW_ALBEDO, "wet {wet} puddle {puddle}");
+            assert_eq!(
+                s.base_color,
+                mirror::SNOW_ALBEDO,
+                "wet {wet} puddle {puddle}"
+            );
             assert_eq!(s.roughness, 0.9);
             assert_eq!(s.metallic, 0.0, "snow covers metal");
         }
@@ -184,7 +198,10 @@ fn ripples_follow_lagardes_layers() {
     }
 
     // No weight, no ring; with full weight one layer never exceeds the normal strength 0.35.
-    assert_eq!(mirror::ripple_layer(Vec2::new(0.1, 0.1), 0, 0.3, 0.0), Vec2::ZERO);
+    assert_eq!(
+        mirror::ripple_layer(Vec2::new(0.1, 0.1), 0, 0.3, 0.0),
+        Vec2::ZERO
+    );
     let mut peak = 0.0_f32;
     for k in 0..4u32 {
         for phase in (0..20).map(|i| i as f32 / 20.0) {
@@ -210,7 +227,12 @@ fn ripples_follow_lagardes_layers() {
             close(step, expected, 2e-3, &format!("t {t0} layer {k}"));
         }
     }
-    close(model::ripple_phases(0.0)[1], (0.2 * 1.6_f32).fract(), 1e-6, "TimeAdd");
+    close(
+        model::ripple_phases(0.0)[1],
+        (0.2 * 1.6_f32).fract(),
+        1e-6,
+        "TimeAdd",
+    );
 }
 
 /// Wetness Model 6: streaks live on vertical faces, scale with the rain, stay under
@@ -251,7 +273,12 @@ fn rain_streaks_run_down_walls_only_while_raining() {
         let after = mirror::rain_streak(p, wall, 1.0, 8191.9 - model::STREAK_WRAP_S as f32);
         close(before, after, 6e-3, "streak wrap");
     }
-    close(model::streak_phase(8192.0 + 5.0), 5.0, 1e-4, "streak phase wraps");
+    close(
+        model::streak_phase(8192.0 + 5.0),
+        5.0,
+        1e-4,
+        "streak phase wraps",
+    );
 }
 
 /// The rain intensity is the particle fraction `min(1, R_liquid / 20)`.
@@ -262,11 +289,26 @@ fn rain_intensity_is_the_liquid_fraction() {
         temperature_c: t,
         ..Weather::default()
     };
-    close(model::rain_intensity(&weather(4.0, 15.0)), 0.2, 1e-6, "Rain");
-    close(model::rain_intensity(&weather(25.0, 15.0)), 1.0, 1e-6, "Storm");
+    close(
+        model::rain_intensity(&weather(4.0, 15.0)),
+        0.2,
+        1e-6,
+        "Rain",
+    );
+    close(
+        model::rain_intensity(&weather(25.0, 15.0)),
+        1.0,
+        1e-6,
+        "Storm",
+    );
     assert_eq!(model::rain_intensity(&weather(1.5, -5.0)), 0.0, "Snow");
     // Mixed phase: at 0.5 °C half of 10 mm/h falls as rain.
-    close(model::rain_intensity(&weather(10.0, 0.5)), 0.25, 1e-6, "sleet");
+    close(
+        model::rain_intensity(&weather(10.0, 0.5)),
+        0.25,
+        1e-6,
+        "sleet",
+    );
 }
 
 /// The buffer the shader reads is `surface_cover::ElementsGlobals`, five `vec4<f32>`, field for
@@ -313,7 +355,9 @@ fn the_globals_pack_as_the_shader_struct() {
 #[test]
 fn the_extension_binds_one_fragment_storage_buffer_at_101() {
     let source = include_str!("mod.rs");
-    let body = &source[source.find("pub struct WeatheredExtension").expect("the struct")..];
+    let body = &source[source
+        .find("pub struct WeatheredExtension")
+        .expect("the struct")..];
     let body = &body[..body.find("\n}").expect("the end of the struct")];
     assert_eq!(body.matches("#[storage(").count(), 1);
     assert!(

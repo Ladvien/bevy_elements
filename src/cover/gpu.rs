@@ -380,7 +380,8 @@ fn dispatch(
         span.end(&mut pass);
     }
     if stale {
-        gpu.shelter_built.store(gpu.shelter_epoch, Ordering::Relaxed);
+        gpu.shelter_built
+            .store(gpu.shelter_epoch, Ordering::Relaxed);
     }
     if steps > 0 {
         gpu.executed.fetch_add(steps, Ordering::Relaxed);

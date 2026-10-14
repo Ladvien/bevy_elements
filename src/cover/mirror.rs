@@ -51,7 +51,11 @@ pub(crate) fn drift_flux(speed_ms: f32, snow: &SnowSettings) -> f32 {
 
 /// Air temperature of a ground point `surface_above_reference_m` above the climate's reference
 /// elevation, with the lapse rate in °C/m (negative).
-pub(crate) fn local_temperature(t_ref_c: f32, lapse_c_per_m: f32, surface_above_reference_m: f32) -> f32 {
+pub(crate) fn local_temperature(
+    t_ref_c: f32,
+    lapse_c_per_m: f32,
+    surface_above_reference_m: f32,
+) -> f32 {
     t_ref_c + lapse_c_per_m * surface_above_reference_m
 }
 
@@ -126,8 +130,9 @@ pub(crate) fn wetness_step(
     relative_humidity: f32,
     sun_factor: f32,
 ) -> f32 {
-    let evaporation =
-        (1.0 + wind_ms / 5.0) * (1.0 + t_loc_c.max(0.0) / 20.0) * (1.0 - relative_humidity).max(0.0);
+    let evaporation = (1.0 + wind_ms / 5.0)
+        * (1.0 + t_loc_c.max(0.0) / 20.0)
+        * (1.0 - relative_humidity).max(0.0);
     let drying = settings.dry_rate_h * evaporation * (1.0 + sun_factor);
     (wetness + (settings.wet_per_mm * rain_mm_h - drying) * dt_h).clamp(0.0, 1.0)
 }
@@ -199,7 +204,12 @@ pub(crate) fn segment_hits_box(centre: Vec3, half: Vec3, p0: Vec3, p1: Vec3) -> 
 /// Whether a ground point is sheltered from precipitation falling with horizontal velocity
 /// `fall_xz` (the wind) and speed `fall_speed`: the ray toward where it came from,
 /// `(−fall_xz, fall_speed)`, meets a box.
-pub(crate) fn sheltered(ground: Vec3, wind_xz: Vec2, fall_speed: f32, boxes: &[(Vec3, Vec3)]) -> bool {
+pub(crate) fn sheltered(
+    ground: Vec3,
+    wind_xz: Vec2,
+    fall_speed: f32,
+    boxes: &[(Vec3, Vec3)],
+) -> bool {
     let up = Vec3::new(-wind_xz.x, fall_speed, -wind_xz.y) * (SHELTER_HEIGHT_M / fall_speed);
     boxes
         .iter()
@@ -217,7 +227,13 @@ mod tests {
     /// Snow validation 2: the coverage curve.
     #[test]
     fn coverage_follows_the_five_centimetre_smoothstep() {
-        for (depth, want) in [(0.0, 0.0), (0.0125, 0.156), (0.025, 0.5), (0.05, 1.0), (0.2, 1.0)] {
+        for (depth, want) in [
+            (0.0, 0.0),
+            (0.0125, 0.156),
+            (0.025, 0.5),
+            (0.05, 1.0),
+            (0.2, 1.0),
+        ] {
             let got = snow_coverage(depth);
             assert!((got - want).abs() < 1e-3, "c({depth}) = {got}");
         }
@@ -235,7 +251,11 @@ mod tests {
                 // 15 mm in one step at 100 kg/m³: a 1 h snowfall of 15 mm/h at -5 °C, then still air.
                 cell.step(&s, 1.0 / 3600.0, 15.0 * 3600.0, -5.0, 1.0);
                 assert!((cell.swe - 0.015).abs() < 1e-7);
-                assert!((cell.density(&s) - 100.0).abs() < 0.3, "{}", cell.density(&s));
+                assert!(
+                    (cell.density(&s) - 100.0).abs() < 0.3,
+                    "{}",
+                    cell.density(&s)
+                );
                 let steps = (days * 86_400.0 / step_s) as usize;
                 for _ in 0..steps {
                     cell.step(&s, step_s / 3600.0, 0.0, -5.0, 1.0);
@@ -255,7 +275,13 @@ mod tests {
     #[test]
     fn exposure_sheds_steep_slopes_and_the_snow_line_follows_elevation() {
         let shed = snow().shed_slope_deg;
-        for (slope, want) in [(30.0, 1.0), (40.0, 0.844), (45.0, 0.5), (50.0, 0.156), (55.0, 0.0)] {
+        for (slope, want) in [
+            (30.0, 1.0),
+            (40.0, 0.844),
+            (45.0, 0.5),
+            (50.0, 0.156),
+            (55.0, 0.0),
+        ] {
             let got = snow_exposure(slope, shed);
             assert!((got - want).abs() < 1e-3, "exposure({slope}°) = {got}");
         }
@@ -315,7 +341,11 @@ mod tests {
             water += cell.step(&s, dt, 1.5, -5.0, 1.0);
         }
         assert!((cell.swe - 0.015).abs() < 1.5e-5, "{}", cell.swe);
-        assert!((cell.depth - 0.1330).abs() < 0.1330 * 0.02, "{}", cell.depth);
+        assert!(
+            (cell.depth - 0.1330).abs() < 0.1330 * 0.02,
+            "{}",
+            cell.depth
+        );
         assert_eq!(water, 0.0);
         let melt_start = cell;
         for _ in 0..(3600 * 9 / 10 + 2) {
@@ -349,14 +379,27 @@ mod tests {
         for (hours, weather) in [(10, &cold), (12, &warm)] {
             for _ in 0..hours {
                 for _ in 0..60 {
-                    cell.step(&s, dt_h, weather.precipitation_mm_h, weather.temperature_c, 1.0);
+                    cell.step(
+                        &s,
+                        dt_h,
+                        weather.precipitation_mm_h,
+                        weather.temperature_c,
+                        1.0,
+                    );
                     point.step(weather, 0.0, dt_h);
                 }
                 let swe_mm = cell.swe * 1000.0;
                 let want = point.snow_water_mm();
-                assert!((swe_mm - want).abs() <= 0.02 * want.max(0.05), "swe {swe_mm} vs {want}");
+                assert!(
+                    (swe_mm - want).abs() <= 0.02 * want.max(0.05),
+                    "swe {swe_mm} vs {want}"
+                );
                 let want = point.snow_depth_m;
-                assert!((cell.depth - want).abs() <= 0.03 * want.max(1e-3), "depth {} vs {want}", cell.depth);
+                assert!(
+                    (cell.depth - want).abs() <= 0.03 * want.max(1e-3),
+                    "depth {} vs {want}",
+                    cell.depth
+                );
             }
         }
         assert_eq!(cell.depth, 0.0);
@@ -416,7 +459,13 @@ mod tests {
     #[test]
     fn the_puddle_mask_is_a_smoothstep_of_the_water_depth() {
         let w = WetnessSettings::default();
-        for (depth, want) in [(0.0, 0.0), (0.002, 0.0), (0.0065, 0.156), (0.011, 0.5), (0.02, 1.0)] {
+        for (depth, want) in [
+            (0.0, 0.0),
+            (0.002, 0.0),
+            (0.0065, 0.156),
+            (0.011, 0.5),
+            (0.02, 1.0),
+        ] {
             let got = puddle_mask(depth, &w);
             assert!((got - want).abs() < 1e-3, "p({depth}) = {got}");
         }
@@ -428,7 +477,13 @@ mod tests {
         let roof = [(Vec3::new(0.0, 5.0, 0.0), Vec3::new(5.0, 0.5, 5.0))];
         let at = |x: f32, wind: Vec2, v: f32| sheltered(Vec3::new(x, 0.0, 0.0), wind, v, &roof);
         let wind = Vec2::new(7.0, 0.0);
-        for (x, want) in [(2.0, false), (2.3, true), (13.6, true), (13.9, false), (-3.0, false)] {
+        for (x, want) in [
+            (2.0, false),
+            (2.3, true),
+            (13.6, true),
+            (13.9, false),
+            (-3.0, false),
+        ] {
             assert_eq!(at(x, wind, 4.39), want, "rain at x = {x}");
         }
         for (x, want) in [(-5.0, true), (4.9, true), (5.2, false), (0.0, true)] {

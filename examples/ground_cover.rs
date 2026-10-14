@@ -50,17 +50,16 @@ fn main() {
             ..default()
         })
         .add_systems(Startup, setup)
-        .add_systems(Update, (clear_after_snow, report).after(ElementsSystems::Readback))
+        .add_systems(
+            Update,
+            (clear_after_snow, report).after(ElementsSystems::Readback),
+        )
         .run();
 }
 
 /// The snow stops after `ELEMENTS_SNOW_FRAMES` frames (default 300) and the sky clears, so the
 /// snow can be seen without the fall's fog; a forced Blizzard or the rain mode keeps its weather.
-fn clear_after_snow(
-    mode: Res<Mode>,
-    mut director: ResMut<WeatherDirector>,
-    mut frame: Local<u32>,
-) {
+fn clear_after_snow(mode: Res<Mode>, mut director: ResMut<WeatherDirector>, mut frame: Local<u32>) {
     *frame += 1;
     let stop = env_f32("ELEMENTS_SNOW_FRAMES", 300.0) as u32;
     if !mode.rain && *frame == stop {
