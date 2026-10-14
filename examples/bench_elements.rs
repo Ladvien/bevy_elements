@@ -38,7 +38,7 @@ use common::{ExampleHarness, camera, stand_on_ground, test_scene};
 const WARMUP_FRAMES: u32 = 240;
 
 /// The crate's GPU passes, by diagnostic span name.
-const PASSES: [&str; 13] = [
+const PASSES: [&str; 16] = [
     "elements_wind",
     "elements_fog",
     "elements_clouds_noise",
