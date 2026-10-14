@@ -15,11 +15,16 @@ use bevy::shader::load_shader_library;
 use crate::celestial::{CelestialPlugin, SunState, clock_plugin};
 use crate::climate::{ClimatePlugin, Weather};
 use crate::clouds::CloudPlugin;
+use crate::cover::GroundCoverPlugin;
+use crate::dust::DustPlugin;
 use crate::fog::FogPlugin;
 use crate::gpu::readback::ReadbackPlugin;
+use crate::hydrology::{HydrologyPlugin, WaterPlugin};
 use crate::lightning::LightningPlugin;
 use crate::precipitation::PrecipitationPlugin;
 use crate::query::EnvironmentSnapshot;
+use crate::terrain::TerrainPlugin;
+use crate::weathered::WeatheredPlugin;
 use crate::wind::{WindPlugin, WindState};
 
 /// Every domain plugin that exists in this version, in dependency order.
@@ -35,14 +40,25 @@ pub struct ElementsPlugins;
 
 impl PluginGroup for ElementsPlugins {
     fn build(self) -> PluginGroupBuilder {
-        PluginGroupBuilder::start::<Self>()
+        let group = PluginGroupBuilder::start::<Self>()
             .add(ClimatePlugin)
             .add(CelestialPlugin)
             .add(WindPlugin)
+            .add(TerrainPlugin)
+            .add(HydrologyPlugin)
+            .add(WaterPlugin)
+            .add(GroundCoverPlugin)
+            .add(DustPlugin)
             .add(FogPlugin)
             .add(CloudPlugin)
             .add(LightningPlugin)
             .add(PrecipitationPlugin)
+            .add(WeatheredPlugin);
+        // Snow on `bevy_isomesh` voxel volumes; it needs the terrain, hydrology and cover
+        // plugins above, so it comes last.
+        #[cfg(feature = "isomesh")]
+        let group = group.add(crate::voxel::VoxelPlugin);
+        group
     }
 }
 
@@ -126,6 +142,32 @@ impl ElementsQuality {
         }
     }
 
+    /// The most cells per axis the terrain's simulation grid has (`Terrain::resolution` is
+    /// clamped to this and rounded down to a power of two). The hydrology and erosion kernels
+    /// run on this grid, so this is the one number to lower if they do not fit their budget.
+    ///
+    /// `High` takes `Medium`'s value: hydrology and erosion at 1024² and 8 substeps cost
+    /// 1.86 ms per frame against the plan's 0.6 ms (`docs/research/hydrology.md`, Deviation 20),
+    /// and 512² with 4 substeps costs 0.26 ms. `Ultra` keeps the research resolution.
+    pub fn terrain_max_resolution(self) -> u32 {
+        match self {
+            Self::Low => 256,
+            Self::Medium | Self::High => 512,
+            Self::Ultra => 2048,
+        }
+    }
+
+    /// The most hydrology and erosion substeps per frame (each is `HydrologySettings::step_s`
+    /// of simulated time); an erosion bake runs this many every frame. `High` takes `Medium`'s
+    /// value, as [`terrain_max_resolution`](Self::terrain_max_resolution).
+    pub fn hydrology_substeps(self) -> u32 {
+        match self {
+            Self::Low => 2,
+            Self::Medium | Self::High => 4,
+            Self::Ultra => 16,
+        }
+    }
+
     /// Ray-march steps for Bevy's volumetric fog.
     pub fn fog_steps(self) -> u32 {
         match self {
@@ -198,6 +240,16 @@ impl Plugin for ElementsGpuCorePlugin {
         load_shader_library!(app, "noise.wesl");
         load_shader_library!(app, "grid.wesl");
         load_shader_library!(app, "wind.wesl");
+        load_shader_library!(app, "surface_cover.wesl");
+        // The one-cell `terrain_cells` that wind, precipitation and ground materials bind until
+        // a terrain exists.
+        if let Some(mut buffers) = app
+            .world_mut()
+            .get_resource_mut::<Assets<bevy::render::storage::ShaderBuffer>>()
+        {
+            crate::terrain::insert_placeholder(&mut buffers);
+        }
+        load_shader_library!(app, "climate/snow.wesl");
         app.add_plugins(ReadbackPlugin).add_observer(dress_camera);
     }
 }

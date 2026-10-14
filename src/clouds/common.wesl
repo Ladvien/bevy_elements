@@ -44,6 +44,8 @@ struct CloudParams {
     misc: vec4<f32>,
     /// x: first z slice of this frame's noise generation.
     tail: vec4<u32>,
+    /// xyz: the camera's distance fog colour (linear, after exposure). w: its extinction, m⁻¹.
+    haze: vec4<f32>,
 }
 
 const PI: f32 = 3.14159265358979;
@@ -140,6 +142,17 @@ fn shell_range(o_r: f32, mu: f32, h_b: f32, h_t: f32, big_r: f32) -> vec2<f32> {
         return vec2<f32>(t_in, first_end);
     }
     return vec2<f32>(max(t_in, base.y), t_out);
+}
+
+/// Distance to the planet's surface along a ray that meets it before it enters the cloud layer
+/// at `shell_in` (a ray past the edge of a finite ground), or −1 when it does not. Such a ray sees
+/// no cloud: `shell_range` does not know the planet and finds the layer on its far side.
+fn ground_before_layer(o_r: f32, mu: f32, shell_in: f32, big_r: f32) -> f32 {
+    let ground = sphere_roots(o_r, mu, big_r);
+    if ground.x > 0.0 && ground.x <= ground.y && ground.x < shell_in {
+        return ground.x;
+    }
+    return -1.0;
 }
 
 /// Unit world direction of the ray through screen position `uv` (0–1, top-left origin).

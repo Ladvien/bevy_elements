@@ -4,7 +4,9 @@
 
 import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput;
 import bevy_render::view::View;
-import bevy_elements::clouds::common::{CloudParams, ray_dir, scene_distance, shell_range};
+import bevy_elements::clouds::common::{
+    CloudParams, ground_before_layer, ray_dir, scene_distance, shell_range,
+};
 
 @group(0) @binding(0) var<uniform> view: View;
 @group(0) @binding(1) var<uniform> params: CloudParams;
@@ -37,8 +39,17 @@ fn cloud_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         // The sky: Bevy's atmosphere is lit by the sun light, which carries only the beam
         // `T̄` under cloud, but the sky above the cloud is not dimmed by the cloud below it.
         // The march stops at a transmittance of 0.01, so the gain ramps in above that: an
-        // opaque cloud must not amplify the sky behind it.
-        cloud.a *= mix(1.0, params.sky.x, smoothstep(OPAQUE_BELOW, SKY_ABOVE, cloud.a));
+        // opaque cloud must not amplify the sky behind it. A ray that meets the planet before
+        // the layer (past the edge of a finite ground) ends beneath the deck, which the beam
+        // lights correctly: no gain there (clouds.md Deviation 28).
+        let cam = view.world_position;
+        let dir = ray_dir(in.uv, view.world_from_clip, cam);
+        let big_r = params.camera.w;
+        let o_r = big_r + cam.y;
+        let shell = shell_range(o_r, dir.y, params.layer.x, params.layer.y, big_r);
+        if ground_before_layer(o_r, dir.y, shell.x, big_r) < 0.0 {
+            cloud.a *= mix(1.0, params.sky.x, smoothstep(OPAQUE_BELOW, SKY_ABOVE, cloud.a));
+        }
     }
     return cloud;
 }

@@ -6,7 +6,8 @@
 //!
 //! The particles read the wind field, so [`WindPlugin`](crate::WindPlugin) must be present;
 //! without it (or without an [`ElementsCamera`](crate::ElementsCamera)) nothing is simulated or
-//! drawn. Ground is the plane y = 0 until terrain arrives.
+//! drawn. Ground is the terrain's surface plus the water standing on it (the plane y = 0 without a
+//! terrain).
 
 mod gpu;
 pub(crate) mod model;
@@ -29,8 +30,11 @@ use crate::gpu::grid::storage_buffer;
 use crate::plugin::{
     ElementsCamera, ElementsQuality, ElementsSystems, ElementsView, ensure_gpu_core,
 };
+use crate::terrain::{NO_TERRAIN, TerrainParamsGpu, TerrainState};
 use crate::wind::{WindFieldParams, WindState};
-use model::{marshall_palmer_lambda, particle_counts};
+use model::{
+    DUST_FALL_SPEED_MS, DUST_HEIGHT_SCALE_M, DUST_SIZE_M, marshall_palmer_lambda, particle_counts,
+};
 
 /// Edge of the camera-centred particle box, m.
 pub const PRECIPITATION_BOX_M: f32 = 60.0;
@@ -40,7 +44,7 @@ pub const MAX_PRECIPITATION_BLOCKERS: usize = 256;
 pub(crate) const SPLASH_RING: usize = 4096;
 /// Rain impacts closer than this horizontally to the camera spawn a splash, m.
 const SPLASH_RADIUS_M: f32 = 20.0;
-/// Height of the ground plane until terrain exists, m.
+/// Height of the ground plane without a terrain, m.
 const GROUND_M: f32 = 0.0;
 /// The shaders' clock wraps at this many seconds so f32 keeps its resolution.
 const TIME_WRAP_S: f32 = 1024.0;
@@ -61,7 +65,7 @@ const SPLASH_SOFT_FADE_M: f32 = 0.05;
 /// Width of the fade-out at the sides of the box so its edges do not show, m.
 const EDGE_FADE_M: f32 = 8.0;
 /// `Particle::kind` of a parked (inactive) particle. The kind is in the low two bits: 0 rain,
-/// 1 snow, 2 reserved for dust, 3 parked; the upper bits count respawns.
+/// 1 snow, 2 dust, 3 parked; the upper bits count respawns.
 const KIND_PARKED: u32 = 3;
 
 /// A box that stops precipitation: a roof, an awning, a tent. The box is `half_extents` in the
@@ -80,9 +84,10 @@ pub struct PrecipitationBlocker {
 /// The GPU particle and splash buffers, for tests and custom effects that want to read them.
 ///
 /// `particles` holds `capacity` 32-byte records `{pos: vec3<f32>, kind: u32, vel: vec3<f32>,
-/// life: f32}`; `kind & 3` is 0 for rain, 1 for snow, 3 for a parked (inactive) particle, and
-/// the upper bits count respawns. The first `rain` records are rain, the next `snow` are snow,
-/// every other record is parked. `splashes` is `{counter: u32, 3 × u32 padding, ring: 4096 ×
+/// life: f32}`; `kind & 3` is 0 for rain, 1 for snow, 2 for dust, 3 for a parked (inactive)
+/// particle, and the upper bits count respawns. The first `rain` records are rain, the next
+/// `snow` are snow, the next `dust` are dust, every other record is parked. `splashes` is
+/// `{counter: u32, 3 × u32 padding, ring: 4096 ×
 /// vec4<f32>}` where a ring entry is the splash position and the (wrapped) birth time, or a
 /// negative birth time when never written.
 #[derive(Resource, Clone, Debug)]
@@ -97,6 +102,8 @@ pub struct PrecipitationState {
     pub rain: u32,
     /// Active snow particles this frame.
     pub snow: u32,
+    /// Active dust particles this frame.
+    pub dust: u32,
 }
 
 /// Marks a camera the precipitation draws into; added to every [`ElementsCamera`].
@@ -117,7 +124,12 @@ pub(crate) struct PrecipParams {
     rain: Vec4,
     /// x: flutter speed m/s. y: snow fall speed m/s. zw: flutter frequency range, Hz.
     snow: Vec4,
+    /// x: dust fall speed, m/s. y: dust height scale, m.
+    dust: Vec4,
+    /// x: dust count.
+    dust_counts: UVec4,
     wind: WindFieldParams,
+    terrain: TerrainParamsGpu,
 }
 
 /// Uniform of `draw.wesl`.
@@ -135,6 +147,8 @@ pub(crate) struct DrawParams {
     rain: Vec4,
     /// x: snow albedo. y: ring radius, m. z: ring life, s. w: shader clock, s.
     snow: Vec4,
+    /// rgb: dust albedo. w: dust sprite diameter, m.
+    dust: Vec4,
     /// xyz: camera velocity, m/s. w: box half edge, m.
     camera: Vec4,
 }
@@ -150,7 +164,7 @@ pub(crate) struct BlockerGpu {
 
 impl BlockerGpu {
     /// The blocker for a box of `half_extents` placed by `transform`; `None` when degenerate.
-    fn new(half_extents: Vec3, transform: &GlobalTransform) -> Option<Self> {
+    pub(crate) fn new(half_extents: Vec3, transform: &GlobalTransform) -> Option<Self> {
         if half_extents.min_element() <= 0.0 || !half_extents.is_finite() {
             return None;
         }
@@ -171,7 +185,7 @@ impl BlockerGpu {
 
 /// The nearest [`MAX_PRECIPITATION_BLOCKERS`] of `items` to `camera`, by squared distance of
 /// the centre, ties by entity, so the set is deterministic.
-fn nearest_blockers(
+pub(crate) fn nearest_blockers(
     camera: Vec3,
     items: impl Iterator<Item = (Entity, BlockerGpu)>,
 ) -> Vec<BlockerGpu> {
@@ -194,11 +208,13 @@ pub(crate) struct PrecipitationGpu {
     pub particles: Handle<ShaderBuffer>,
     pub splashes: Handle<ShaderBuffer>,
     pub wind_field: Handle<Image>,
+    /// The terrain's `terrain_cells`, or the one-cell placeholder without a live terrain.
+    pub terrain: Handle<ShaderBuffer>,
     pub capacity: u32,
     pub params: PrecipParams,
     pub draw: DrawParams,
     pub blockers: Vec<BlockerGpu>,
-    /// Particles to draw: the active rain and snow, which are the first records.
+    /// Particles to draw: the active rain, snow and dust, which are the first records.
     pub drawn: u32,
     /// Whether the kernel runs this frame.
     pub active: bool,
@@ -272,11 +288,13 @@ fn ensure_buffers(
         capacity,
         rain: 0,
         snow: 0,
+        dust: 0,
     });
     commands.insert_resource(PrecipitationGpu {
         particles,
         splashes,
         wind_field: wind.field.clone(),
+        terrain: NO_TERRAIN,
         capacity,
         params: PrecipParams::default(),
         draw: DrawParams::default(),
@@ -301,6 +319,7 @@ fn update_precipitation(
     state: Option<ResMut<PrecipitationState>>,
     flash: Res<LightningFlash>,
     shadows: Option<Res<CloudShadows>>,
+    terrain: Option<Res<TerrainState>>,
 ) {
     let (Some(mut gpu), Some(mut state)) = (gpu, state) else {
         return;
@@ -311,18 +330,25 @@ fn update_precipitation(
 
     let snow_fraction = weather.snow_fraction();
     let counts = if view.entity.is_some() {
-        particle_counts(gpu.capacity, weather.precipitation_mm_h, snow_fraction)
+        particle_counts(
+            gpu.capacity,
+            weather.precipitation_mm_h,
+            snow_fraction,
+            weather.dust,
+        )
     } else {
         model::ParticleCounts::default()
     };
     state.rain = counts.rain;
     state.snow = counts.snow;
+    state.dust = counts.dust;
     gpu.drawn = counts.total();
     gpu.active = dt > 0.0 && counts.total() > 0;
     if !gpu.active {
         return;
     }
     let camera = view.position;
+    let live = terrain.as_ref().filter(|t| t.is_live());
 
     let selected = nearest_blockers(
         camera,
@@ -351,8 +377,14 @@ fn update_precipitation(
             0.0,
         ),
         snow: SNOW_FLUTTER,
+        dust: Vec4::new(DUST_FALL_SPEED_MS, DUST_HEIGHT_SCALE_M, 0.0, 0.0),
+        dust_counts: UVec4::new(counts.dust, 0, 0, 0),
         wind: wind.field_params(),
+        terrain: live.map_or_else(TerrainParamsGpu::default, |t| {
+            TerrainParamsGpu::new(&t.grid, 1, true)
+        }),
     };
+    gpu.terrain = live.map_or(NO_TERRAIN, |t| t.cells.clone());
     // Never an empty binding: the count says how many records are real.
     gpu.blockers = if selected.is_empty() {
         vec![BlockerGpu::default()]
@@ -402,6 +434,7 @@ fn update_precipitation(
             SPLASH_LIFE_S,
             runtime.time,
         ),
+        dust: crate::fog::DUST_ALBEDO.extend(DUST_SIZE_M),
         camera: view.velocity.extend(PRECIPITATION_BOX_M * 0.5),
     };
 }

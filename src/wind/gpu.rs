@@ -67,7 +67,12 @@ pub(super) fn plugin(app: &mut App) {
         .init_resource::<WindUniform>()
         .add_systems(RenderStartup, init_pipelines)
         .add_systems(Render, prepare.in_set(RenderSystems::PrepareBindGroups))
-        .add_systems(RenderGraph, dispatch.before(camera_driver));
+        .add_systems(
+            RenderGraph,
+            dispatch
+                .after(crate::terrain::TerrainDispatch)
+                .before(camera_driver),
+        );
 }
 
 fn layout() -> BindGroupLayoutDescriptor {
@@ -84,6 +89,7 @@ fn layout() -> BindGroupLayoutDescriptor {
                 storage_buffer_read_only_sized(false, None),
                 storage_buffer_sized(false, None),
                 texture_storage_3d(TextureFormat::Rgba16Float, StorageTextureAccess::WriteOnly),
+                storage_buffer_read_only_sized(false, None),
             ),
         ),
     )
@@ -118,7 +124,16 @@ fn prepare(
         return;
     };
     let get = |h: &Handle<bevy::render::storage::ShaderBuffer>| buffers.get(h).map(|b| &b.buffer);
-    let (Some(va), Some(vb), Some(pa), Some(pb), Some(solid), Some(div), Some(field)) = (
+    let (
+        Some(va),
+        Some(vb),
+        Some(pa),
+        Some(pb),
+        Some(solid),
+        Some(div),
+        Some(field),
+        Some(terrain),
+    ) = (
         get(&grid.velocity[0]),
         get(&grid.velocity[1]),
         get(&grid.pressure[0]),
@@ -126,7 +141,9 @@ fn prepare(
         get(&grid.solid),
         get(&grid.divergence),
         images.get(&grid.field),
-    ) else {
+        get(&grid.terrain),
+    )
+    else {
         commands.remove_resource::<WindBindGroups>();
         return;
     };
@@ -155,6 +172,7 @@ fn prepare(
                 p_in.as_entire_buffer_binding(),
                 p_out.as_entire_buffer_binding(),
                 &field.texture_view,
+                terrain.as_entire_buffer_binding(),
             )),
         )
     };
@@ -212,4 +230,29 @@ fn dispatch(
     run(PUBLISH, &bg[1][0]);
     span.end(&mut pass);
     grid.live.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::render::render_resource::{BindingType, BufferBindingType};
+
+    /// Terrain validation 9: the wind layout stays within WebGPU's default of 8 storage buffers
+    /// per stage (7 with the terrain).
+    #[test]
+    fn the_wind_layout_binds_seven_storage_buffers() {
+        let storage = super::layout()
+            .entries
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.ty,
+                    BindingType::Buffer {
+                        ty: BufferBindingType::Storage { .. },
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(storage, 7);
+    }
 }

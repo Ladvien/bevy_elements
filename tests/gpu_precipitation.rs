@@ -414,3 +414,82 @@ fn the_splash_rate_at_saturation_matches_the_estimate() {
     assert!(rate < 16_400.0, "the ring would be overrun");
     finish(app);
 }
+
+/// `dust.md` Validation 8: the forced dust storm fills 40 % of the buffer with dust (kind 2),
+/// and no rain or snow; the sprites ride the wind, fall at 0.05 m/s and follow the haze's
+/// exponential profile in height above the ground.
+#[test]
+#[ignore = "needs a GPU"]
+fn a_dust_storm_fills_forty_percent_of_the_buffer_with_wind_driven_sprites() {
+    let _lock = serial();
+    let pin = Pin {
+        preset: WeatherPreset::DustStorm,
+        mm_h: 0.0,
+        temperature_c: 30.0,
+    };
+    let scene = Scene {
+        camera_y: 1.7,
+        roof_above: None,
+    };
+    let mut app = app_with(ElementsQuality::High, Climate::desert(), pin, scene);
+    run(&mut app, 240);
+    let (speed, direction, dust_level) = {
+        let w = app.world().resource::<Weather>();
+        (w.wind_speed_ms, w.wind_direction, w.dust)
+    };
+    let all = particles(&mut app);
+    let (rain, snow, dust) = (
+        count_kind(&all, 0),
+        count_kind(&all, 1),
+        count_kind(&all, 2),
+    );
+    let parked = count_kind(&all, 3);
+    println!(
+        "dust {dust_level}: {rain} rain, {snow} snow, {dust} dust, {parked} parked of {}",
+        all.len()
+    );
+    assert_eq!((rain, snow), (0, 0));
+    assert!((dust_level - 0.9).abs() < 1e-3, "weather dust {dust_level}");
+    assert!(dust.abs_diff(60_000) <= 1, "{dust} dust sprites");
+    assert_eq!(dust + parked, all.len(), "every other record is parked");
+    assert_eq!(
+        app.world().resource::<PrecipitationState>().dust as usize,
+        dust
+    );
+    // The dust records are the first after rain and snow: indices 0..dust.
+    assert!(all[..dust].iter().all(|p| p.kind & 3 == 2));
+
+    let sprites: Vec<_> = all.iter().filter(|p| p.kind & 3 == 2).collect();
+    let n = sprites.len() as f32;
+    let along = sprites
+        .iter()
+        .map(|p| p.vel.x * direction.x + p.vel.z * direction.y)
+        .sum::<f32>()
+        / n;
+    let vy = sprites.iter().map(|p| p.vel.y).sum::<f32>() / n;
+    println!("wind {speed} m/s: mean along-wind velocity {along:.2}, mean v_y {vy:.3}");
+    assert!(
+        (along - speed).abs() < 0.25 * speed,
+        "mean horizontal velocity {along}"
+    );
+    assert!(vy.abs() < 0.5, "mean vertical velocity {vy}");
+    // Heights above the ground plane follow the exponential of scale 60 m truncated to the part
+    // of the box above it: 0 to 31.7 m for a camera at 1.7 m.
+    let top = 1.7_f32 + 30.0;
+    let mean_expected = 60.0 - top * (-top / 60.0).exp() / (1.0 - (-top / 60.0).exp());
+    let mean_height = sprites.iter().map(|p| p.pos.y).sum::<f32>() / n;
+    println!("mean sprite height {mean_height:.2} m, expected {mean_expected:.2} m");
+    // The wind's vertical turbulence mixes the sprites between
+    // respawns, so the stationary mean is within 15 % of the sampler's, not equal to it (the
+    // sampler itself is pinned to 0.5 m on 10⁶ draws by `model.rs`).
+    assert!(
+        (mean_height - mean_expected).abs() < 0.15 * mean_expected,
+        "{mean_height} vs {mean_expected}"
+    );
+    assert!(
+        sprites
+            .iter()
+            .all(|p| p.pos.y > -0.2 && p.pos.y < top + 0.01)
+    );
+    finish(app);
+}

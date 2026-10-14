@@ -125,3 +125,7 @@ No graphics paper on snow cover is in the corpus. Hydrology papers with degree-d
 | stem | what it is | use |
 |---|---|---|
 | `10.1111_cgf.13815` ★ | Paris et al. 2019, *Desertscape simulation* | seed |
+
+### Voxel snow (M5)
+
+No document in the library covers snow or any deposition layer on implicit surfaces, voxel terrain or level sets (phrase searches of 2026-10-13 for `level set` with `snow`, `narrow band`, and incremental marching-cubes re-extraction found none). What `voxel-snow.md` cites: `10.1145_37402.37435` (Lorensen & Cline 1987, marching cubes), `10.1016_j.gmod.2021.101098` (Tereshin et al. 2021, function representation: `min`/`max` set operations on non-distance fields), `10.1109_2945.489388` and `10.1109_2945.597798` (span-space and interval-tree isosurface extraction, not incremental). Festenberg & Gumhold 2011 (`10.1111_j.1467-8659.2011.01904.x`) is not in the corpus; see "Snow cover and melt (M4)".

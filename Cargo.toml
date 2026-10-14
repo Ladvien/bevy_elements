@@ -1,6 +1,6 @@
 [package]
 name = "bevy_elements"
-version = "0.1.0"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.97.1"
 description = "Living environments for Bevy: sun, moon and stars, climate-driven weather, GPU wind, volumetric clouds, rain, snow and fog, lightning, terrain with hydraulic and thermal erosion, flooding, snow cover, wetness and dust — simulated in compute shaders."
@@ -25,6 +25,8 @@ default = []
 serde = ["dep:serde"]
 # Drive `bevy_flora`'s global wind, season and wetness from this crate (`ElementsFloraPlugin`).
 flora = ["dep:bevy_flora"]
+# Volumetric snow on `bevy_isomesh` voxel volumes (`VoxelPlugin`, `VoxelGround`, `SnowyField`).
+isomesh = ["dep:bevy_isomesh", "dep:isomesh"]
 
 [dependencies]
 # The umbrella with defaults off. Features unify with the game's full bevy, so this costs a consumer
@@ -49,6 +51,8 @@ bytemuck = { version = "1", features = ["derive"] }
 # Optional sibling: trees and their wind, season and wetness belong to `bevy_flora`; this crate
 # only writes its public resources (feature `flora`). Same Bevy minor (0.20).
 bevy_flora = { version = "0.30", optional = true, default-features = false }
+bevy_isomesh = { version = "0.0.11", optional = true }
+isomesh = { version = "0.0.11", optional = true }
 
 # **Tests and examples only.** The examples need a window and the full 3D pipeline, so they take the
 # full umbrella here, where it cannot reach a consumer's dependency graph. `tests/leaf.rs` reads
@@ -65,6 +69,10 @@ bevy = { version = "0.20.0", default-features = false, features = ["web", "webgp
 name = "flora_wind"
 required-features = ["flora"]
 
+[[example]]
+name = "voxel_snow"
+required-features = ["isomesh"]
+
 [lints.rust]
 missing_docs = "warn"
 unsafe_code = "forbid"
@@ -77,12 +85,16 @@ dbg_macro = "deny"
 
 # Simulation and rendering in a debug build is 20-50x slower and makes it look as if the algorithm
 # is wrong rather than the profile. Examples are always run with --release; this keeps a debug run
-# merely slow rather than unusable.
+# merely slow rather than unusable. debuginfo 0 rather than the default 2: a Bevy example's
+# debuginfo link ran CI's 7 GB runner out of memory (`ld terminated with signal 7 [Bus
+# error]`, twice, on `weathered_town` and `erosion_bake`; bevy_isomesh measured the same
+# size at ~2 GB per example). A backtrace still has function names without line numbers.
 [profile.dev.package."*"]
 opt-level = 3
 
 [profile.dev]
 opt-level = 1
+debug = 0
 
 # Bevy's wasm binary is size-bound, not arithmetic-bound, so `s` beats `3` and `thin` beats `fat`:
 # fat LTO on a 30 MB module costs minutes per example. `strip = "debuginfo"` rather than `true`

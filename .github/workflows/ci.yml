@@ -39,12 +39,21 @@ jobs:
         run: cargo build --release
 
       # Includes `tests/leaf.rs`, the boundary ratchet. GPU tests are `#[ignore = "needs a GPU"]` and
-      # never run here.
+      # never run here. The `isomesh` feature's crate compiles with the published isomesh 0.0.11:
+      # its module and the `voxel_snow` example are feature-gated, so a plain `cargo test` skips
+      # them and every voxel test would only ever run on a feature-enabled machine.
       - name: Test
         run: cargo test
 
+      - name: Test the isomesh feature
+        run: cargo test --features=isomesh --lib
+
+      # Debug-info debugprofile links of a Bevy example ran the runner out of memory:
+      # `ld terminated with signal 7 [Bus error]` (bevy_isomesh made the same failure
+      # visible at 2 GB of debuginfo per example). Examples only have to load; the
+      # profile keeps debuginfo turned down for this build alone.
       - name: Build examples
-        run: cargo build --examples --all-features
+        run: env RUSTFLAGS="-C debuginfo=0" cargo build --examples --all-features
 
   lint:
     name: fmt + clippy + doc

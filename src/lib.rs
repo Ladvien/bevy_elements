@@ -4,15 +4,22 @@
 mod celestial;
 mod climate;
 mod clouds;
+mod cover;
+mod dust;
 mod flash;
 #[cfg(feature = "flora")]
 mod flora;
 mod fog;
 mod gpu;
+mod hydrology;
 mod lightning;
 mod plugin;
 mod precipitation;
 mod query;
+mod terrain;
+#[cfg(feature = "isomesh")]
+mod voxel;
+mod weathered;
 mod wind;
 
 // Plugin group, system sets, camera, quality.
@@ -63,6 +70,36 @@ pub use lightning::{
     StrikeLightning, Thunder,
 };
 
+// Terrain.
+pub use terrain::{
+    GroundExtension, GroundMaterial, GroundParams, ProceduralTerrain, Terrain, TerrainExtension,
+    TerrainGrid, TerrainMaterial, TerrainMaterialParams, TerrainPlugin, TerrainRender,
+    TerrainSnapshot, TerrainSource, TerrainState,
+};
+
+// Aeolian transport.
+pub use dust::{DustPlugin, DustSettings, DustStats};
+
+// Hydrology and erosion.
+pub use hydrology::{
+    ErodeTerrain, ErosionSettings, HydrologyBoundary, HydrologyPlugin, HydrologySettings,
+    HydrologyStats, MAX_WATER_SOURCES, TerrainBaked, WaterExtension, WaterMaterial, WaterParams,
+    WaterPatch, WaterPlugin, WaterSettings, WaterSink, WaterSource, WaterState, evaporation_mm_h,
+};
+
+// Ground cover: snow and wetness maps.
+pub use cover::{CoverState, CoverStats, GroundCoverPlugin, SnowSettings, WetnessSettings};
+
 // `bevy_flora` integration.
 #[cfg(feature = "flora")]
 pub use flora::{ElementsFloraPlugin, FLORA_FULL_WIND_MS};
+
+// Weathered materials.
+pub use weathered::{
+    ElementsGlobals, SNOW_ALBEDO, SNOW_ROUGHNESS, WeatheredExtension, WeatheredMaterial,
+    WeatheredPlugin,
+};
+
+// Volumetric snow on `bevy_isomesh` voxel volumes.
+#[cfg(feature = "isomesh")]
+pub use voxel::{SnowyField, VoxelGround, VoxelGroundSystems, VoxelPlugin};
