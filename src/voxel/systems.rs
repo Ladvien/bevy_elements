@@ -99,6 +99,9 @@ fn mark(
     }
 }
 
+/// A volume that has state but lost its `VoxelGround`.
+type WithoutGround = (With<VoxelVolume>, Without<VoxelGround>);
+
 /// Clean up what a volume no longer needs: a terrain whose volume is gone, and the state of a
 /// volume that lost its `VoxelGround` (its field is the user's again and every chunk is
 /// remeshed without snow).
@@ -106,7 +109,7 @@ pub(crate) fn voxel_ground_maintain(
     mut commands: Commands,
     terrains: Query<(Entity, &VoxelGroundTerrain)>,
     mut volumes: Query<(Entity, &mut VoxelVolume, Option<&VoxelGroundState>)>,
-    removed: Query<(Entity, &VoxelGroundState), (With<VoxelVolume>, Without<VoxelGround>)>,
+    removed: Query<(Entity, &VoxelGroundState), WithoutGround>,
     chunks: Query<(Entity, &VoxelChunk)>,
     grounds: Query<&VoxelGround>,
     quality: Res<ElementsQuality>,
