@@ -69,6 +69,7 @@ No system is implemented without its `docs/research/<system>.md`, committed firs
 - **Layers are written from a test through `Assets<ShaderBuffer>`**: after the terrain is live, `buffer.clear(); buffer.extend_from_slice(&data)` on the `TerrainState` handle re-uploads it with the same buffer identity (same size, label and usage take Bevy's `write_buffer` path). Hold the simulation first (`HydrologySettings { time_scale: 0.0, .. }`), write, then release it; `tests/gpu_hydrology.rs` shows the pattern, and a `time_scale` of `substeps_per_frame · 1.2` runs exactly the quality's substeps in a 1/60 s frame. The GPU tests run at `Ultra` (16 substeps a frame) so a thousand substeps are a hundred frames: the card is shared and a contended frame can take half a second.
 - **An f32 water depth cannot hold a transfer below half its ulp**, so rain, evaporation and melt are delivered in quanta of at least 5 µm (`hydrology::model::QuantumAccumulator`), and a deep lake with a surface slope below about 10⁻⁵ does not conserve water exactly (`docs/research/hydrology.md`, Deviation 21). Tests that compare volumes under rain use dry ground or a uniform tank.
 - **A pass that dispatches every frame needs a bring-up handshake.** The main world schedules substeps only after the render world says every pipeline is compiled and every buffer exists (`HydrologyGpu::ready`) and counts what was recorded (`executed`) and what was not (`dropped`); wait on `HydrologyStats::substeps`, never on frames.
+- **A dropped `App` does not give back all of its renderer**: every app built and dropped in one process leaks about 2 threads and 2 file descriptors (measured with a bare `ElementsPlugins` app, with and without a readback outstanding), and after about ten GPU test apps of the cloud and terrain kind `request_adapter` fails in the next one ("Unable to find a GPU", `bevy_render renderer/mod.rs:308`), every later test in that process failing within milliseconds. A game builds one renderer and is not affected. Keep a test process below nine GPU apps: the lib's GPU tests run one module per process (below), and an integration-test file stays under that count.
 
 ## Build and test
 
@@ -77,7 +78,8 @@ cargo build --release && cargo test && cargo build --examples --all-features
 cargo clippy --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS=-D warnings cargo doc --no-deps --all-features
 cargo build --lib --target wasm32-unknown-unknown
-cargo test -- --ignored   # GPU tests, need a GPU
+cargo test --release --tests -- --ignored --test-threads=1 --skip ::gpu_tests::   # GPU integration tests, one process per file
+for m in clouds terrain; do cargo test --release --lib -- --ignored --test-threads=1 $m::gpu_tests::; done   # lib GPU tests, one process per module
 ELEMENTS_FRAMES=600 ELEMENTS_SHOT=/tmp/x.png cargo run --release --example quickstart
 ```
 

@@ -106,8 +106,9 @@ pub struct ErosionSettings {
     /// The smallest slope sine used for the capacity, so flat water still carries a little.
     /// Default 0.05 (2.9°).
     pub min_tilt: f32,
-    /// The angle of repose, degrees: thermal erosion moves material from slopes steeper than
-    /// this. Bedrock moves only above this plus 10°. Default 35.
+    /// The angle of repose, degrees: thermal erosion moves loose sediment from slopes steeper
+    /// than this. Bedrock moves only above this plus 10°, and only during an [`ErodeTerrain`]
+    /// bake: a rock face stands at any angle on game time. Default 35.
     pub talus_deg: f32,
     /// The fraction of the largest stable transfer that one thermal pass (every 4th substep)
     /// moves. Default 0.15.
@@ -666,9 +667,15 @@ fn run_hydrology(
 
     let cell = grid.cell_m;
     let tan_talus = erosion.talus_deg.to_radians().tan();
-    let tan_bedrock = (erosion.talus_deg + model::BEDROCK_EXTRA_DEG)
-        .to_radians()
-        .tan();
+    // Rock faces collapse on geological time, so only a bake moves bedrock (erosion.md
+    // Deviation 15); on game time thermal erosion is the slumping of loose sediment.
+    let tan_bedrock = if runtime.bake.is_some() {
+        (erosion.talus_deg + model::BEDROCK_EXTRA_DEG)
+            .to_radians()
+            .tan()
+    } else {
+        model::UNREACHABLE_TAN
+    };
     gpu.params = HydroParams {
         origin: grid.origin,
         cell,

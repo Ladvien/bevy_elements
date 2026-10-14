@@ -79,13 +79,23 @@ pub(crate) fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// The four layer weights `(rock, sand, soil, grass)` of `terrain.wesl` for a slope angle
-/// (degrees, detail perturbation already added) and a sediment depth (m).
-pub(crate) fn layer_weights(slope_deg: f32, sediment_m: f32) -> [f32; 4] {
-    let rock = smoothstep(37.0, 43.0, slope_deg);
-    let sand =
-        smoothstep(0.3, 0.7, sediment_m) * (1.0 - smoothstep(26.0, 30.0, slope_deg)) * (1.0 - rock);
-    let band = smoothstep(28.0, 34.0, slope_deg);
+/// Andersson 2007 §5.2.3, Listing 2: the Overlay blend of `detail` onto `mask` at full opacity.
+pub(crate) fn overlay(mask: f32, detail: f32) -> f32 {
+    if mask < 0.5 {
+        2.0 * mask * detail
+    } else {
+        1.0 - 2.0 * (1.0 - mask) * (1.0 - detail)
+    }
+}
+
+/// The four layer weights `(rock, sand, soil, grass)` of `render.wesl` for a slope angle
+/// (degrees), a sediment depth (m) and a detail value in [0, 1] (0.5: none).
+pub(crate) fn layer_weights(slope_deg: f32, sediment_m: f32, detail: f32) -> [f32; 4] {
+    let rock = overlay(smoothstep(35.0, 45.0, slope_deg), detail);
+    let sand = overlay(smoothstep(0.3, 0.7, sediment_m), detail)
+        * (1.0 - smoothstep(26.0, 30.0, slope_deg))
+        * (1.0 - rock);
+    let band = overlay(smoothstep(26.0, 36.0, slope_deg), detail);
     let rest = (1.0 - rock) * (1.0 - sand);
     [rock, sand, rest * band, rest * (1.0 - band)]
 }
@@ -201,24 +211,35 @@ mod tests {
 
     const GOLDEN_HILLS_256: u64 = 0x6f04_892c_64bc_b5eb;
 
-    /// Validation 7: the layer weights sum to one and pick the plan's layers.
+    /// Validation 7: the layer weights sum to one for any detail, pick the plan's layers without
+    /// detail, and the detail never moves a layer that is fully on or off.
     #[test]
     fn the_layer_weights_sum_to_one_and_pick_the_right_layer() {
         for a in (0..90).step_by(1) {
             for s in [0.0, 0.2, 0.4, 0.5, 0.6, 0.8, 1.0, 4.0] {
-                let w = layer_weights(a as f32, s);
-                assert!(
-                    (w.iter().sum::<f32>() - 1.0).abs() < 1e-6,
-                    "{a}° {s} m: {w:?}"
-                );
-                assert!(w.iter().all(|x| (0.0..=1.0).contains(x)));
+                for d in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                    let w = layer_weights(a as f32, s, d);
+                    assert!(
+                        (w.iter().sum::<f32>() - 1.0).abs() < 1e-6,
+                        "{a}° {s} m detail {d}: {w:?}"
+                    );
+                    assert!(w.iter().all(|x| (0.0..=1.0).contains(x)));
+                }
             }
         }
-        assert!(layer_weights(45.0, 0.0)[0] >= 0.99);
-        assert!(layer_weights(20.0, 1.0)[1] >= 0.99);
-        assert_eq!(layer_weights(10.0, 0.0)[3], 1.0);
-        let soil = layer_weights(31.0, 0.0)[2];
+        assert!(layer_weights(45.0, 0.0, 0.5)[0] >= 0.99);
+        assert!(layer_weights(20.0, 1.0, 0.5)[1] >= 0.99);
+        assert_eq!(layer_weights(10.0, 0.0, 0.5)[3], 1.0);
+        let soil = layer_weights(31.0, 0.0, 0.5)[2];
         assert!((0.3..0.7).contains(&soil), "soil at 31°: {soil}");
+        // Fully on or off stays put under any detail: rock at 50°, grass at 10°.
+        for d in [0.0, 0.3, 0.7, 1.0] {
+            assert_eq!(layer_weights(50.0, 0.0, d)[0], 1.0);
+            assert_eq!(layer_weights(10.0, 0.0, d)[3], 1.0);
+        }
+        // Inside a transition the detail spans the whole range: at 40° rock goes 0 → 1.
+        assert_eq!(layer_weights(40.0, 0.0, 0.0)[0], 0.0);
+        assert_eq!(layer_weights(40.0, 0.0, 1.0)[0], 1.0);
     }
 
     /// Validation 5: on the plane `h = 0.5 x` the central-difference slope is atan(0.5) at every

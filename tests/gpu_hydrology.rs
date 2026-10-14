@@ -948,9 +948,12 @@ fn a_flood_reaches_the_marker_and_stays() {
         first_wet as f32 <= 100.0 / 2.5 + 2.0,
         "arrival at {first_wet} s"
     );
+    // The front's ramp may show in the two samples before the crossing: each sample reads the
+    // asynchronous readback, which lags the simulation by a load-dependent number of frames, so on
+    // a busy GPU two consecutive samples can be less than a simulated second apart.
     for (t, d) in samples.iter().enumerate().take(first_wet) {
         assert!(
-            d.is_none_or(|d| d < 1e-3 || t + 1 >= first_wet),
+            d.is_none_or(|d| d < 1e-3 || t + 2 >= first_wet),
             "water at {t} s before the front"
         );
     }

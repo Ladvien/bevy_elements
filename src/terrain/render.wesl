@@ -7,7 +7,7 @@
 // depth/normal prepass fragment stays Bevy's.
 
 import bevy_elements::grid::{GridParams, grid_taps};
-import bevy_elements::noise::{perlin3, perlin3_d, fbm3};
+import bevy_elements::noise::{perlin3_d, fbm3};
 import bevy_elements::terrain::common::TerrainParams;
 import bevy_pbr::render::{
     mesh_functions,
@@ -119,12 +119,20 @@ const SOIL: vec3<f32> = vec3<f32>(0.0732, 0.0397, 0.0196);
 const SAND: vec3<f32> = vec3<f32>(0.5382, 0.3931, 0.1960);
 const GRASS: vec3<f32> = vec3<f32>(0.0397, 0.0835, 0.0134);
 
-// The four layer weights (rock, sand, soil, grass) for a slope angle (degrees, detail included)
-// and a sediment depth (m). They sum to 1 by construction; `model/mirror.rs` is the CPU copy.
-fn layer_weights(slope_deg: f32, sediment: f32) -> vec4<f32> {
-    let rock = smoothstep(37.0, 43.0, slope_deg);
-    let sand = smoothstep(0.3, 0.7, sediment) * (1.0 - smoothstep(26.0, 30.0, slope_deg)) * (1.0 - rock);
-    let band = smoothstep(28.0, 34.0, slope_deg);
+// Andersson 2007 §5.2.3, Listing 2: the Overlay blend of a detail value onto a computed mask, at
+// full opacity. It keeps 0 and 1, and 0.5 is the identity, so the detail breaks up a transition
+// without moving where a layer is fully on or off.
+fn overlay(mask: f32, detail: f32) -> f32 {
+    return select(1.0 - 2.0 * (1.0 - mask) * (1.0 - detail), 2.0 * mask * detail, mask < 0.5);
+}
+
+// The four layer weights (rock, sand, soil, grass) for a slope angle (degrees), a sediment depth
+// (m) and a detail value in [0, 1] (0.5: none). They sum to 1 by construction; `model/mirror.rs`
+// is the CPU copy (terrain.md Deviation 19).
+fn layer_weights(slope_deg: f32, sediment: f32, detail: f32) -> vec4<f32> {
+    let rock = overlay(smoothstep(35.0, 45.0, slope_deg), detail);
+    let sand = overlay(smoothstep(0.3, 0.7, sediment), detail) * (1.0 - smoothstep(26.0, 30.0, slope_deg)) * (1.0 - rock);
+    let band = overlay(smoothstep(26.0, 36.0, slope_deg), detail);
     let rest = (1.0 - rock) * (1.0 - sand);
     return vec4<f32>(rock, sand, rest * band, rest * (1.0 - band));
 }
@@ -165,9 +173,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     );
     var n = normalize(vec3<f32>(-g.x, 1.0, -g.y));
 
-    // Slope angle with a detail perturbation so the transitions are not dull (Andersson 5.2.3).
-    let alpha = degrees(acos(clamp(n.y, -1.0, 1.0))) + 3.0 * perlin3(p * 0.05);
-    let w = layer_weights(alpha, sediment);
+    // Slope angle and the mask detail: four fBm octaves from 48 m down to 6 m, contrast-scaled
+    // into [0, 1] and overlaid on the masks (Andersson 5.2.3), so the transitions are irregular
+    // rather than iso-slope lines.
+    let alpha = degrees(acos(clamp(n.y, -1.0, 1.0)));
+    let detail = clamp(0.5 + 0.75 * fbm3(p / 48.0, 4u), 0.0, 1.0);
+    let w = layer_weights(alpha, sediment, detail);
     var albedo = w.x * ROCK + w.y * SAND + w.z * SOIL + w.w * GRASS;
     let rough = mix(0.9, 0.95, w.z);
 
