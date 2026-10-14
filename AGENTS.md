@@ -24,7 +24,7 @@ No system is implemented without its `docs/research/<system>.md`, committed firs
 ## Plays well with the family
 
 1. **Bevy pin parity.** Depend only on crates pinned to the same Bevy minor. Couple to 0.19 crates (`bevy_carnage`, `bevy_light_grid`, `bevy_stigmergy`) only through plain data in game glue, documented in the README `Plays well with` section.
-2. **Ownership map.** Foliage, trees, tree wind sway, leaf colour and snow on branches belong to `bevy_flora`. Isosurface and voxel meshing belongs to `isomesh`/`bevy_isomesh`. Blood wetness belongs to `bevy_carnage`. Creature light grids belong to `bevy_light_grid`. WFC and authored world layout belong to `bevy_emerge`. This crate owns sky, celestial bodies, weather, atmosphere-driving, wind fields, precipitation, clouds, fog, lightning, heightfield terrain and its simulation, and ground cover.
+2. **Ownership map.** Foliage, trees, tree wind sway, leaf colour and snow on branches belong to `bevy_flora`. Isosurface and voxel meshing belongs to `isomesh`/`bevy_isomesh`. Blood wetness belongs to `bevy_carnage`. Creature light grids belong to `bevy_light_grid`. WFC and authored world layout belong to `bevy_emerge`. This crate owns sky, celestial bodies, weather, atmosphere-driving, wind fields, precipitation, clouds, fog, lightning, heightfield terrain and its simulation, ground cover, and the snow slab over a voxel volume.
 3. **Hooks over dependencies.** This crate never makes a sibling depend on it. It feeds siblings through their existing public resources behind an optional feature (`flora`, `isomesh`). Hook data is published as plain resources and messages (`WindState`, `WindGust`, `SeasonState`, `SurfaceWeathering`, `Environment`) that any crate or game can read.
 4. **A needed sibling change lands in the sibling's repo**, in its own commit with tests there, and is published before this crate depends on it.
 5. **Units are SI** at every boundary (m, s, m/s, °C, lux, mm/h). Wind direction is the unit XZ vector the wind blows *toward*, which matches `FloraWind::direction`.
@@ -84,7 +84,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS=-D warnings cargo doc --no-deps --all-features
 cargo build --lib --target wasm32-unknown-unknown
 cargo test --release --tests -- --ignored --test-threads=1 --skip ::gpu_tests::   # GPU integration tests, one process per file
-for m in clouds terrain; do cargo test --release --lib -- --ignored --test-threads=1 $m::gpu_tests::; done   # lib GPU tests, one process per module
+for m in clouds terrain cover dust; do cargo test --release --lib --features=isomesh -- --ignored --test-threads=1 $m::gpu_tests::; done   # lib GPU tests, one process per module
 ELEMENTS_FRAMES=600 ELEMENTS_SHOT=/tmp/x.png cargo run --release --example quickstart
 ```
 
