@@ -22,6 +22,7 @@ use crate::lightning::LightningPlugin;
 use crate::precipitation::PrecipitationPlugin;
 use crate::query::EnvironmentSnapshot;
 use crate::terrain::TerrainPlugin;
+use crate::weathered::WeatheredPlugin;
 use crate::wind::{WindPlugin, WindState};
 
 /// Every domain plugin that exists in this version, in dependency order.
@@ -47,6 +48,7 @@ impl PluginGroup for ElementsPlugins {
             .add(CloudPlugin)
             .add(LightningPlugin)
             .add(PrecipitationPlugin)
+            .add(WeatheredPlugin)
     }
 }
 
@@ -228,6 +230,7 @@ impl Plugin for ElementsGpuCorePlugin {
         load_shader_library!(app, "noise.wesl");
         load_shader_library!(app, "grid.wesl");
         load_shader_library!(app, "wind.wesl");
+        load_shader_library!(app, "surface_cover.wesl");
         // The one-cell `terrain_cells` that wind, precipitation and ground materials bind until
         // a terrain exists.
         if let Some(mut buffers) = app
