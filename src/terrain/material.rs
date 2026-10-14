@@ -99,7 +99,7 @@ impl MaterialExtension for TerrainExtension {
 pub type TerrainMaterial = ExtendedMaterial<StandardMaterial, TerrainExtension>;
 
 /// Uniform of [`GroundExtension`]. Mirrors `GroundParams` of `ground.wesl`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, ShaderType, Reflect)]
+#[derive(Clone, Copy, Debug, PartialEq, ShaderType, Reflect)]
 #[reflect(opaque)]
 pub struct GroundParams {
     pub(crate) terrain: TerrainParamsGpu,
@@ -113,6 +113,26 @@ pub struct GroundParams {
     pub(crate) cover: Vec4,
     /// As `TerrainMaterialParams::ripple`.
     pub(crate) ripple: Vec4,
+    /// x: `column_gate_m`, the depth below the column top where snow, wetness and puddles stop
+    /// (m); `NO_COLUMN_GATE` for none.
+    pub(crate) gate: Vec4,
+}
+
+/// `GroundParams::gate.x` for a ground that is not gated by depth below the column top.
+pub(crate) const NO_COLUMN_GATE: f32 = -1.0e30;
+
+impl Default for GroundParams {
+    fn default() -> Self {
+        Self {
+            terrain: TerrainParamsGpu::default(),
+            shadow: Vec4::ZERO,
+            light: Vec4::ZERO,
+            absorption: Vec4::ZERO,
+            cover: Vec4::ZERO,
+            ripple: Vec4::ZERO,
+            gate: Vec4::new(NO_COLUMN_GATE, 0.0, 0.0, 0.0),
+        }
+    }
 }
 
 /// Shades a consumer's own mesh as the terrain's ground
@@ -146,6 +166,23 @@ impl Default for GroundExtension {
             cover: NO_TERRAIN,
             cloud_shadow: None,
         }
+    }
+}
+
+impl GroundExtension {
+    /// Snow, wetness and puddles shade only a fragment within `metres` of the column top or above
+    /// it: the terrain's surface height at the fragment's XZ, minus `metres`. A fragment deeper
+    /// than that (the walls and floor of a tunnel under a snowy hill) is left as the material
+    /// made it. The maps are heightfields, so without the gate a voxel volume's tunnels are
+    /// shaded white wherever the map above them has snow.
+    ///
+    /// Set it on the ground material of a [`VoxelGround`](crate::VoxelGround) volume to the
+    /// volume's voxel cell size; the slab of snow sits above `top − cell`. The default, no gate,
+    /// is right for a ground that is itself a heightfield.
+    #[must_use]
+    pub fn with_column_gate_m(mut self, metres: f32) -> Self {
+        self.params.gate.x = metres;
+        self
     }
 }
 
@@ -287,6 +324,7 @@ pub(super) fn update_materials(
         absorption,
         cover: cover_params,
         ripple,
+        gate: GroundParams::default().gate,
     };
     let ids: Vec<_> = ground_materials.iter().map(|(id, _)| id).collect();
     for id in ids {
@@ -294,6 +332,11 @@ pub(super) fn update_materials(
             continue;
         };
         let e = &material.extension;
+        // The gate is the material's own: everything else is shared.
+        let params = GroundParams {
+            gate: e.params.gate,
+            ..params
+        };
         if (e.params != params
             || e.terrain != cells
             || e.cover != cover_cells

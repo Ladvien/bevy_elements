@@ -26,6 +26,9 @@ struct GroundParams {
     cover: vec4<f32>,
     // Phase of each of the four ripple layers, 0–1.
     ripple: vec4<f32>,
+    // x: `column_gate_m`, how far below the column top snow, wetness and puddles still shade (m);
+    // below -1e29 for no gate.
+    gate: vec4<f32>,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> ground: GroundParams;
@@ -90,6 +93,22 @@ fn cover_at(xz: vec2<f32>) -> vec2<f32> {
     return mix(a, b, t.w.y);
 }
 
+// 1 where a fragment at world position `p` is within `ground.gate.x` metres below the column top
+// (the terrain's surface height at its XZ) or above it, 0 deeper. `gate.x` below -1e29 is no gate.
+fn column_open(p: vec3<f32>) -> f32 {
+    if ground.gate.x < -1.0e29 || !terrain_live(ground.terrain) {
+        return 1.0;
+    }
+    let t = grid_taps(ground.terrain.grid, p.xz);
+    if !t.inside {
+        return 1.0;
+    }
+    let a = mix(terrain_cells[t.i00].x, terrain_cells[t.i10].x, t.w.x);
+    let b = mix(terrain_cells[t.i01].x, terrain_cells[t.i11].x, t.w.x);
+    let top = ground.terrain.misc.x + mix(a, b, t.w.y);
+    return select(0.0, 1.0, p.y >= top - ground.gate.x);
+}
+
 fn cloud_shadow_ratio(p: vec3<f32>) -> f32 {
     let l = ground.light.xyz;
     var t = 1.0;
@@ -108,8 +127,12 @@ fn cloud_shadow_ratio(p: vec3<f32>) -> f32 {
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
     var pbr_input = pbr_input_from_standard_material(in, is_front);
     let xz = in.world_position.xz;
-    let cover = cover_at(xz);
-    let puddle = smoothstep(ground.cover.z, ground.cover.w, water_depth(xz));
+    // A fragment deeper than the gate below the column top (a tunnel under the hill) is not
+    // under the maps' snow, wetness or water.
+    let gated = column_open(in.world_position.xyz);
+    let cover = cover_at(xz) * gated;
+    let depth = water_depth(xz) * gated;
+    let puddle = smoothstep(ground.cover.z, ground.cover.w, depth);
     var ripple = vec2<f32>(0.0);
     if puddle > 0.0 && ground.cover.y > 0.0 {
         ripple = ripple_offset(xz, ground.ripple, ripple_weights(ground.cover.y));
@@ -126,7 +149,6 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     pbr_input.N = surface.normal;
     pbr_input.world_normal = surface.normal;
     var out: FragmentOutput;
-    let depth = water_depth(xz);
     out.color = apply_pbr_lighting(pbr_input);
     out.color = vec4<f32>(out.color.rgb * cloud_shadow_ratio(in.world_position.xyz) * bed_transmittance(depth), out.color.a);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);

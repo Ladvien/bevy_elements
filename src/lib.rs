@@ -17,6 +17,8 @@ mod plugin;
 mod precipitation;
 mod query;
 mod terrain;
+#[cfg(feature = "isomesh")]
+mod voxel;
 mod weathered;
 mod wind;
 
@@ -97,3 +99,7 @@ pub use weathered::{
     ElementsGlobals, SNOW_ALBEDO, SNOW_ROUGHNESS, WeatheredExtension, WeatheredMaterial,
     WeatheredPlugin,
 };
+
+// Volumetric snow on `bevy_isomesh` voxel volumes.
+#[cfg(feature = "isomesh")]
+pub use voxel::{SnowyField, VoxelGround, VoxelGroundSystems, VoxelPlugin};
