@@ -253,6 +253,11 @@ fn elements_precip_sim(
         let above = p0.y - g0;
         t_hit = min(t_hit, above / (above - (p1.y - g1)));
     }
+    // A sprite carried out of the top of the box respawns in it (wrapping would drop it under the
+    // ground for a frame).
+    if kind == KIND_DUST && p1.y > cam.y + half_edge {
+        t_hit = 0.0;
+    }
 
     var out_pos = p1;
     var out_life = life + dt;

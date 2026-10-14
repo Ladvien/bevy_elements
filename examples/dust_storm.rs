@@ -30,13 +30,17 @@ const EXTENT_M: f32 = 1024.0;
 const TIME_SCALE: f32 = 600.0;
 
 fn main() {
+    let hour = std::env::var("ELEMENTS_HOUR")
+        .ok()
+        .and_then(|h| h.parse().ok())
+        .unwrap_or(10.0);
     let mut app = App::new();
     app.add_plugins((DefaultPlugins, ElementsPlugins, ExampleHarness))
         .insert_resource(Climate::desert())
         .insert_resource(WorldClock {
             paused: true,
             time_scale: TIME_SCALE,
-            ..WorldClock::new(CivilDate::new(2026, 6, 21)).at_hour(10.0)
+            ..WorldClock::new(CivilDate::new(2026, 6, 21)).at_hour(hour)
         })
         // Water is not the subject: hold hydrology, and close the edge so no sand leaves.
         .insert_resource(HydrologySettings {
@@ -55,16 +59,26 @@ fn main() {
     app.run();
 }
 
+/// `x,y,z` from an environment variable.
+fn vec3_env(name: &str) -> Option<Vec3> {
+    let value = std::env::var(name).ok()?;
+    let mut parts = value.split(',').map(|p| p.trim().parse::<f32>());
+    Some(Vec3::new(
+        parts.next()?.ok()?,
+        parts.next()?.ok()?,
+        parts.next()?.ok()?,
+    ))
+}
+
 fn setup(mut commands: Commands, mut director: ResMut<WeatherDirector>) {
     commands.spawn(
         Terrain::procedural(ProceduralTerrain::dunes(7))
             .with_extent(Vec2::splat(EXTENT_M))
             .with_resolution(UVec2::splat(512)),
     );
-    commands.spawn(camera(
-        Vec3::new(-330.0, 70.0, -260.0),
-        Vec3::new(-60.0, 12.0, 0.0),
-    ));
+    let eye = vec3_env("ELEMENTS_EYE").unwrap_or(Vec3::new(-330.0, 70.0, -260.0));
+    let look = vec3_env("ELEMENTS_LOOK").unwrap_or(Vec3::new(-60.0, 12.0, 0.0));
+    commands.spawn(camera(eye, look));
     director.force(WeatherPreset::DustStorm, Duration::ZERO);
 }
 
