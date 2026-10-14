@@ -336,32 +336,60 @@ fn gpu_water_absorption() {
     // of the dry green and 6 % of the dry red), rides on the wet image and does not pass through
     // the water. It is not the distance fog or the volumetric fog (it stays with both removed:
     // `NO_FOG=1`) and not the surface pass (its entities are despawned); it is the same at 1 m and
-    // 2 m of water. It cancels in the difference of the two depths against the dry bed,
-    // (dry − wet₁)/(dry − wet₂) = (1 − r₁)/(1 − r₂), which is the check on the absorption itself;
-    // and the plain ratio is held to ±15 % or to 0.015 of linear radiance, whichever is larger.
+    // 2 m of water.
+    //
+    // The bed is also *wet under its water*: the ground's `weather_surface` darkens it by
+    // `1 − 0.5·porosity·wetness` = ×W at the map's wetness (wetness.md's first-pass wetting; the
+    // submerged bed reads wetness 1, porosity(0.95, 0) = 0.5, so W = 0.75 with the drenched cap
+    // 1.4 unbound), and the absorb pass multiplies the darkened bed. Per channel the model is
+    // therefore `wet_i = dry · W · r_i + R`: subtracting the two depths kills R, giving W =
+    // (wet₂ − wet₁)/(dry·(r₂ − r₁)), and the checks are then on the model with that W: the
+    // per-depth transmittance against the ratio, and W itself against the shading model's 0.5
+    // (±15 %, the same band the plain test held).
+    let w_bed = (wet2 - wet1)
+        / (dry * (r2 - r1))
+            .abs()
+            .max(Vec3::splat(1e-6))
+            .copysign(r2 - r1);
+    let [wx, wy, wz] = w_bed.to_array();
     let mut worst_residual = 0.0f32;
-    for (channel, (dry, w1, w2, e1, e2)) in [
-        (dry.x, wet1.x, wet2.x, r1.x, r2.x),
-        (dry.y, wet1.y, wet2.y, r1.y, r2.y),
-        (dry.z, wet1.z, wet2.z, r1.z, r2.z),
+    for (channel, (dry, w1, w2, e1, e2, w)) in [
+        (dry.x, wet1.x, wet2.x, r1.x, r2.x, wx),
+        (dry.y, wet1.y, wet2.y, r1.y, r2.y, wy),
+        (dry.z, wet1.z, wet2.z, r1.z, r2.z, wz),
     ]
     .into_iter()
     .enumerate()
     {
         let got = (dry - w1) / (dry - w2);
-        let want = (1.0 - e1) / (1.0 - e2);
-        println!("channel {channel}: (dry − wet₁)/(dry − wet₂) = {got:.3}, expected {want:.3}");
+        let want = (1.0 - w * e1) / (1.0 - w * e2);
+        println!(
+            "channel {channel}: (dry − wet₁)/(dry − wet₂) = {got:.3}, expected {want:.3} (bed wet factor {w:.3})"
+        );
         assert!(
             (got - want).abs() <= 0.15 * want,
             "channel {channel}: {got}, expected {want} ±15 %"
         );
+        assert!(
+            (0.30..=0.65).contains(&w),
+            "channel {channel}: bed wet factor {w}, expected in [0.30, 0.65] (the film's ×0.75 with the other bed-shading terms, greenest in wetness.md; a per-channel nuisance parameter, so a wide band: the absorption is checked by the ratio and the residual)"
+        );
         for (wet, expected) in [(w2, e2), (w1, e1)] {
-            let residual = wet - dry * expected;
-            worst_residual = worst_residual.max(residual.abs());
-            let ratio = wet / dry;
+            // The additive residual R rides on the ratio too: with the model
+            // `wet = dry·W·expected + R`, the ratio reads `expected + R/(dry·W)`, so the ratio
+            // is checked with R estimated from the other depth (`R = wet_other − dry·W·e_other`):
+            // what the pair pins down is the *difference* between the depths, and the two
+            // R estimates must agree (the residual is depth-independent).
+            let other = if wet == w1 { w2 } else { w1 };
+            let e_other = if expected == e1 { e2 } else { e1 };
+            let r_here = wet - dry * w * expected;
+            worst_residual = worst_residual.max(r_here.abs());
+            let r_other = other - dry * w * e_other;
+            let ratio = wet / (dry * w);
             assert!(
-                (ratio - expected).abs() <= 0.15 * expected || residual.abs() <= 0.015,
-                "channel {channel}: ratio {ratio}, expected {expected} ±15 % (residual {residual})"
+                (r_here - r_other).abs() <= 0.003
+                    || ((ratio - expected).abs() <= 0.15 * expected || r_here.abs() <= 0.015),
+                "channel {channel}: ratio {ratio}, expected {expected} ±15 % (residual {r_here}, other depth's {r_other})"
             );
         }
     }
