@@ -28,6 +28,7 @@ Every system was studied in the home-still paper library first. The note for eac
 | `PrecipitationPlugin` | `precipitation` | Rain and snow as a GPU particle set in a 60 m box around the camera (Marshall–Palmer drop sizes and fall speeds, wind-field advection, `PrecipitationBlocker` roofs, ground splashes), drawn soft-faded against the depth prepass; the far-field shafts and haze are part of `FogPlugin`'s density kernel |
 | `TerrainPlugin` | `terrain` | A heightfield `Terrain` (procedural presets, a height map or level ground) generated on the GPU into per-cell layers, drawn with a CDLOD patch pool and a slope/sediment layer-blending material, or shaded on your own mesh with `GroundExtension`; `Environment::terrain_height`; the wind solid mask and precipitation use its height |
 | `HydrologyPlugin` | `hydrology` | Flooding, rivers and lakes as one shallow-water field on the terrain grid (Mei et al. 2007 virtual pipes with a depth-dependent pipe area and Manning friction), `WaterSource` and `WaterSink`, rain split into rain and snow per cell, hydraulic erosion with flux-form sediment transport, thermal erosion, `ErodeTerrain` bakes, and `Environment::water_depth` / `water_velocity` |
+| `GroundCoverPlugin` | `cover` | Snow and wetness maps on the terrain grid: snow accumulates at each cell's own rain–snow split and shelter, densifies, drifts with the wind, smooths and melts into hydrology's water (degree-day, Hock 2003), wetness follows rain and evaporation; the terrain and ground materials shade snow, wet darkening and gloss, and puddles with ripples; `SurfaceWeathering` becomes the map's mean around the camera; `Environment::snow_depth` and `wetness` |
 | `ElementsFloraPlugin` (feature `flora`) | `flora` | Drives `bevy_flora`'s wind, gusts, season and wetness, and `FloraGround` from the terrain's height snapshot |
 
 `ElementsPlugins` adds every plugin above except `ElementsFloraPlugin`. Each is public on its own, so `ElementsPlugins.build().disable::<FogPlugin>()` works.
@@ -156,6 +157,28 @@ fn pour_a_river(mut commands: Commands, mut bake: MessageWriter<ErodeTerrain>) {
 
 `ErosionSettings` carries Mei's capacity law `K_c · max(sin α, min_tilt) · |v|`, dissolve and deposit (sediment first, then bedrock; sediment moves with the water through the same pipe fluxes, so solids are conserved to rounding) and thermal erosion every 4th substep (35° talus, bedrock above 45°). **Bare bedrock erodes at the capacity rate**: the `flood` valley's 50 m³/s river carves its bedrock by up to 7.9 m in 120 s of simulated time and arrives at a marker 100 m away after 63 s instead of 36 s, so set `ErosionSettings::enabled = false` for a flood that should not change the ground (the `flood` example does). `HydrologyStats` counts substeps and simulated time, for code that waits on them.
 
+### Ground cover
+
+`GroundCoverPlugin` keeps two maps on the `Terrain`'s grid, stepped on game time (the `WorldClock`) at most 20 times a second after hydrology's substeps. **Snow** is a depth and a water equivalent per cell: it accumulates at the cell's own rain–snow split (the lapse rate makes ridges snowier than valleys), keeps less on slopes between 35° and 55° and none under a `PrecipitationBlocker` (the roof's shelter follows the slanted fall of the rain or snow), settles from 100 toward 300 kg/m³ with a 3-day time constant, drifts downwind above 5 m/s (a flux that grows with the cube of the excess, deposited where the wind slows in the lee), is smoothed over a few cells, and melts at 4 mm of water per °C per day, every millimetre arriving in the `water` layer. **Wetness** gains 0.5 per mm of rain and dries with the evaporation of the weather; water deeper than 2 mm shows as a puddle. `TerrainMaterial` and `GroundMaterial` shade both: snow whitens and raises the surface (terrain only), wet ground darkens and glosses, puddles are level mirrors with ripples while it rains. `SnowSettings` and `WetnessSettings` hold the parameters; insert them before the plugin to override.
+
+```rust
+# use bevy::prelude::*;
+# use bevy_elements::*;
+fn deep_wet_snow(mut commands: Commands) {
+    commands.insert_resource(SnowSettings {
+        degree_day_factor: 6.0,
+        shed_slope_deg: [30.0, 45.0],
+        ..default()
+    });
+    commands.insert_resource(WetnessSettings {
+        puddle_min_m: 0.004,
+        ..default()
+    });
+}
+```
+
+`Environment::snow_depth(Vec2)` and `wetness(Vec2)` answer from the last readback like `water_depth`. `SurfaceWeathering` (and so `ElementsGlobals` and `WeatheredMaterial`) follows the mean of the maps within 50 m of the camera once a terrain has been read back; before that, and without a terrain, it is the point model at the reference elevation.
+
 ## Gameplay queries
 
 ```rust
@@ -175,6 +198,8 @@ fn seek_shelter(env: Environment) {
 `wind_at` answers from the GPU field as of the last readback (4 Hz by default, `ElementsReadback`) and falls back to the prevailing wind outside it or before the first readback; `snapshot_age` says how old the answer is.
 
 `water_depth(Vec2)` is the water above the ground at a world XZ: `None` until the first readback or off the terrain, `Some(0.0)` on dry ground. `water_velocity(Vec2)` is the depth-weighted flow velocity (half resolution). Both are bilinear samples of the last readback.
+
+`snow_depth(Vec2)` is the snow on the ground in metres and `wetness(Vec2)` how wet it is (0 dry, 1 a full 2 mm film); like the water queries they are `None` before the first readback or off the terrain.
 
 ## Plays well with
 
@@ -228,6 +253,15 @@ Hydrology and erosion (`elements_hydrology`: every substep's two kernels, the th
 
 The plan's budget for hydrology and erosion at High is 0.6 ms for 1024² at 8 substeps, which measures **1.86 ms** (0.23 ms per substep, 80 % of the card's memory bandwidth, as `docs/research/hydrology.md` predicted), so High takes Medium's values (512², 4 substeps; `ElementsQuality::terrain_max_resolution` and `hydrology_substeps`) and Ultra keeps the research resolution and 16 substeps (14.75 ms; it is for large budgets). A 600 s bake at High is 7500 frames: 125 s at 60 fps.
 
+Ground cover (`elements_snow`: source, drift flux and apply and two diffusion passes per step; `elements_wetness`: the wetness update, the render pack and, on a readback tick, the readback kernel; both at most 20 times a second), a Blizzard so the drift runs, minimum over the diagnostic history, 3840 × 2160, the GPU at 1800–1950 MHz with the clocks logged in the same shell:
+
+| Quality | Grid | `elements_snow` per step | `elements_wetness` per step | Per frame at the 20 Hz cap (60 fps) |
+|---|---|---|---|---|
+| High | 512² | 0.084 ms | 0.042 ms | 0.042 ms |
+| Ultra | 2048² | 1.366 ms | 0.514 ms | 0.63 ms |
+
+The per-frame target (≤ 0.3 ms at High) holds up to 1024² (0.47 ms a step, 0.16 ms a frame). `elements_shelter`, the mask that keeps snow and rain from the ground under `PrecipitationBlocker`s, runs only when the blockers or the wind change: 0.025 ms at 512² with no blocker, 1.67 ms at 2048². See [`snow-cover.md`](docs/research/snow-cover.md) and [`wetness.md`](docs/research/wetness.md) for the model and the validation numbers.
+
 ## Platforms
 
 Native (Vulkan, Metal, DX12) and wasm WebGPU. WebGL2 is unsupported: the simulation needs compute. Simulation state lives in storage buffers and published fields in write-only `rgba16float` storage textures: the wind kernels share one layout of seven storage buffers and one storage texture, the fog kernel one storage texture, inside WebGPU's default limits of 8 and 4 per stage (devices limited to the `downlevel` 4 storage buffers are not supported; the hydrology substep kernels bind exactly 8). The cloud kernels bind at most one storage texture and two storage buffers each, the precipitation kernel four storage buffers; the precipitation draw reads its particles in the vertex stage, which needs `DownlevelFlags::VERTEX_STORAGE` (every Vulkan, Metal, DX12 and WebGPU device has it). GPU timestamps for the bench exist on Vulkan and DX12 only.
@@ -260,6 +294,8 @@ Native (Vulkan, Metal, DX12) and wasm WebGPU. WebGL2 is unsupported: the simulat
 - [Clouds](docs/research/clouds.md) — Schneider 2015 and 2017 (Horizon Zero Dawn, Nubis), Hillaire 2016 and 2020, Högfeldt 2016, Patry 2021, Real-Time Rendering, Kasten & Czeplak 1980.
 - [Hydrology](docs/research/hydrology.md) — Mei et al. 2007, Jákó 2011, Chentanez & Müller 2010, Kass & Miller 1990, Bates et al. 2010 / Cozzolino et al. 2020 (local-inertia pipes), FAO-56.
 - [Erosion](docs/research/erosion.md) — Mei et al. 2007, Jákó 2011, Musgrave et al. 1989, Krištof et al. 2009, Jain et al. 2024, Galin et al. 2019.
+- [Snow cover](docs/research/snow-cover.md) — Hock 2003, Fearing 2000, Festenberg & Gumhold 2011, Pomeroy & Gray 1990, Li & Pomeroy 1997, Judson & Doesken 2000.
+- [Wetness](docs/research/wetness.md) — Lagarde 2013, Jensen et al. 1999, Tatarchuk 2006, Cichocki 2017, FAO-56.
 
 ## Examples
 
@@ -278,7 +314,8 @@ Run with `cargo run --release --example <name>`. Every example takes `ELEMENTS_F
 | `flora_wind` | `bevy_flora` trees in this crate's wind, season and rain (`--features flora`) |
 | `flood` | A V-shaped valley, a 50 m³/s `WaterSource` and rain; prints `Environment::water_depth` at a marker 100 m downstream every second; `G`/`H` double and halve the simulation speed |
 | `erosion_bake` | Mountains and `ErodeTerrain { duration_s: 600.0, rain_mm_h: 20.0 }`: `B` starts the bake, `ELEMENTS_BAKE=1` starts it at once (`ELEMENTS_BAKE_S`, `ELEMENTS_BAKE_MM_H`); for a before and after shot use `ELEMENTS_FRAMES=120` and `ELEMENTS_BAKE=1 ELEMENTS_FRAMES=7700` |
-| `bench_elements` | Per-pass GPU time; `ELEMENTS_QUALITY`, `ELEMENTS_RESOLUTION`, `ELEMENTS_PRESET`, `ELEMENTS_BLOCKERS`, `ELEMENTS_TERRAIN=hills\|mountains\|none` |
+| `ground_cover` | Snow and wet ground on the hills: `ELEMENTS_COVER=snow` (default: ten game minutes a second, the snow stops after `ELEMENTS_SNOW_FRAMES`) or `rain` (an `ErodeTerrain` bake fills the hollows while the Rain preset wets the ground); `ELEMENTS_TERRAIN=mountains`, `ELEMENTS_PRESET`, `ELEMENTS_AGL`, `ELEMENTS_QUALITY`; prints the snow, wetness and water under the camera every second |
+| `bench_elements` | Per-pass GPU time; `ELEMENTS_QUALITY`, `ELEMENTS_RESOLUTION`, `ELEMENTS_PRESET`, `ELEMENTS_BLOCKERS`, `ELEMENTS_TERRAIN=hills\|mountains\|none` (`ELEMENTS_PRESET=Blizzard` for the snow chain's drift) |
 
 ## License
 

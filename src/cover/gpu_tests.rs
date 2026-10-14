@@ -355,6 +355,10 @@ fn gpu_snow_accumulates_and_melts() {
     }
     let depth = mean(snow.iter().map(|c| c[0]));
     let density = mean(snow.iter().map(|c| 1000.0 * c[1] / c[0]));
+    println!(
+        "RESULT snow 10 h: {hours:.4} h, SWE {:.4} mm, depth {depth:.4} m, density {density:.1} kg/m3",
+        swe_mm
+    );
     close(depth, 0.1330, 0.02, "depth after 10 h");
     assert!((0.1275..=0.1725).contains(&depth), "plan band: {depth}");
     close(density, 112.7, 0.01, "bulk density");
@@ -369,6 +373,7 @@ fn gpu_snow_accumulates_and_melts() {
         let elapsed_h = (sim.stats().simulated_s - base) / 3600.0;
         let want = swe0 - 1.666_667e-3 * elapsed_h as f32;
         let swe = mean(sim.snow().iter().map(|c| c[1]));
+        println!("RESULT melt {elapsed_h:.3} h: SWE {:.4} mm, formula {:.4} mm", swe * 1000.0, want * 1000.0);
         close(swe, want, 0.02, &format!("SWE after {elapsed_h:.2} h of melt"));
     }
     let depth_4_5 = {
@@ -394,6 +399,12 @@ fn gpu_snow_accumulates_and_melts() {
         "water {total_m3} m³, melt {want_m3} m³"
     );
     let stats = sim.stats();
+    println!(
+        "RESULT melt: water {total_m3:.4} m3 of {want_m3:.4} m3 melted ({:.4} %), {} steps, {} dropped",
+        100.0 * (total_m3 / want_m3 - 1.0),
+        stats.steps,
+        stats.dropped
+    );
     assert_eq!(stats.dropped, 0);
     sim.finish();
 }
@@ -426,6 +437,12 @@ fn gpu_snow_settles_like_the_cell_model() {
     for _ in 0..steps {
         cell.step(&settings, (seconds / steps as f64 / 3600.0) as f32, 0.0, -5.0, 1.0);
     }
+    println!(
+        "RESULT settle 3 d: GPU depth {:.5} m density {:.2}, CPU depth {:.5} m",
+        snow[0][0],
+        1000.0 * snow[0][1] / snow[0][0],
+        cell.depth
+    );
     close(snow[0][0], cell.depth, 0.005, "depth");
     close(1000.0 * snow[0][1] / snow[0][0], 226.4, 0.01, "density after 3 days");
     sim.finish();
@@ -512,6 +529,17 @@ fn gpu_snow_drift_conserves_and_moves_downwind() {
     sim.hold();
     let snow = sim.snow();
     let after = centre(&snow);
+    println!(
+        "RESULT drift: SWE {:.5} -> {:.5} ({:.2e}), depth {:.5} -> {:.5} ({:.2e}), shift {:.2} m downwind, {:.3} m lateral",
+        before.0,
+        after.0,
+        after.0 / before.0 - 1.0,
+        before.3,
+        after.3,
+        after.3 / before.3 - 1.0,
+        after.1 - before.1,
+        after.2 - before.2
+    );
     assert!((after.0 / before.0 - 1.0).abs() < 1e-5, "SWE {} -> {}", before.0, after.0);
     assert!((after.3 / before.3 - 1.0).abs() < 1e-5, "depth {} -> {}", before.3, after.3);
     let shift = after.1 - before.1;
@@ -578,6 +606,7 @@ fn gpu_snow_deposits_in_the_lee_of_a_step() {
     let lee = zone(&after, 0.0, 10.0) - zone(&before, 0.0, 10.0);
     let plateau = zone(&after, -60.0, 0.0) - zone(&before, -60.0, 0.0);
     let total = zone(&after, -200.0, 200.0) / zone(&before, -200.0, 200.0) - 1.0;
+    println!("RESULT lee: lee {lee:+.5}, plateau {plateau:+.5}, total {total:+.2e} (SWE m summed over cells)");
     assert!(lee > 0.0, "the lee gained {lee}");
     assert!(plateau < 0.0, "the plateau lost {plateau}");
     assert!(total.abs() < 1e-5, "total changed by {total}");
@@ -641,6 +670,7 @@ fn gpu_roofs_shelter_the_ground_from_snow_and_rain() {
         // A cell well inside or outside the band: the GPU's fall speed may differ from the CPU's
         // by a quantum, so only cells on the band's edge may disagree.
     }
+    println!("RESULT shelter: {sheltered_cells} sheltered cells, {mismatches} differ from the CPU slab test");
     assert!(sheltered_cells > 100, "{sheltered_cells} sheltered cells");
     assert!(mismatches <= 6, "{mismatches} cells differ from the CPU slab test");
     for (i, w) in wetness.iter().enumerate() {
@@ -680,6 +710,7 @@ fn gpu_wetness_soaks_and_dries_on_the_formula() {
             (got - want).abs() < 0.005,
             "wetness {got} after {elapsed_h} h, formula {want}"
         );
+        println!("RESULT wetness {elapsed_h:.3} h of drying: {got:.4}, formula {want:.4}");
         match hours as u32 {
             10 => assert!(got > 0.1),
             12 => assert!(got < 0.1),
@@ -719,6 +750,7 @@ fn gpu_surface_weathering_follows_the_map() {
         .resource::<WorldClock>()
         .hours_since_2000();
     let mut compared = 0;
+    let mut worst = (0.0_f32, 0.0_f32, 0.0_f32);
     let schedule = [
         (10.0, Pin::new(1.5, -5.0)),
         (12.0, Pin::new(0.0, 10.0)),
@@ -756,6 +788,9 @@ fn gpu_surface_weathering_follows_the_map() {
             if elapsed >= next_mark {
                 next_mark += 1.0;
                 let ground = *sim.app.world().resource::<SurfaceWeathering>();
+                worst.0 = worst.0.max((ground.snow_depth_m - point.snow_depth_m).abs());
+                worst.1 = worst.1.max((ground.snow_cover - point.snow_cover).abs());
+                worst.2 = worst.2.max((ground.wetness - point.wetness).abs());
                 let depth_ok = (ground.snow_depth_m - point.snow_depth_m).abs()
                     <= 0.03 * point.snow_depth_m + 5e-4;
                 assert!(
@@ -779,6 +814,10 @@ fn gpu_surface_weathering_follows_the_map() {
             }
         }
     }
+    println!(
+        "RESULT map vs point model over {compared} hours: depth {:.4} m (max abs {:.2e} m), cover (max abs {:.4}), wetness (max abs {:.4})",
+        point.snow_depth_m, worst.0, worst.1, worst.2
+    );
     assert!(compared >= 25, "{compared} hours compared");
     // The map is gone with the snow, and the query agrees with the resource.
     let ground = *sim.app.world().resource::<SurfaceWeathering>();
