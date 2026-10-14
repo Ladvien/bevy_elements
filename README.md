@@ -4,20 +4,9 @@
 
 **Living environments for Bevy 0.20.** A sun and moon placed by real ephemerides, the bright-star sky, a seeded climate that schedules hourly weather, a GPU wind field, volumetric clouds that shade the ground, rain and snow, lightning and thunder, distance and ground fog, and exposure that keeps night looking like night. Simulation runs in compute shaders; gameplay asks the `Environment` system parameter and is answered from a throttled async readback.
 
-| | | |
-|---|---|---|
-| ![Partly cloudy at 10:00: domed cumulus with sunlit tops over the test scene](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/clouds.png) | ![The same sky at sunset: cloud bases lit pink and orange from below, distant clouds fading into haze](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/cloud_sunset.png) | ![A thunderstorm at 23:00 three frames into a strike: the cloud deck lit from inside, wind-driven rain, the ground lit by the flash](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/storm.png) |
-| `PartlyCloudy`, 10:00 | `PartlyCloudy`, sunset | `Thunderstorm` at night, mid-flash |
-| ![The Rain preset at 15:00: rain streaks, splash rings on the ground, a roof with a blocker keeping the rain off](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/rain.png) | ![Snowfall: flakes and haze under a grey sky](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/snowfall.png) | ![An overcast noon: a grey deck, soft light, no hard shadows](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/overcast.png) |
-| `Rain` | `Snow` | `Overcast` |
-| ![23:00: stars from the Yale Bright Star Catalogue, a half moon low in the east, moon shadows](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/night.png) | ![The Fog preset: a bright ground-fog bank hiding everything past 100 m](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/fog.png) | ![bevy_flora trees in autumn colour moved by this crate's wind and rain](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/flora_wind.png) |
-| 23:00, half moon | `Fog` | with `bevy_flora` |
-| ![The flood valley under a clear sky: blue-green water with white foam where the flow exceeds 1.5 m/s](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/water_flood.png) | ![A lake in a round basin: the water blue-green over the depths, clear and rippled in the shallows](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/water_lake.png) | ![The same flood in forced rain: foam patches over teal water under an overcast sky](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/water_flood_rain.png) |
-| `flood`, `ELEMENTS_PRESET=Clear` | `lake` | `flood`, `Rain` |
-| ![Snow two game hours in, drifted into the lee of the ridges](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/ground_cover_snow.png) | ![Wet ground with level puddles and ripple rings after a rain bake](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/ground_cover_rain.png) | ![A dust storm over the dunes: tan haze and the wind-stripped sand edge](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/dust_storm.png) |
-| `ground_cover`, snow | `ground_cover`, `ELEMENTS_COVER=rain` | `dust_storm` |
-| ![Snow caps the voxel hill, the gyroid tunnels dark below](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/voxel_snow.png) | | |
-| `voxel_snow` (feature `isomesh`) | | |
+![Every weather preset, forced in turn at noon: the HUD names the preset and prints cover, precipitation, wind, visibility and the sun's and moon's elevation](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/tour.gif)
+
+*The `weather_tour` example forcing every preset at noon; the terrain, water and voxel stills live in the sections below.*
 
 Every system was studied in the home-still paper library first. The note for each one, in [`docs/research/`](docs/research), names the papers, the equations adopted, every deviation from the plan with its source, and the numbers the tests assert.
 
@@ -189,7 +178,9 @@ fn pour_a_river(mut commands: Commands, mut bake: MessageWriter<ErodeTerrain>) {
 
 ### Water
 
-`WaterPlugin` (part of `ElementsPlugins`) draws the water the hydrology simulates; `WaterSettings` (insert it first to override) holds the look. A patch of the terrain's level-of-detail selection that has at least 3 mm of water somewhere in it is drawn twice, by two entities with one `WaterExtension` and two `WaterMaterial`s: the **absorb** pass multiplies what is under the water by `(1 − F) · exp(−σ t)` per colour channel (σ = `absorption`, default `(0.45, 0.06, 0.03)` m⁻¹: red goes first, so a metre of water turns the bed blue-green, which one blend cannot do), where `t` is the thickness from the depth prepass corrected for the refracted ray; the **surface** pass adds the Fresnel reflection of the sky (`F₀ = 0.02`) and sun, the body colour of silt, and foam where the flow is fast or the water thin, with ripples flow-mapped from the simulated velocity. See `docs/research/water-rendering.md`.
+`WaterPlugin` (part of `ElementsPlugins`) draws the water the hydrology simulates; `WaterSettings` (insert it first to override) holds the look. A patch of the terrain's level-of-detail selection that has at least 3 mm of water somewhere in it is drawn twice, by two entities with one `WaterExtension` and two `WaterMaterial`s: the **absorb** pass multiplies what is under the water by `(1 − F) · exp(−σ t)` per colour channel (σ = `absorption`, default `(0.45, 0.06, 0.03)` m⁻¹: red goes first, so a metre of water turns the bed blue-green, which one blend cannot do), where `t` is the thickness from the depth prepass corrected for the refracted ray; the **surface** pass adds the Fresnel reflection of the sky (`F₀ = 0.02`) and sun, the body colour of silt, and foam where the flow is fast or the water is thin, the ripples flow-mapped from the simulated velocity (Vlachos 2010, two phases).
+
+![The flood valley under a clear sky: blue-green water, white foam in the fast reaches](docs/water_flood.png) ![Water in forced rain: foam over teal under the overcast sky](docs/water_flood_rain.png)
 
 ### Ground cover
 
@@ -212,6 +203,8 @@ fn deep_wet_snow(mut commands: Commands) {
 ```
 
 `Environment::snow_depth(Vec2)` and `wetness(Vec2)` answer from the last readback like `water_depth`. `SurfaceWeathering` (and so `ElementsGlobals` and `WeatheredMaterial`) follows the mean of the maps within 50 m of the camera once a terrain has been read back; before that, and without a terrain, it is the point model at the reference elevation.
+
+![Snow a game hour in under a clear sky](docs/ground_cover_snow.png) ![Wet ground with level puddles and ripples after a rain bake](docs/ground_cover_rain.png)
 
 ### Dust storms
 
