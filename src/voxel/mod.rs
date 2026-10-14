@@ -91,12 +91,7 @@ pub struct VoxelPlugin;
 
 impl Plugin for VoxelPlugin {
     fn build(&self, app: &mut App) {
-        app.configure_sets(
-            Update,
-            VoxelGroundSystems
-                .after(ElementsSystems::Readback)
-                .before(IsomeshSystems),
-        );
+        configure_sets(app);
         if !(app.is_plugin_added::<TerrainPlugin>()
             && app.is_plugin_added::<HydrologyPlugin>()
             && app.is_plugin_added::<GroundCoverPlugin>())
@@ -106,21 +101,36 @@ impl Plugin for VoxelPlugin {
             );
             return;
         }
-        app.add_systems(
-            Update,
-            (
-                voxel_ground_maintain,
-                voxel_ground_build,
-                voxel_ground_edits,
-                voxel_ground_snow,
-                voxel_ground_sync,
-            )
-                .chain()
-                .in_set(VoxelGroundSystems),
-        )
-        .add_systems(
-            Update,
-            voxel_ground_erosion_guard.before(ElementsSystems::Simulation),
-        );
+        add_systems(app);
     }
+}
+
+/// The set's place in the frame.
+fn configure_sets(app: &mut App) {
+    app.configure_sets(
+        Update,
+        VoxelGroundSystems
+            .after(ElementsSystems::Readback)
+            .before(IsomeshSystems),
+    );
+}
+
+/// The systems, apart from the plugins they need (the unit tests add them to a bare app).
+fn add_systems(app: &mut App) {
+    app.add_systems(
+        Update,
+        (
+            voxel_ground_maintain,
+            voxel_ground_build,
+            voxel_ground_edits,
+            voxel_ground_snow,
+            voxel_ground_sync,
+        )
+            .chain()
+            .in_set(VoxelGroundSystems),
+    )
+    .add_systems(
+        Update,
+        voxel_ground_erosion_guard.before(ElementsSystems::Simulation),
+    );
 }

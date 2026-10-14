@@ -447,10 +447,16 @@ pub(crate) fn voxel_ground_erosion_guard(
     if locked.is_none() {
         commands.insert_resource(ErosionLocked);
     }
-    if erosion.enabled && !*warned {
+    if should_warn_erosion(erosion.enabled, &mut warned) {
         warn!(
             "ErosionSettings is ignored for voxel ground: the volume field is the truth and erosion would move only the terrain under it"
         );
-        *warned = true;
     }
+}
+
+/// Whether to log the erosion warning now: when erosion is on and it has not been said yet.
+pub(crate) fn should_warn_erosion(erosion_on: bool, warned: &mut bool) -> bool {
+    let warn = erosion_on && !*warned;
+    *warned |= warn;
+    warn
 }
