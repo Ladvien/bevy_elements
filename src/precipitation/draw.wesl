@@ -60,6 +60,8 @@ const PI: f32 = 3.14159265;
 const NEAR_FADE_START: f32 = 0.15;
 const NEAR_FADE_LENGTH: f32 = 0.35;
 const SNOW_ALPHA: f32 = 0.8;
+/// Opacity of one dust sprite: a cluster-scale veil of grains, so below a flake's.
+const DUST_ALPHA: f32 = 0.5;
 // A flake's image is its disc stretched by at most this many diameters along the relative
 // velocity (Deviation 17 of the research note): at most 2:1 head to tail.
 const SNOW_MAX_STRETCH: f32 = 1.0;
@@ -203,7 +205,9 @@ fn particle_vertex(
         let albedo = select(draw.dust.xyz, vec3<f32>(draw.snow.x), kind == 1u);
         radiance = albedo * (sky + draw.sun.w * abs(dot(to_sun, ray))
             + draw.moon.w * abs(dot(to_moon, ray))) / PI;
-        opacity = SNOW_ALPHA * coverage;
+        // Dust is drawn at cluster scale (`DUST_SPRITE_DRAW_M`): each sprite is a veil of many
+        // grains, so it carries its own opacity — below a flake's — rather than a puff's.
+        opacity = select(DUST_ALPHA, SNOW_ALPHA, kind == 1u) * coverage;
     }
     let transmittance = exp(-draw.ambient.y * distance(p.pos, view.world_position));
     opacity *= edge_fade(p.pos);

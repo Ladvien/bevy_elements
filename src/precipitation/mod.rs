@@ -33,7 +33,8 @@ use crate::plugin::{
 use crate::terrain::{NO_TERRAIN, TerrainParamsGpu, TerrainState};
 use crate::wind::{WindFieldParams, WindState};
 use model::{
-    DUST_FALL_SPEED_MS, DUST_HEIGHT_SCALE_M, DUST_SIZE_M, marshall_palmer_lambda, particle_counts,
+    DUST_FALL_SPEED_MS, DUST_HEIGHT_SCALE_M, DUST_SPRITE_DRAW_M, marshall_palmer_lambda,
+    particle_counts,
 };
 
 /// Edge of the camera-centred particle box, m.
@@ -434,7 +435,7 @@ fn update_precipitation(
             SPLASH_LIFE_S,
             runtime.time,
         ),
-        dust: crate::fog::DUST_ALBEDO.extend(DUST_SIZE_M),
+        dust: crate::fog::DUST_ALBEDO.extend(DUST_SPRITE_DRAW_M),
         camera: view.velocity.extend(PRECIPITATION_BOX_M * 0.5),
     };
 }

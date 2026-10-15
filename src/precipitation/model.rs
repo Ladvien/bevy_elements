@@ -92,8 +92,15 @@ pub(crate) const DUST_FALL_SPEED_MS: f32 = 0.05;
 /// Scale height of the dust sprites' respawn heights above the ground, m: the ground fog's
 /// haze scale height (`fog.md`).
 pub(crate) const DUST_HEIGHT_SCALE_M: f32 = 60.0;
-/// Diameter of a dust sprite, m (plan 4.3; a visual stand-in for a puff).
+/// Grain diameter of a dust sprite, m (plan 4.3): the size the sprite extinction accounts
+/// (`dust_sprite_extinction`, `dust.md` Validation 8). The sprite is *drawn* at
+/// `DUST_SPRITE_DRAW_M` — see `dust.md` Deviation 15.
+#[cfg(test)]
 pub(crate) const DUST_SIZE_M: f32 = 2e-3;
+/// Diameter a dust sprite is drawn with, m: a visible puff cluster, not the 2 mm grain. At the
+/// grain size a sprite spans 0.02–0.1 px anywhere in the 60 m box, so it fades to nothing under
+/// the sub-pixel coverage rule and a dust storm reads as static fog (`dust.md` Deviation 15).
+pub(crate) const DUST_SPRITE_DRAW_M: f32 = 0.35;
 
 /// How many particles of each kind are active.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
