@@ -47,6 +47,12 @@ impl FlyCamera {
     pub fn looking(yaw: f32, pitch: f32) -> Self {
         Self { yaw, pitch }
     }
+
+    /// Turn the camera to yaw/pitch, in radians (an aim system pointing it at a body).
+    pub fn face(&mut self, yaw: f32, pitch: f32) {
+        self.yaw = yaw;
+        self.pitch = pitch.clamp(-1.54, 1.54);
+    }
 }
 
 #[derive(Resource)]

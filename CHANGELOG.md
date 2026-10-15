@@ -6,6 +6,14 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ### Fixed
 
+- **`day_night` now frames the sun and the moon.** The example's camera was aimed west-south-west
+  at a fixed bearing, and the vision review measured every body outside that frustum for the
+  whole sweep — sunrise at azimuth 54–65° behind the observer, noon at 180°/68° up, sunset at
+  304° past the right edge, the waxing moon at 150–175° south: the domain that exists to render
+  those discs never showed one. The camera now aims at the sun while it is above the horizon,
+  at the moon once the sun is down and the moon is up, and back at the evening heading when
+  neither is up; a paused hour (`ELEMENTS_HOUR`) aims once so the still is framed, and holding
+  the right button releases the aim.
 - **Snow relief reads under an overcast sky.** Saturated snow rendered as a flat wash (0.56 DN
   of standard deviation across 840 k pixels of terrain from the air) because the ambient is
   uniform over normals and the beam is ~0 under cloud. The crate's materials now shade the lit
