@@ -519,3 +519,100 @@ Crops in `/tmp/i6/crops/` (`b12_*`), review in `/tmp/i6/reviews/b12.md` (Gemini 
 5. **Cloud shadow contrast under Clear is unverified** (carried from iteration 5): the crop
    missed the cloud mass, so neither confirmation nor denial. Capture with the shadows in frame
    (choose a heading where cumulus sit upwind) and measure the ground's shadow depressions.
+
+## Iteration 7 — 2026-10-15 — snow relief reads: the overcast dome shades by orientation
+
+**Commit:** `d24c704` (two shaders, the example harness, note, CHANGELOG). **Sibling repos:** none.
+
+### What changed, and why it ranked first
+
+The extra instruction again: inspect every feature with the vision model. The pick is iteration
+6's rank 1 (carried from 4 and 5): **snow under an overcast sky is a physically wrong flat
+result** — saturated terrain reads 0.56 DN of standard deviation across 840 000 pixels from the
+air, because Bevy's ambient is uniform over normals, the beam is ~0 under cloud, and no term in
+the stack varies with orientation. It beat the runner-up (`day_night` never framing the sun or
+moon) because it is a wrong rendering of a shipped domain in every overcast showcase, while the
+runner-up is a showcase's camera choice.
+
+**The fix** (`src/weathered/weathered.wesl`, `src/terrain/render.wesl`, inlined at both call
+sites): the lit colour is multiplied by `mix(1, shape(N_y), 1 − T_deck)` where `shape` is the
+Moon & Spencer (1942) CIE overcast dome — `L_γ = L_z(1 + 2 sin γ)/3`, the horizon a third of the
+zenith (Dáru & Kittler, ESIM 2002, eq. 1; the corpus held no dome model, so the source was
+fetched) — integrated over the dome with the ground's bounce at the crate's own albedos into
+top 1 / side 0.68 / bottom 0.5, then re-fitted as `1 − 0.35·(1 − N_y)^0.3` [INFERENCE] after the
+review's *Adjust*: the pure linear dome is physically honest but gives ≤ 2 DN on 5–15° slopes
+(14 pixels ≥ 3 DN on the aerial view), because `cos θ` is flat near vertical; the power curve
+keeps the anchors (side 0.65, bottom 0.57) and puts the gradient where the demand is. The ramp
+is the raw cloud-map transmittance over each ground point (`cloud_deck`), not
+`camera_transmittance`, which is wall-clock-smoothed and varied 0.18–0.77 between identical
+runs. Clear air evaluates `T_deck = 1` → factor exactly 1.
+
+The showcase's boxes, columns and spheres were `StandardMaterial` and never reached the shader
+(round-1 finding): they now take `WeatheredMaterial` through `ShowcaseProp`, adopted like
+`GroundPlane`.
+
+### Implementation findings worth keeping (all cost an hour each)
+
+- **An additive ambient correction clamps to black.** The first form added
+  `EnvBRDFApprox × ambient × (shade − 1)` after `apply_pbr_lighting`; sized against Bevy's
+  interior ambient it overshoots through the cloud-shadow `ratio` and went negative (forced-
+  overcast terrain rendered 0–1 DN). Multiplying the lit colour cannot go negative, and under a
+  deck the beam inside it is ~0, so it shapes the fill alone (the beam's share at partial cover
+  is the deviation's stated cost).
+- **`AmbientLight` is ~0 in this crate** — the additive delta measured ≈0.004 linear where a
+  flat ambient would be ~5; the fill arrives with the environment-map light. Any future ambient
+  work must scale the lit colour or the env light, not `lights.ambient_color`.
+- **A viz that writes a bare `vec4` where `FragmentOutput` is required fails the pipeline**
+  ("Entry point fragment … invalid") and the capture then shows the *fog background* — three
+  rounds of readings were taken off a failed shader. Viz must set `out.color` and `return out`.
+- **The tonemap runs outside the material shader**, so early-returned debug values come back
+  ACES+sRGB-encoded; calibrate with constants sentinels before reading them (`0.1/0.4/0.8` →
+  `91/149/194`).
+- **`ElementsGlobals::camera_transmittance` is smoothed on wall-clock time** — run-dependent
+  (0.18–0.77 for identical commands), unusable as a deterministic ramp; the cloud map itself is
+  state-derived and deterministic.
+
+### Inspection findings
+
+Reviews in `/tmp/i7/review_b13.md` (round 1, *Adjust*) and `/tmp/i7/review_b14.md` (round 2,
+*Ship*), Gemini Flash `screenshot-reviewer`, captures in `/tmp/i7/{before,final,final2}`:
+
+- Round 1: the wash was still flat (99.99 % of the aerial ≤ 1 DN), the showcase props unchanged
+  — the reviewer read `examples/common/mod.rs` and found the wiring gap — and the controls
+  passed (AE with 2 DN fuzz: 0).
+- Round 2: aerial spread 2.35 → 3.28 DN with "clear topological definition and structural
+  relief across terrain crests"; overcast ground 629 116 px ≥ 3 DN, 30 196 ≥ 7, peak 9 DN,
+  "hillsides and cut banks read unambiguous orientation-dependent shading"; box sides −9 to
+  −15 DN with top caps exactly preserved; controls still fuzz-0; no banding, no Mach bands, no
+  cloud-map-edge seam.
+
+### Verification
+
+- `cargo test`: 12 suites ok (211 lib tests), 0 fail. `cargo clippy --all-targets
+  --all-features -- -D warnings`, `RUSTDOCFLAGS=-D warnings cargo doc --no-deps --all-features`,
+  wasm32: clean (clippy needed a `type` alias for the adoption query).
+- GPU suites: `terrain::` 8, `dust::` 6, `clouds::` 10 + 1 (two parts), `tests/gpu_weathered`
+  4, integration 11 binaries — all pass; `cover::` 5/2 and `voxel::` 0/1 fail exactly the three
+  pre-existing tests from iteration 4's backlog item 2.
+- Controls: `tour_clear` AE 0.026 %, `terrain_clear_gnd` AE 0.075 %, both PAE 1 DN and fuzz-2
+  AE 0 — clear air renders as before within dither (the props' material fork).
+
+### Top 5 remaining items, ranked
+
+1. **Aerial snow relief is still only 3–6 DN** (round 2 passed it, but it is the weakest
+   surface): from 300 m the terrain's slopes are gentle and even the fitted curve gives ≤ 7 DN
+   there. The next step is not a steeper curve but occlusion: a sky-visibility/AO term (what
+   actually makes overcast relief read in photographs), which needs a research note and the
+   corpus first.
+2. **Three GPU tests fail on pristine HEAD** (unchanged): `cover::gpu_wetness_soaks_and_dries_
+   on_the_formula`, `cover::gpu_surface_weathering_follows_the_map`,
+   `voxel::gpu_voxel_snow_covers_the_top` (+2.1 h swap bias), plus the eleven-instance adapter
+   cap that splits the clouds suite.
+3. **`day_night` never shows the sun or the moon** (unchanged): yaw 106.7° against dawn azimuth
+   64° and sunset 303°; the 23:30 moon is set. The discs the domain exists for cannot appear.
+4. **The small cosmetic set** (unchanged): `STRIKE_LEAD=6` outlives the ~43 ms flash decay;
+   splash rings sparse; near-shore foam sub-pixel at nadir; the flood marker outside the
+   capture frustum; erosion-cut faceting; the status line clipping at the window edge.
+5. **Cloud shadow contrast under Clear is still unverified** (carried twice): iteration 5's
+   crop missed the cloud mass; capture with cumulus upwind and measure the ground's
+   depressions.
