@@ -11,7 +11,7 @@ use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, ShaderType, TextureDimension, TextureFormat};
 
-use crate::celestial::{CelestialFrame, SunState, cloud_light, dusk_tint, scene_illuminance};
+use crate::celestial::{CelestialFrame, CloudLight, SunState, cloud_light, dusk_tint, scene_illuminance};
 use crate::climate::{Weather, WeatherDirector, WeatherPreset};
 use crate::clouds::{CloudShadows, CloudWeatherMap};
 use crate::gpu::grid::storage_volume;
@@ -108,8 +108,55 @@ pub fn volume_light_compensation(
     let radius = (volume_extent * 0.5).length();
     let sine = sun_altitude_deg.to_radians().sin().max(MIN_SUN_SINE);
     let tau_layer = sigma_v * MEAN_NOISE_FACTOR * scale_height_m * falloff / sine;
-    ((sigma_camera * radius - tau_layer).exp()).clamp(1.0, 100.0)
+    ((sigma_camera * radius - tau_layer).exp()).clamp(1.0, MAX_VOLUME_LIGHT_GAIN)
 }
+
+/// The share of the volume's extinction that it can actually re-emit: the beam `T̄` over the
+/// scene's total light, 0–1.
+///
+/// Bevy lights a `FogVolume` from the `DirectionalLight`s (`volumetric_fog.wesl`, the
+/// in-scattering loop), and under cloud those carry only the beam `T̄`: at full cover the sun's
+/// illuminance is literally zero (measured `beam = 0.0000` at cover 1.0), so the volume's
+/// in-scattering is zero however large `light_intensity` is. The cloud-scattered diffuse light
+/// reaches the camera's `AmbientLight` and never the volume, and Bevy's `VolumetricFog.ambient_*`
+/// term is unusable here: it is added once for the whole ray with no density texture and is not
+/// multiplied by exposure (see the note). A volume that cannot return light must not take it:
+/// without this the ground fog removes the sky and returns nothing, which under a short
+/// `Weather::visibility_m` turns the whole sky black — measured at noon looking up, the zenith
+/// read `(46, 47, 50)` in Blizzard against `(122, 124, 129)` with the density zeroed, while
+/// Snow's 1500 m read `(172, 167, 160)` at the same cover. A blizzard is a whiteout, not a dark
+/// hole.
+///
+/// Scaling the density by this share fades the volume out where Bevy cannot light it, and the
+/// volume's radiance over its opacity stays the scene's `total` light whatever the share (see
+/// [`volume_light_gain`]), so what remains of the volume looks unchanged while it fades.
+pub(crate) fn volume_density_share(cloud: CloudLight) -> f32 {
+    let total = cloud.total();
+    if total <= 0.0 {
+        return 0.0;
+    }
+    (cloud.direct / total).clamp(0.0, 1.0)
+}
+
+/// The factor on `light_intensity` that makes the volume scatter the scene's *total* light: the
+/// reciprocal of [`volume_density_share`], the light Bevy does not give the volume.
+///
+/// The emitted radiance of a step is `density · illuminance · light_intensity`, with the
+/// illuminance the beam `T̄` of `lux::RAW_SUNLIGHT`; times a gain of `total / T̄` it carries
+/// `total`, the same light the sky and the distance fog carry. Together with the density share it
+/// also holds the radiance-to-opacity ratio: `L ∝ share · total` against `τ ∝ share`, so the
+/// volume keeps its colour balance as it fades. 1 in clear air, bounded by 100 where the beam is
+/// nearly gone (the illuminance there is nearly zero, so the emitted light is too).
+pub(crate) fn volume_light_gain(cloud: CloudLight) -> f32 {
+    let total = cloud.total();
+    if cloud.direct <= 0.0 || total <= 0.0 {
+        return 1.0;
+    }
+    (total / cloud.direct).clamp(1.0, MAX_VOLUME_LIGHT_GAIN)
+}
+
+/// Bound on [`volume_light_gain`], shared with the light compensation's own bound.
+pub(crate) const MAX_VOLUME_LIGHT_GAIN: f32 = 100.0;
 
 /// Uniform of `density.wesl`.
 #[derive(Clone, Copy, Debug, Default, ShaderType)]
@@ -216,6 +263,7 @@ fn update_volume(
     weather: Res<Weather>,
     director: Res<WeatherDirector>,
     clock: Res<crate::celestial::WorldClock>,
+    shadows: Option<Res<CloudShadows>>,
     mut runtime: ResMut<FogRuntime>,
     gpu: Option<ResMut<FogGpu>>,
     cloud_map: Option<Res<CloudWeatherMap>>,
@@ -234,7 +282,6 @@ fn update_volume(
         volume.density_factor = 0.0;
         return;
     };
-    volume.density_factor = 1.0;
 
     let dt = time.delta_secs();
     let game_dt = dt * clock.time_scale;
@@ -270,13 +317,19 @@ fn update_volume(
     let albedo = haze_albedo + (1.0 - haze_albedo) * precipitation_share;
     volume.absorption = 1.0 - albedo;
     volume.scattering = albedo;
-    volume.light_intensity = volume_light_compensation(
-        weather.visibility_m,
-        runtime.scale_height,
-        camera.y - ground,
-        sun.altitude_deg,
-        GROUND_FOG_EXTENT,
-    );
+    // A volume Bevy cannot light must not occlude, and what it can light must carry the scene's
+    // total light: the density is faded by the share its own light source carries and the
+    // intensity raised by the reciprocal (see `volume_density_share` and `volume_light_gain`).
+    let cloud = cloud_light(weather.cloud_cover, shadows.as_deref());
+    volume.density_factor = volume_density_share(cloud);
+    volume.light_intensity = volume_light_gain(cloud)
+        * volume_light_compensation(
+            weather.visibility_m,
+            runtime.scale_height,
+            camera.y - ground,
+            sun.altitude_deg,
+            GROUND_FOG_EXTENT,
+        );
     volume.fog_color = Color::linear_rgb(1.0, 1.0, 1.0).mix(
         &Color::linear_rgb(DUST_ALBEDO.x, DUST_ALBEDO.y, DUST_ALBEDO.z),
         dust,
@@ -395,6 +448,47 @@ mod tests {
         // Clear air needs next to no help.
         let clear = volume_light_compensation(40_000.0, 60.0, 2.0, 48.0, GROUND_FOG_EXTENT);
         assert!((1.0..1.01).contains(&clear), "{clear}");
+    }
+
+    #[test]
+    fn the_volume_goes_out_where_bevy_cannot_light_it() {
+        // Clear sky: the beam is the whole light, so the volume keeps its full density.
+        assert_eq!(volume_density_share(CloudLight::CLEAR), 1.0);
+        // Full cover: Bevy's light for the volume (the beam) is zero — measured, the sun's
+        // illuminance is literally 0 — so the volume must not occlude anything: a blizzard is a
+        // whiteout, not a dark hole. This is the dark sky the fix replaces: the volume took the
+        // sky's light and returned none of it.
+        assert_eq!(volume_density_share(CloudLight::from_beam(0.0)), 0.0);
+        // Half cover: the share is the beam over the beam-plus-diffuse total.
+        let half = volume_density_share(CloudLight::from_beam(0.5));
+        assert!((half - 0.5 / 0.625).abs() < 1e-6, "{half}");
+        // Monotone in the beam, so a transition fades the volume in as the cloud breaks.
+        let mut last = -1.0;
+        for i in 0..=20 {
+            let share = volume_density_share(CloudLight::from_beam(i as f32 / 20.0));
+            assert!(share >= last, "not monotone at {i}");
+            last = share;
+        }
+    }
+
+    #[test]
+    fn the_volumes_light_and_its_density_are_reciprocal() {
+        // The density fade and the light boost are exact reciprocals, so the volume's radiance
+        // over its opacity is the scene's total light — the same light the sky and the distance
+        // fog carry — at every cover. Without that the ground fog would dim as the cloud thickens
+        // instead of fading out evenly.
+        for i in 0..=20 {
+            let beam = 0.05 + i as f32 / 20.0 * 0.95;
+            let cloud = CloudLight::from_beam(beam);
+            let product = volume_density_share(cloud) * volume_light_gain(cloud);
+            assert!((product - 1.0).abs() < 1e-3, "beam {beam}: {product}");
+        }
+        // A bright beam keeps the gain at 1; a nearly gone one is bounded.
+        assert_eq!(volume_light_gain(CloudLight::CLEAR), 1.0);
+        assert_eq!(
+            volume_light_gain(CloudLight::from_beam(1e-6)),
+            MAX_VOLUME_LIGHT_GAIN
+        );
     }
 
     #[test]

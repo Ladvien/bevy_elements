@@ -5,6 +5,14 @@
 //! `ELEMENTS_PRESET=Fog` holds one preset instead (for screenshots). `ELEMENTS_HOUR=19.5` pauses
 //! the clock at that local hour, `ELEMENTS_PITCH=15` looks that many degrees above the horizon,
 //! `ELEMENTS_HEADING=290` looks along that compass bearing.
+//!
+//! A frame sequence of the whole tour (the README's `docs/tour.gif`): `ELEMENTS_SHOT_DIR=/tmp/tour
+//! ELEMENTS_FRAMES=12600 ELEMENTS_SHOT_EVERY=48 ELEMENTS_SHOT_FROM=36` — 210 s of game time, one
+//! frame every 0.8 s, the first skipped past the shader compile. Do **not** set `ELEMENTS_HOUR`
+//! for it: that pauses the clock, and with the tour's timer on `Time` the forced preset then never
+//! advances (every captured frame is the first preset). Assemble with
+//! `magick -delay 13 -loop 0 /tmp/tour/frame*.png -resize 512x -colors 200 -layers Optimize
+//! docs/tour.gif`.
 
 mod common;
 

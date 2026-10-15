@@ -1,8 +1,16 @@
 //! Shared example scaffolding: a free-fly camera, clock and weather keys, a status line, and the
 //! `ELEMENTS_FRAMES` / `ELEMENTS_SHOT` switches used for unattended runs.
 //!
-//! - `ELEMENTS_FRAMES=N` exits after N frames.
+//! - `ELEMENTS_FRAMES=N` exits after N frames at a fixed 1/60 s step, so every run simulates and
+//!   captures the same frames (GPU results are not bit-deterministic, but the simulated time,
+//!   weather, clock and camera are). Without `ELEMENTS_FRAMES` the examples run on wall-clock time.
 //! - `ELEMENTS_SHOT=/tmp/x.png` saves a screenshot of the primary window on the last frame, then exits.
+//! - `ELEMENTS_SHOT_DIR=/tmp/frames` saves a frame sequence to that directory (created if
+//!   missing) as `frame0000.png` and up, `ELEMENTS_SHOT_EVERY=N` capturing every Nth frame
+//!   (default 1) from `ELEMENTS_SHOT_FROM` (default 1). With `ELEMENTS_FRAMES` the simulated time
+//!   is the same every run, which is what temporal effects (cloud accumulation, rain, lightning,
+//!   wind, water flow, snow melt) are reviewed on. A run with `ELEMENTS_SHOT_DIR` and no
+//!   `ELEMENTS_FRAMES` captures until it is killed.
 //!
 //! Keys: WASD + Q/E move (Shift ×5), hold the right mouse button to look, `[`/`]` halve/double the
 //! time scale, `T` +1 hour, `1`–`0` force a weather preset, `R` release to the scheduler.
@@ -18,6 +26,7 @@ use ground::GroundPlane;
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 use bevy::render::view::window::screenshot::{Screenshot, ScreenshotCaptured, save_to_disk};
+use bevy::time::TimeUpdateStrategy;
 use bevy_elements::*;
 
 /// Adds the harness to an example.
@@ -41,8 +50,13 @@ impl FlyCamera {
 struct RunConfig {
     frames: Option<u32>,
     shot: Option<String>,
+    shot_dir: Option<String>,
+    shot_every: u32,
+    shot_from: u32,
     frame: u32,
     shot_taken: bool,
+    /// Screenshots spawned but not yet written; the run does not end over one.
+    pending: std::sync::Arc<std::sync::atomic::AtomicU32>,
 }
 
 #[derive(Component)]
@@ -50,15 +64,33 @@ struct StatusLine;
 
 impl Plugin for ExampleHarness {
     fn build(&self, app: &mut App) {
-        let frames = std::env::var("ELEMENTS_FRAMES")
+        let env_u32 = |name: &str, default: u32| {
+            std::env::var(name)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(default)
+        };
+        let frames: Option<u32> = std::env::var("ELEMENTS_FRAMES")
             .ok()
             .and_then(|v| v.parse().ok());
         let shot = std::env::var("ELEMENTS_SHOT").ok();
+        let shot_dir = std::env::var("ELEMENTS_SHOT_DIR").ok();
+        // A frame sequence is only worth reviewing when the frames are the same every run, so
+        // either capture switch runs the app on a fixed 1/60 s step.
+        if frames.is_some() || shot_dir.is_some() {
+            app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+                1.0 / 60.0,
+            )));
+        }
         app.insert_resource(RunConfig {
             frames,
             shot,
+            shot_dir,
+            shot_every: env_u32("ELEMENTS_SHOT_EVERY", 1).max(1),
+            shot_from: env_u32("ELEMENTS_SHOT_FROM", 1).max(1),
             frame: 0,
             shot_taken: false,
+            pending: std::sync::Arc::default(),
         })
         .add_systems(Startup, spawn_status)
         .add_systems(
@@ -67,8 +99,9 @@ impl Plugin for ExampleHarness {
         )
         .add_systems(
             Update,
-            (settle_on_ground, status, run_limit).after(ElementsSystems::Readback),
-        );
+            (settle_on_ground, status, capture_frames).after(ElementsSystems::Readback),
+        )
+        .add_systems(Update, run_limit.after(capture_frames));
         ground::plugin(app);
     }
 }
@@ -290,10 +323,49 @@ fn status(
     );
 }
 
+/// Writes a frame sequence while the run lasts: one screenshot every `shot_every` frames from
+/// `shot_from`, as `frameNNNN.png` in `shot_dir`. The counter is counted from `shot_from`, so a
+/// sequence of frames 301..360 is `frame0000.png`..`frame0059.png` and two runs' sequences
+/// compare frame for frame.
+fn capture_frames(
+    mut commands: Commands,
+    config: Res<RunConfig>,
+    mut seen: Local<u32>,
+    mut index: Local<u32>,
+) {
+    let Some(dir) = config.shot_dir.clone() else {
+        return;
+    };
+    *seen += 1;
+    if *seen < config.shot_from || !(*seen - config.shot_from).is_multiple_of(config.shot_every) {
+        return;
+    }
+    if config.frames.is_some_and(|limit| *seen > limit) {
+        return;
+    }
+    if *index == 0
+        && let Err(error) = std::fs::create_dir_all(&dir)
+    {
+        error!("cannot create frame directory {dir}: {error}");
+        return;
+    }
+    let path = format!("{dir}/frame{:04}.png", *index);
+    *index += 1;
+    let pending = config.pending.clone();
+    pending.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    commands
+        .spawn(Screenshot::primary_window())
+        .observe(move |captured: On<ScreenshotCaptured>| {
+            save_to_disk(path.clone())(captured);
+            pending.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        });
+}
+
 fn run_limit(
     mut config: ResMut<RunConfig>,
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
+    mut waited: Local<u32>,
 ) {
     config.frame += 1;
     let Some(limit) = config.frames else {
@@ -301,6 +373,15 @@ fn run_limit(
     };
     if config.frame < limit {
         return;
+    }
+    // Every capture is written before the app exits; a screenshot takes a frame or two to
+    // arrive. Give up after two seconds' worth of frames.
+    let pending = config.pending.load(std::sync::atomic::Ordering::Relaxed);
+    if pending > 0 {
+        *waited += 1;
+        if *waited < 120 {
+            return;
+        }
     }
     match config.shot.clone() {
         Some(path) if !config.shot_taken => {
@@ -312,9 +393,10 @@ fn run_limit(
                     save(captured);
                 },
             );
+            // Wait for the single shot too, rather than exiting over it.
+            *waited = 0;
         }
-        // Waiting for the screenshot; give up after two seconds' worth of frames.
-        Some(_) if config.frame < limit + 120 => {}
+        Some(_) if *waited < 120 => *waited += 1,
         _ => {
             exit.write(AppExit::Success);
         }
