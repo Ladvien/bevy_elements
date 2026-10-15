@@ -93,6 +93,24 @@ Two problems in step 2 were fixed, because every later iteration needs them:
    history; `/tmp/i1/vision.sh` runs a review that way. The in-process `modelRoles.vision` route is
    unusable for tool-using image review until this is fixed upstream.
 
+### Visual review (`screenshot-reviewer`, after-crops, `/tmp/i5/review_a.md`)
+
+The reviewer compared before/after at the same zoom levels and called the horizon finding
+**resolved**: before, a 67 DN dip (sky L=227, shelf floor L=160, ground L=176) at `y = 85..104`
+across the whole width; after, a monotone ramp (L=226 → 220 → 179 → 176) with **0 DN** of dip, on
+both `Overcast` and `Rain`. It confirmed the ground now reads as snow-covered and matches the
+weathered columns (`srgb(228, 229, 232)`), and that the 40 km plane shows no vertex swimming,
+z-fighting or edge clipping against the atmosphere probe.
+
+One **Noticeable** finding stands: the flat harness's snow ground is a uniform wash (std dev
+< 0.4 DN, no relief). Cause measured, and it is a property of the scene rather than a regression:
+the shipped snow path perturbs only `base_color`, `roughness` and `metallic` (`mirror.rs:149-151`)
+and never the normal, so an up-facing plane lit only by the cloud-dimmed beam has nothing to vary
+it — under Overcast the directional light's illuminance is near zero, so there are no cast
+shadows either. On real terrain the same path follows the relief: `terrain_snow_g24` has a ground
+std dev of 16 (mean 222) against the flat plane's 0, and the snow lies on the ridges. A snow
+normal/albedo perturbation would be a new system, and so a research note first.
+
 ### Top 5 remaining items, ranked
 
 1. **Blizzard's whiteout is not white yet.** Measured after the fix: sky 135–185 against snow 225,
@@ -194,3 +212,95 @@ from 7565.6 to 186.6.
 5. **Cloud edge stair-stepping** (iteration 2's review 4): 1–3 px discrete steps along cloud
    silhouettes in `tour_Clear`, `tour_Fog` and `tour_DustStorm`; a filtering or noise-octave
    question, not an energy one.
+
+## Iteration 4 — 2026-10-15 — snow lies on the ground the examples show
+
+**Commit:** `177754b` · **Sibling repos:** none touched.
+
+### What changed, and why it ranked first
+
+The examples' flat ground plane was a bespoke `StandardMaterial` extension that sampled only the
+cloud shadow map (`examples/common/ground.rs` + `ground.wesl`, since deleted), so under `Snow`
+and `Blizzard` `weather_tour` rendered olive-drab ground where the boxes and columns beside it
+carried `WeatheredMaterial` and whitened. Two layers, one fix.
+
+1. **Material.** `test_scene` now gives its plane `WeatheredMaterial` (the crate's own), so the
+   example ground darkens and glosses in rain, runs with streaks and whitens under snow exactly as
+   a consumer's mesh does. The duplicate shader is gone.
+2. **Plane extent.** 2 km → 40 km. A 2 km plane leaves a sliver of unlit below-horizon
+   atmosphere between its edge (1 km away) and the horizon; `ground_haze` (clouds.md Deviation 28)
+   paints the camera's distance fog over it, and the result is a dark shelf at the horizon.
+3. **Capture.** `SurfaceWeathering` and the cover maps advance on *game time*, and `ELEMENTS_HOUR`
+   holds the clock, so a still of the first frame integrates 0 h of the held preset: no material
+   could ever whiten in a screenshot. `ELEMENTS_GROW_HOURS=n` (examples/common, `grow_weather`)
+   advances the clock one hour a frame for `n` frames plus one arming frame, then rewinds by what it
+   advanced. Both consumers record the clock on their first frame and integrate nothing from it, so
+   the arming frame is needed; and a jump larger than 24 h is clamped by both, so the growth is
+   split into one-hour chunks. The captured hour, sun and sky stay the example's own.
+
+Why it ranked first: rank 1 on iterations 1 and 3's backlogs, and the reviewer's finding 3
+("ground under `tour_Snow` fails to read as snow-covered"). It beats the runner-up (iteration 3's
+backlog item 2, the bright horizon step under Overcast and Rain) because the horizon step is
+*physically* the fogged ground against a bright deck and moves only 29 DN, while a snowing sky over
+green grass is a wrong result the crate can fix.
+
+### Inspection findings
+
+Before/after pairs are in `/tmp/i4/before/`, `/tmp/i4/after/`, crops in `/tmp/i4/crops/` and
+`/tmp/i4/crops_after/`. The reviewer's before findings: `rain_sky` streaks at Δ ≤ 8 RGB levels
+(versus > 50 against ground); `snow_ground` olive-drab; `overcast_horizon` a 66 DN drop (sky
+L=225) to a band floor of L=159, 16 DN below the ground it meets. Measured on the new build,
+x=16 column, rows 264-280 (`magick -crop 1x17+16+264`):
+
+| scene | before | after |
+|---|---|---|
+| `tour_Overcast` horizon shelf | 224→194→156 (valley) →173 | 224→220→203→194→…→173 (ramp) |
+| `tour_PartlyCloudy` horizon | 219→182→155 (valley) →196 | 219→211→204→201→…→196 |
+| `tour_Clear` horizon | 203→207→170 (step) | 203→209→193→…→170 |
+
+The 66 DN valley under Overcast and PartlyCloudy is gone: after the fix the same column is a
+monotone ramp (224→203→194→186→181→177→173) with no dip below the ground it meets. Clear's
+30 DN step is unchanged (clear air has no fog to converge on, and the Clear preset's plane edge
+was never the cause).
+
+### Verification
+
+- `cargo test`: 242 tests, **211 pass, 31 ignored** (GPU, not run), 0 fail.
+- `cargo clippy --all-targets --all-features -- -D warnings`: clean.
+- `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features`: clean.
+- `cargo build --lib --target wasm32-unknown-unknown`: clean.
+- GPU tests, one at a time: `cover::` 5 pass / **2 fail (pre-existing)**, `dust::` 6 pass.
+  The two cover failures (`gpu_wetness_soaks_and_dries_on_the_formula`, probe `Some(0.992)` against
+  an expected `< 0.1` after drying, and `gpu_surface_weathering_follows_the_map`) were reproduced
+  on **pristine HEAD** with this work stashed — a wetness-tolerance defect in the cover map, not a
+  regression. Logged below as backlog item 1.
+- Ground material, snow and growth, before → after: `tour_Snow` (155,167,141) → (228,229,232) at 6 h;
+  `tour_Blizzard` (155,167,141) → (228,229,232); `terrain_snow_g` (143,162,132) → (228,230,232) at 24 h
+  (`CoverStats::simulated_s` = 86 400 s exactly, `terrain_blizzard_g` same).
+- Determinism: two `ELEMENTS_GROW_HOURS=6` runs give identical ground (228,230,232) and identical
+  status-line hour pixels (158,158) — the warm-up is reproducible.
+- Regression: `ELEMENTS_GROW_HOURS=0` is bit-identical to the build before this change. Clear
+  ground (140,155,112) before and after; PartlyCloudy ground (132,146,112) before and after.
+- Cost: the change is `examples/`-only plus one stale `src/terrain/render.wesl` comment; no shader,
+  kernel, or uniform changed, so the cost tables in the notes stand.
+
+### Top 5 remaining items, ranked
+
+1. **Snow has no surface relief on a flat ground.** The shipped path (`mirror.rs:149-151`) moves
+   `base_color`, `roughness` and `metallic` and never the normal, so on the harness's flat plane
+   under Overcast (beam ≈ 0, no cast shadows) the snow is a uniform wash (std dev < 0.4 DN).
+   Real terrain follows the relief (std dev 16 on `terrain_snow_g24`), so this is the flat plane's
+   missing normal detail, not a bug. A snow normal perturbation needs a research note and corpus
+   search first — `snow-cover.md` cites no crust source.
+2. **Two cover GPU tests fail on pristine HEAD.** `gpu_wetness_soaks_and_dries_on_the_formula`
+   (probe `Some(0.992)` vs expected `< 0.1` after drying at `src/cover/gpu_tests.rs:783`) and
+   `gpu_surface_weathering_follows_the_map` (`:846`) both fail without this work. The wetness map
+   reaches 0.99 after the test's drying window, so either the drying constant or the assertion's
+   tolerance is wrong. A real crate defect in a shipped domain, and the only thing blocking a clean
+   `cargo test --release --lib -- --ignored`.
+3. **The horizon step under Clear** (~30 DN at `y ≈ 270`): physically the fogged ground against a
+   bright deck; the only remaining horizon discontinuity in the showcases, and the reviewer's
+   before-review found it under every long-visibility preset.
+4. **DustStorm keeps a Rayleigh-blue zenith** with white cumulus at 800 m visibility (backlog 4).
+5. **Rain streaks wash out against the bright sky** (reviewer finding 2: Δ ≤ 8 levels against the
+   overcast deck, > 50 against the ground). A contrast question in the precipitation draw.
