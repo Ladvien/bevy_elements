@@ -111,6 +111,13 @@ shadows either. On real terrain the same path follows the relief: `terrain_snow_
 std dev of 16 (mean 222) against the flat plane's 0, and the snow lies on the ridges. A snow
 normal/albedo perturbation would be a new system, and so a research note first.
 
+A second focused review (`/tmp/i5/review_b.md`) checked regressions and found **none**: Clear
+ground identical (RMSE 3.9e-05, sampled (140,155,113) before and after) and PartlyCloudy unchanged
+within dither (RMSE 7.56e-04, (132,146,112) → (132,146,113), cloud shadows matching), the 40 km
+plane integrated to the horizon with no seam or step on any preset, DustStorm's ochre veil and
+Fog's extinction uniform with no halos, dusk banding-free, night ground exactly (0,0,0) with
+pin-sharp stars.
+
 ### Top 5 remaining items, ranked
 
 1. **Blizzard's whiteout is not white yet.** Measured after the fix: sky 135–185 against snow 225,
@@ -269,11 +276,16 @@ was never the cause).
 - `cargo clippy --all-targets --all-features -- -D warnings`: clean.
 - `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features`: clean.
 - `cargo build --lib --target wasm32-unknown-unknown`: clean.
-- GPU tests, one at a time: `cover::` 5 pass / **2 fail (pre-existing)**, `dust::` 6 pass.
-  The two cover failures (`gpu_wetness_soaks_and_dries_on_the_formula`, probe `Some(0.992)` against
-  an expected `< 0.1` after drying, and `gpu_surface_weathering_follows_the_map`) were reproduced
-  on **pristine HEAD** with this work stashed — a wetness-tolerance defect in the cover map, not a
-  regression. Logged below as backlog item 1.
+- GPU tests, one suite per process: `clouds::` 10 pass, `terrain::` 8 pass, `cover::` 5 pass /
+  **2 fail (pre-existing)**, `dust::` 6 pass, `voxel::` **1 fail (pre-existing)**, integration
+  (`tests/gpu_*`) 28 pass. The two cover failures (`gpu_wetness_soaks_and_dries_on_the_formula`,
+  probe `Some(0.992)` against an expected `< 0.1` after drying, and
+  `gpu_surface_weathering_follows_the_map`) were reproduced on **pristine HEAD** with this work
+  stashed — a wetness-tolerance defect in the cover map, not a regression. The voxel failure
+  (`gpu_voxel_snow_covers_the_top`, `src/voxel/gpu_tests.rs:318`) reproduces 2/2 at pristine HEAD
+  with swap 1 at 23.05 h and 22.80 h against `20.7 ± 2.0 h` — a ~+2.1 h bias past the window, with
+  no simulation-side `src/` drift since the test was written (the only later edits are a type
+  alias and a constant rename). Both are logged below as backlog item 2.
 - Ground material, snow and growth, before → after: `tour_Snow` (155,167,141) → (228,229,232) at 6 h;
   `tour_Blizzard` (155,167,141) → (228,229,232); `terrain_snow_g` (143,162,132) → (228,230,232) at 24 h
   (`CoverStats::simulated_s` = 86 400 s exactly, `terrain_blizzard_g` same).
@@ -292,12 +304,16 @@ was never the cause).
    Real terrain follows the relief (std dev 16 on `terrain_snow_g24`), so this is the flat plane's
    missing normal detail, not a bug. A snow normal perturbation needs a research note and corpus
    search first — `snow-cover.md` cites no crust source.
-2. **Two cover GPU tests fail on pristine HEAD.** `gpu_wetness_soaks_and_dries_on_the_formula`
+2. **Three GPU tests fail on pristine HEAD.** `gpu_wetness_soaks_and_dries_on_the_formula`
    (probe `Some(0.992)` vs expected `< 0.1` after drying at `src/cover/gpu_tests.rs:783`) and
-   `gpu_surface_weathering_follows_the_map` (`:846`) both fail without this work. The wetness map
+   `gpu_surface_weathering_follows_the_map` (`:846`) both fail without this work — the wetness map
    reaches 0.99 after the test's drying window, so either the drying constant or the assertion's
-   tolerance is wrong. A real crate defect in a shipped domain, and the only thing blocking a clean
-   `cargo test --release --lib -- --ignored`.
+   tolerance is wrong. `voxel::gpu_tests::gpu_voxel_snow_covers_the_top`
+   (`src/voxel/gpu_tests.rs:318`) fails 2/2 with swap 1 at 22.8–23.1 h against `20.7 ± 2.0 h`: a
+   consistent ~+2.1 h bias with 0.25 h run-to-run variance and no simulation-side `src/` drift
+   since the test was written, so either the swap is genuinely late or the window is tighter than
+   the readback-observed swap time allows. Together the only things blocking a clean
+   `cargo test --release --lib -- --ignored`; a real defect in a shipped domain.
 3. **The horizon step under Clear** (~30 DN at `y ≈ 270`): physically the fogged ground against a
    bright deck; the only remaining horizon discontinuity in the showcases, and the reviewer's
    before-review found it under every long-visibility preset.

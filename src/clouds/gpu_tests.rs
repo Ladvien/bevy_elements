@@ -887,3 +887,56 @@ fn the_far_veil_continues_the_marched_deck_at_full_cover() {
         finish(&mut app);
     }
 }
+
+/// The sky at the horizon is fogged like the ground below it: the veil that draws the deck at
+/// grazing angles (`far_veil`, not the march) and the planet met below the horizon both carry
+/// the distance fog, so no dark band lies between the sky and the fogged ground (clouds.md
+/// Deviations 28 and 29; measured on `ground_cover` at 6 m eye: sky 225 against a 45-row band
+/// of 157–171 under `Snow` and `Rain`).
+#[test]
+#[ignore = "needs a GPU"]
+fn the_horizon_sky_is_the_fog_colour_under_a_deck() {
+    let mut case = Case::sky(WeatherPreset::Snow);
+    // 6 m above the ground looking 1° up: the 45° frame spans +23.5° to −21.5°, so the middle
+    // rows are the veil at the horizon and the bottom rows the planet below it.
+    case.position = Vec3::new(0.0, 6.0, 0.0);
+    let up = 1.0f32.to_radians().sin();
+    let forward = 1.0f32.to_radians().cos();
+    case.look = Vec3::new(0.0, 6.0 + 100.0 * up, -100.0 * forward);
+    case.linear_target = true;
+    let mut app = app(case);
+    // Past the 1 s light smoothing and a full accumulation window.
+    run(&mut app, 400);
+    let haze = app.world().resource::<CloudGpu>().params.haze;
+    let target = app.world().resource::<Target>().0.clone();
+    let texels = rgba16(&support::read_texture(&mut app, target, 64 * 8, 64));
+    finish(&mut app);
+    let fog = [haze.x, haze.y, haze.z];
+    let luminance = luminance([fog[0], fog[1], fog[2], 0.0]);
+    // The target is 64×64: 64 rows span 45° around +1°, so the horizon sits at row 33; rows
+    // 28..=33 are the sky just above it and rows 34..=45 the planet just below it.
+    let band = |rows: std::ops::Range<usize>| {
+        let mut sum = [0.0f32; 3];
+        let mut n = 0.0;
+        for y in rows {
+            for x in 0..64 {
+                let p = texels[y * 64 + x];
+                sum[0] += p[0];
+                sum[1] += p[1];
+                sum[2] += p[2];
+                n += 1.0;
+            }
+        }
+        [sum[0] / n, sum[1] / n, sum[2] / n]
+    };
+    let above = band(28..33);
+    let below = band(34..45);
+    println!("haze {fog:?}; sky just above the horizon {above:?}; just below {below:?}");
+    for (name, band) in [("above", above), ("below", below)] {
+        let d = (0..3).map(|c| (band[c] - fog[c]).abs()).fold(0.0f32, f32::max);
+        assert!(
+            d <= 0.05 * luminance,
+            "the {name}-horizon sky is not the fog colour: {band:?} vs {fog:?} (Δ {d:.4})"
+        );
+    }
+}

@@ -117,9 +117,13 @@ fn aerial_perspective(uv: vec2<f32>, dir: vec3<f32>, depth: f32, o_r: f32) -> Ae
 /// T)` with `T = exp(−σ d)` (bevy_pbr's atmospheric fog with equal extinction and in-scattering).
 /// Bevy's sky pixel there is the planet lit by the sun light, which under cloud carries only the
 /// beam; the fog's colour carries the diffuse light. The transmittance LUT cannot give this path:
-/// it holds rays that leave the atmosphere (Deviation 28 of the research note).
+/// it holds rays that leave the atmosphere (Deviation 28 of the research note). The distance is
+/// floored at the march range: a below-horizon pixel with no mesh shows ground the fog has fully
+/// carried — nothing nearer than the far field is visible beyond a finite terrain, and the bare
+/// planet within the march range would otherwise show through as a dark band at the horizon
+/// (measured 68 DN on `ground_cover` at 6 m eye).
 fn ground_haze(ground_m: f32) -> vec4<f32> {
-    let t = exp(-params.haze.w * ground_m);
+    let t = exp(-params.haze.w * max(ground_m, MAX_MARCH_M));
     return vec4<f32>(params.haze.xyz * (1.0 - t), t);
 }
 
