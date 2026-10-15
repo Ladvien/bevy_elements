@@ -320,3 +320,117 @@ was never the cause).
 4. **DustStorm keeps a Rayleigh-blue zenith** with white cumulus at 800 m visibility (backlog 4).
 5. **Rain streaks wash out against the bright sky** (reviewer finding 2: Δ ≤ 8 levels against the
    overcast deck, > 50 against the ground). A contrast question in the precipitation draw.
+
+## Iteration 5 — 2026-10-15 — the horizon shows no dark band past the edge of a finite ground
+
+**Commit:** `c9131e6` (code + test + docs + stills). **Sibling repos:** none touched.
+
+### What changed, and why it ranked first
+
+The extra instruction for this run was a full aesthetic inspection: every domain the crate ships,
+captured and reviewed by the vision model (`screenshot-reviewer`, Gemini Flash), then the single
+most valuable defect fixed.
+
+Below-horizon sky pixels with no mesh behind them — past the edge of quickstart's hills, the lake
+basin, any finite terrain — drew Bevy's unlit bare-planet term. `ground_haze` (clouds.md
+Deviation 28) fogs over the planet's own root, and from a low camera that root is *near* (23 m at
+5° below the horizon from 2 m), so the transmittance is ~1 and nothing fogs: the pixel is the dark
+planet under a lit, fogged scene. Measured on the lake at three columns: a 33 DN dark band at the
+horizon (193 against fogged ground 226); reproduced headlessly in the new GPU test at 0.59× the
+fog colour (3.835 against haze 6.553 on the linear target). The fix floors the fog distance at
+the march range (`MAX_MARCH_M`, 32 km): a below-horizon pixel with no mesh shows ground the fog
+has fully carried, because nothing nearer than the far field is visible beyond a finite terrain.
+It beat the runner-up (precipitation and dust washing out against bright backgrounds) because it
+is a physically-wrong rank-1 artifact isolated to one shader line with a regression test, while
+the washout is a particle-compositing redesign that touches every precipitation golden.
+
+### Inspection findings
+
+Capture: `/tmp/i6` — 35 sequential runs over every example domain (`capture.sh`): the five
+times of day, ten sequences (cloud build, rain, snow, lightning-lead, wind, lake ripples, flood
+flow, dust, fog roll), two terrain seeds (42, 7), two camera heights (6 m and 120–400 m), erosion
+before/after, voxel snow, weathered town (rain wide + wall, snow, fog). Reviews: eleven
+Gemini Flash batches (`/tmp/i6/reviews/b1.md` … `b11.md`), crops in `/tmp/i6/crops/`.
+
+- **Blocker, reclassified: the "dark horizon shelf" of iteration 4's backlog was the harness's
+  own status line.** The reviewer's b6 finding (68 DN, rows 10–56 of `cover_rain_gnd`) is the
+  semi-transparent debug band the harness burns into the top of every capture; b11 read it
+  verbatim ("Clear (forced) … vis 40000 m") and confirmed no shelf exists in the sky below it
+  (row-to-row ≤ 1–2 DN). Crop below row 56 when judging horizons; AGENTS now says so.
+- **Precipitation and dust wash out against bright backgrounds** (the runner-up, now rank 1):
+  rain streaks ΔDN ≤ 3 against a 227-DN overcast sky while Δ64–75 against the ground
+  (`b3_*`); snow flakes Δ ≤ 5 against the sky, Δ36–44 against ground (`b4s_*`); 60 000 dust
+  sprites move the frame by ≤ 4 DN over 14 frames — "the storm appears as static homogeneous
+  fog" (`b5_dust_*`). Streak advection, flake motion and shelter occlusion are otherwise clean.
+- **Snow has no normal-dependent shading under an overcast sky** (`b7_snow_seed07_aerial.png`):
+  the 24 h warm-up saturates the terrain white but the aerial view measures 0.56 DN of standard
+  dev across 840 k pixels — Bevy's ambient is flat over normals and the beam is zero. This is
+  iteration 4's backlog item 1 seen from the air, on real terrain.
+- **Time of day** (`b1_*`): the horizon is continuous at all four hours; the dawn gradient is
+  smooth to ≤ 1 DN per row; stars are 1–2 px points; night ground sits at (4,4,5). Two
+  capture-design facts: `day_night`'s camera (yaw 106.7°) never faces the sun (dawn azimuth 64°,
+  sunset 303°), and the moon is set at 23:30 (−12.3°) — the showcase cannot show either disc.
+  The night sky reading brighter than dusk (16.1% vs 12.5% mean) is the Ward/Larson auto
+  exposure the note adopts (celestial.md, "Auto exposure"), not a defect.
+- **Clouds** (`b2_*`): cumulus edges monotone, no ghosting between consecutive accumulation
+  frames (Δ ≤ 1 DN), overcast deck uniform. The shadow-contrast question is unresolved (the
+  crop missed the cloud mass at Clear's 0.05 cover).
+- **Lightning, wind, water, materials, fog** (`b4`, `b5`, `b9`, `b10`, `b6`): bolt geometry
+  clean, tree sway anchored and coherent, lake shoreline sub-pixel continuous with no shimmer,
+  ripple motion structured, flood channel flush with no gaps, wall streaks localized with clean
+  onset, pavilion dry contrast sharp, fog volume against geometry natural. Minor: mid-flash is
+  dimmer than the first stroke because `STRIKE_LEAD=6` (+100 ms) outlives the ~43 ms decay
+  (the doc says "inside the flash"); splash rings sparse; near-shore foam sub-pixel at nadir;
+  the flood marker sits outside the capture's frustum; fresh erosion cuts facet; the status text
+  clips at the window edge.
+- **Verified physical, not defects:** thin snow lets grass through (`cover_snow_gnd` reports
+  7.7 mm and melting); no puddles at 1.6 mm of water (the model's threshold is 2 mm); sequence
+  frames 0–12 render before the pipelines are ready (skip them when cropping pairs).
+
+### Verification
+
+- New GPU test `clouds::gpu_tests::the_horizon_sky_is_the_fog_colour_under_a_deck` (6 m eye,
+  1° up, `Snow`): above the horizon the veil is the fog colour (6.543 against haze 6.553); below
+  it the planet was 0.59× the fog colour and is now the haze. Red before the fix, green after.
+- Before/after captures (`/tmp/i6/shots` vs `/tmp/i6/after`, reviewed in `b11.md`): the lake's
+  horizon band lifts 193 → 226 DN at x = 100, 1400, 1800 with meshed terrain bit-identical
+  (Δ 0 DN); `weathered_town`'s 40 km plane compares AE 0; flood fringes converge into the
+  fogged ridge; open sky Δ 1 DN. The controls `tod_noon` (AE 1.4e-8) and the terrain seed-42
+  ground shot (AE 2.4e-5, dither) are unchanged.
+- `cargo test`: 211 pass, 0 fail (32 ignored, GPU). `cargo clippy --all-targets --all-features
+  -- -D warnings`, `RUSTDOCFLAGS=-D warnings cargo doc --no-deps --all-features`, and the
+  wasm32 build: clean.
+- GPU suites, one process per module: `clouds::` 11 pass in two parts (see below), `terrain::`
+  8 pass, `dust::` 6 pass, integration (`tests/gpu_*`) 28 pass; `cover::` and `voxel::` fail
+  exactly the three pre-existing tests logged under iteration 4's backlog item 2 — reproduced
+  there first, unchanged here.
+- New test-infrastructure fact: `clouds::gpu_tests` now has eleven tests and the eleventh
+  sequential wgpu instance cannot get an adapter (`GPU_NOT_FOUND`); the suite passes as
+  ten-plus-one. Recorded in AGENTS.
+
+### Top 5 remaining items, ranked
+
+1. **Precipitation and dust wash out against bright backgrounds.** Rain streaks Δ ≤ 3 against
+   a 227-DN overcast sky, snow flakes Δ ≤ 5, dust sprites ≤ 4 DN over 14 frames, while each is
+   strongly visible against dark ground. The particles carry a fixed radiance; physically a
+   flake or streak is lit like any surface — about 0.8× the sky behind it, so it should read
+   slightly dark against the deck and bright against the ground. A compositor change in the
+   precipitation draw, with the note's deviation and contrast tests on both backgrounds.
+2. **Snow has no normal-dependent shading under an overcast sky** (iteration 4's item 1, now
+   measured from the air: 0.56 DN across 840 k pixels on saturated terrain). Bevy's ambient is
+   flat over normals; an overcast dome is not. Needs a corpus search (overcast sky-luminance
+   models) and a research note before any code.
+3. **Three GPU tests fail on pristine HEAD, and the clouds suite needs two processes.**
+   `cover::gpu_wetness_soaks_and_dries_on_the_formula` (probe 0.992 against < 0.1 after
+   drying), `cover::gpu_surface_weathering_follows_the_map`, and
+   `voxel::gpu_voxel_snow_covers_the_top` (swap 1 at 22.8–23.1 h against 20.7 ± 2.0, a +2.1 h
+   bias with no simulation-side drift since it was written). Plus the adapter cap above.
+4. **`day_night` never shows the sun or the moon.** The camera yaw (106.7°) points away from
+   the dawn sun (64°) and the sunset sun (303°), and the 23:30 moon is set (−12.3°): the discs
+   the domain exists to render cannot appear in the showcase. An `ELEMENTS_HEADING` default that
+   tracks the sun at dawn/sunset and a moon-up hour would show them.
+5. **The small cosmetic set.** `ELEMENTS_STRIKE_LEAD=6` lands +100 ms after the trigger, past
+   the ~43 ms flash decay, so "inside the flash" is wrong in `storm`'s doc; splash rings are
+   sparse on a 6 m roof; near-shore foam is sub-pixel at nadir (view-ray thickness); the flood
+   marker is outside the capture frustum; fresh erosion cuts facet; the status line clips at
+   the window's right edge.

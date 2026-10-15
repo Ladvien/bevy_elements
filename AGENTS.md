@@ -36,6 +36,8 @@ No system is implemented without its `docs/research/<system>.md`, committed firs
 - **No `unwrap()`/`expect()` outside tests.** One path per feature: no fallbacks, shims or stubs.
 - **A missing `Res<T>` panics its system.** Take `Option<Res<T>>` or `init_resource`. Run conditions are all evaluated, with no short-circuit.
 - **`Single<..>` silently skips its system on a non-unique match.**
+- **More than ten GPU tests in one process exhaust the adapter.** Each test builds a Bevy app and wgpu instance; on the eleventh `request_adapter` returns `None` and the test panics with `GPU_NOT_FOUND` at `bevy_render-0.20.0/src/renderer/mod.rs:308`, while the same test passes alone. `clouds::gpu_tests` has eleven: run the suite with `--skip the_horizon_sky`, then the skipped test on its own.
+- **The examples' harness burns a status line into the top ~56 rows** of every capture (a semi-transparent band over the sky). A reviewer may read it as an atmospheric shelf; crop below it when judging horizons, and read it for the weather state at the capture (preset, cover, visibility).
 - **GPU determinism.** GPU results are not bit-deterministic. Astronomy, the weather scheduler and lightning are deterministic and seeded; goldens are named `the_<thing>_is_frozen`.
 - **WebGPU limits.** Storage textures are write-only `rgba16float`/`rgba8unorm`, at most 4 per stage; ping-pong pairs, no read_write textures. Simulation state lives in storage buffers.
 - Close any Bevy app you launch for a test.
