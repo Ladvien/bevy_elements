@@ -115,7 +115,7 @@ this iteration only where the shipped build changed them.
 
 ## Iteration 3 — 2026-10-14 — the sky carries the weather's air (the whiteout's horizon line)
 
-**Commit:** (this iteration) · **Sibling repos:** none touched.
+**Commit:** 816f473 · **Sibling repos:** none touched.
 
 ### What changed, and why it ranked first
 
