@@ -616,3 +616,71 @@ Reviews in `/tmp/i7/review_b13.md` (round 1, *Adjust*) and `/tmp/i7/review_b14.m
 5. **Cloud shadow contrast under Clear is still unverified** (carried twice): iteration 5's
    crop missed the cloud mass; capture with cumulus upwind and measure the ground's
    depressions.
+
+## Iteration 8 — 2026-10-15 — day_night frames the sun and the moon
+
+**Commit:** `79e5e36` (examples only: `day_night`, `common::FlyCamera`, README, CHANGELOG — no
+`src/` change). **Sibling repos:** none.
+
+### What changed, and why it ranked first
+
+The extra instruction again: inspect every feature with the vision model. Two inspection batches
+(`/tmp/i8/review_a.md`, `/tmp/i8/review_b.md`, Gemini Flash `screenshot-reviewer`) closed every
+rank-1/2 candidate: batch B passed the whole post-dome showcase (sky gradient monotone ≤ 2 DN
+per 20 px, horizon continuous with zero shelf, prop top-vs-side shading 17–20 DN, terrain relief
+5–8 DN with sub-1-DN speckle, cloud temporal pair at AE 0, rain streaks advection-coherent at
++9 DN against sky and +48 against ground) — **ship-shape**. The open categories therefore fell
+to rank 3, and batch A measured the winner with a **Defect** verdict: **`day_night` never shows
+the sun or the moon**. Its camera was aimed at bearing 253° (WSW) at +6° pitch while the bodies
+sat elsewhere the whole sweep — sunrise 54–65° (ENE, behind), noon 180° at 68° up, sunset 304°
+(past the 292° frustum edge), and the waxing moon at 150–175° (south, never in frustum): the
+one example whose stated purpose is the celestial discs captured none of them in seven hours.
+It beat the runner-up (an occlusion term for the aerial snow relief) because the runner-up
+refines a fix the same reviewer already passed this week, while this is a whole missing feature
+of the showcase the loop's inspection checklist names explicitly.
+
+**The fix**: an `aim_at_sky` system (`PostUpdate`) turns the camera at the sun while it is
+above the horizon, at the moon once the sun is down and the moon is up, and back at the spawned
+evening heading when neither is up (`SunState`'s directions; yaw from the same `atan2` the
+`camera()` helper uses). While the clock runs the aim follows the bodies; paused
+(`ELEMENTS_HOUR`) it aims once (`Local<bool>`), so a still is framed on the disc and the view
+stays free to drag — holding the right button releases the aim, which resumes on release. A new
+`FlyCamera::face(yaw, pitch)` writes the controller's private fields.
+
+### Verification
+
+- Reviewer round 2 over the same seven hours (`/tmp/i8/review_c.md`, verdict **Ship**): the sun
+  disc (10 × 10 px, core 255, centred within 2 px of frame centre) at 04:30 (alt 1.6°), 05:30
+  (11.2°), noon (68.3° — the horizon sensibly out of the bottom of frame) and 19:36 (1.3°); the
+  crescent moon (4 × 8 px, 37 % illumination faithful, 104–129 DN over the twilight sky) at
+  20:12 and 21:30; 23:30 falls back to the evening heading with both bodies set (moon −1.8°) —
+  stars-only, near-black ground (7,4,2). Sky checks unchanged from round 1: row steps ≤ 1 DN at
+  every pitch, stars 1–2 px, no banding, no status-band occlusion (>300 px clear).
+- Gates: `cargo test` 12 suites ok; `cargo clippy --all-targets --all-features -- -D warnings`,
+  `RUSTDOCFLAGS=-D warnings cargo doc --no-deps --all-features`, wasm32 clean. GPU (one process
+  per suite): `clouds::` 10 + 1 in the documented two parts (the eleven-instance adapter cap
+  fired once when the suite ran whole — `GPU_NOT_FOUND`, not a regression), `dust::` 6,
+  `cover::` 5/2, `voxel::` 0/1 (the three pre-existing failures from iteration 4's backlog
+  item 2), integration 11 binaries.
+
+### Top 5 remaining items, ranked
+
+1. **Occlusion for the aerial snow relief** (carried): the dome curve gives the aerial view
+   3–8 DN; a sky-visibility/AO term is what photographs actually use. Needs a research note and
+   a corpus-first search (sky occlusion course notes exist in the corpus: SIGGRAPH 2015 "Sky
+   Occlusion", 2006 "horizon shadowing", 2021 "Horizon Occlusion").
+2. **Three GPU tests fail on pristine HEAD** (unchanged): `cover::gpu_wetness_soaks_and_dries_
+   on_the_formula`, `cover::gpu_surface_weathering_follows_the_map`,
+   `voxel::gpu_voxel_snow_covers_the_top` (+2.1 h swap bias); plus the eleven-instance adapter
+   cap that requires the clouds suite to run in two parts (in AGENTS).
+3. **The small cosmetic set** (unchanged): `STRIKE_LEAD=6` outlives the ~43 ms flash decay
+   (the doc says "inside the flash"); splash rings sparse on a 6 m roof; near-shore foam
+   sub-pixel at nadir; the flood marker outside the capture frustum; erosion-cut faceting; the
+   status line clipping at the window's right edge.
+4. **Cloud shadow contrast under Clear is still unverified** (carried twice): iteration 5's
+   crop missed the cloud mass; capture with cumulus upwind and measure the ground's shadow
+   depressions.
+5. **The moon's phase is the only moon feature exercised** (new): the aim fix frames the disc,
+   and the reviewer confirmed the 37 % crescent renders faithfully — but no sweep has inspected
+   the full moon (a month's phase sweep at a fixed hour) or the moon lighting terrain at
+   different phases. Cheap to capture (`WorldClock` date), worth one batch.
