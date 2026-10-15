@@ -6,6 +6,18 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ### Fixed
 
+- **Snow relief reads under an overcast sky.** Saturated snow rendered as a flat wash (0.56 DN
+  of standard deviation across 840 k pixels of terrain from the air) because the ambient is
+  uniform over normals and the beam is ~0 under cloud. The crate's materials now shade the lit
+  colour by the Moon & Spencer (1942) CIE overcast dome — brightest at the zenith, the horizon a
+  third of it, integrated with the ground's bounce into the anchors top 1 / side 0.68 / bottom
+  0.5 — ramped by the cloud map's transmittance over each ground point, so clear air is an exact
+  no-op (controls within dither) and a full deck gets the whole shape. The showcase's boxes and
+  columns join its ground on `WeatheredMaterial`, so the shading reaches them: their sides read
+  9 DN darker than their tops under Snow while the tops do not move. Under Overcast 559 652
+  terrain pixels move ≥ 3 DN (13 726 ≥ 7) where none did before (`docs/research/snow-cover.md`,
+  Deviation 15).
+
 - **A dust storm streams.** The dust sprites were drawn at their 2 mm grain size — 0.02–0.1 px
   anywhere in the 60 m box — so the sub-pixel coverage rule faded them out and the storm read as
   static fog (zero pixels below 150 against a 224 background across a 1150 × 140 sky band).

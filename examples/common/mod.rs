@@ -342,6 +342,7 @@ pub fn test_scene(
         commands.spawn((
             Mesh3d(mesh),
             MeshMaterial3d(material),
+            ground::ShowcaseProp,
             Transform::from_translation(at + Vec3::Y * y),
         ));
     }

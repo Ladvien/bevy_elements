@@ -160,10 +160,10 @@ fn layer_weights(slope_deg: f32, sediment: f32, detail: f32) -> vec4<f32> {
     return vec4<f32>(rock, sand, rest * band, rest * (1.0 - band));
 }
 
-// Cloud shadow scale ρ = (0.25 + 0.75 T_px) / (0.25 + 0.75 T_cam) at a world position, the same
-// formula the weathered materials use (`surface_cover.wesl::cloud_shadow_ratio`; clouds.md,
-// "Cloud shadow map").
-fn cloud_shadow_ratio(p: vec3<f32>) -> f32 {
+/// The raw cloud deck transmittance over the ground at `p` (1.0 outside the map or without one):
+/// the deck the sky's light comes through, so the shade ramp's signal (`snow-cover.md`
+/// Deviation 15).
+fn cloud_deck(p: vec3<f32>) -> f32 {
     let l = material.light.xyz;
     var t = 1.0;
     if material.light.w > 0.5 && l.y > 0.1 {
@@ -172,7 +172,14 @@ fn cloud_shadow_ratio(p: vec3<f32>) -> f32 {
             t = textureSampleLevel(cloud_map, cloud_sampler, uv, 0.0).r;
         }
     }
-    let here = 0.25 + 0.75 * t;
+    return t;
+}
+
+// Cloud shadow scale ρ = (0.25 + 0.75 T_px) / (0.25 + 0.75 T_cam) at a world position, the same
+// formula the weathered materials use (`surface_cover.wesl::cloud_shadow_ratio`; clouds.md,
+// "Cloud shadow map").
+fn cloud_shadow_ratio(p: vec3<f32>) -> f32 {
+    let here = 0.25 + 0.75 * cloud_deck(p);
     let camera = max(0.25 + 0.75 * material.shadow.w, 0.01);
     return clamp(here / camera, 0.0, 4.0);
 }
@@ -283,6 +290,21 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 @if(!PREPASS_PIPELINE) {
     var out: FragmentOutput;
     out.color = apply_pbr_lighting(pbr_input);
+    // The Moon & Spencer 1942 overcast dome as a shade factor (top 1, side 0.68, bottom 0.5;
+    // `docs/research/snow-cover.md` Deviation 15): the sky is brightest at the zenith, so a
+    // surface sees less light from below its horizon. It ramps with the deck over this ground
+    // (`cloud_deck`, 0 under cloud, 1 in clear air — exactly no change there). Under a deck the
+    // beam inside `out` is ~0 (the cloud dims the DirectionalLights), so scaling the lit colour
+    // scales the sky's fill alone; the beam share this also dims at partial cover is in
+    // Deviation 15.
+    out.color = vec4<f32>(
+        out.color.rgb * mix(
+            1.0,
+            (1.0 - 0.35 * pow(max(1.0 - pbr_input.N.y, 0.0), 0.3)),
+            1.0 - cloud_deck(p),
+        ),
+        out.color.a,
+    );
     out.color = vec4<f32>(out.color.rgb * ratio, out.color.a);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;

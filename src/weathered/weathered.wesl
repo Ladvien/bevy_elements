@@ -40,6 +40,7 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 @group(constants::MATERIAL_BIND_GROUP) @binding(102) var cloud_map: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(103) var cloud_sampler: sampler;
 
+/// The delta between the sky's shaped light over the flat ambient inside `apply_pbr_lighting`.
 @if(!PREPASS_PIPELINE || DEFERRED_PREPASS)
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
@@ -101,6 +102,19 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var out: FragmentOutput;
     if (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {
         out.color = apply_pbr_lighting(pbr_input);
+        // The Moon & Spencer 1942 overcast dome as a shade factor (top 1, side 0.68, bottom
+        // 0.5; `docs/research/snow-cover.md` Deviation 15), ramped by the deck: `t` is the raw
+        // cloud map transmittance sampled above (1.0 outside the map or with none), so clear
+        // air is exactly 1 (no change). Under a deck the beam is ~0, so scaling the lit colour
+        // scales the sky's fill alone; the beam share at partial cover is in Deviation 15.
+out.color = vec4<f32>(
+        out.color.rgb * mix(
+            1.0,
+            (1.0 - 0.35 * pow(max(1.0 - pbr_input.N.y, 0.0), 0.3)),
+            1.0 - t,
+        ),
+        out.color.a,
+    );
     } else {
         out.color = pbr_input.material.base_color;
     }
