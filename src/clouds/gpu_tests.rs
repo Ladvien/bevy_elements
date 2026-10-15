@@ -515,6 +515,69 @@ fn the_composite_leaves_nearer_surfaces_and_clear_sky_untouched() {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Deviation 29: the sky carries the weather's air
+// ---------------------------------------------------------------------------------------------
+
+/// Deviation 29: the weather's air above clear air fogs the sky exactly as the distance fog
+/// fogs a mesh, so a whiteout has no horizon line. The camera looks straight up under Blizzard
+/// (200 m visibility), where every pixel is sky and the layer entry is the base 1.5 km away:
+/// 2.2×10⁻¹³ of the deck's radiance survives, so the frame is `haze.xyz` to within a half-float
+/// step. Then the same frame with the air suppressed (`CloudDebug::air = 0`, the clear-air
+/// no-op): the deck's own radiance must differ from the fog colour by at least 10 % of its
+/// luminance, or the test would pass on a frame with no cloud and no sky at all.
+#[test]
+#[ignore = "needs a GPU"]
+fn the_weather_air_makes_the_sky_the_fog_colour() {
+    let mut case = Case::sky(WeatherPreset::Blizzard);
+    case.linear_target = true;
+    let mut app = app(case);
+    // Past the 1 s light smoothing and a full accumulation window.
+    run(&mut app, 400);
+    let haze = app.world().resource::<CloudGpu>().params.haze;
+    let air = app.world().resource::<CloudGpu>().params.air.x;
+    assert!(air > 0.0, "Blizzard's air must be above clear air");
+    let target = app.world().resource::<Target>().0.clone();
+    let texels = rgba16(&support::read_texture(&mut app, target.clone(), 64 * 8, 64));
+    let fogged = mean_rgb(&texels);
+
+    set_debug(&mut app, |d| d.air = Some(0.0));
+    run(&mut app, 8);
+    let texels = rgba16(&support::read_texture(&mut app, target, 64 * 8, 64));
+    let deck = mean_rgb(&texels);
+    finish(&mut app);
+
+    let fog = [haze.x, haze.y, haze.z];
+    let difference = (0..3).map(|c| (fogged[c] - fog[c]).abs()).fold(0.0, f32::max);
+    let luminance = luminance([fog[0], fog[1], fog[2], 0.0]);
+    println!(
+        "air {air:.5} m⁻¹: fogged {fogged:?} vs fog {fog:?} (max Δ {difference:.4} of {luminance:.3}); \
+         deck {deck:?}",
+    );
+    // Every pixel is sky: the whole frame is the fog, to the half-float step.
+    assert!(
+        difference <= 0.01 * luminance,
+        "the sky is not the fog colour: {fogged:?} vs {fog:?}"
+    );
+    // Without the air the frame is the deck, which is a different colour: the first assertion
+    // is about the fog, not about a frame that renders nothing.
+    let step = (0..3).map(|c| (deck[c] - fog[c]).abs()).fold(0.0, f32::max);
+    assert!(
+        step >= 0.1 * luminance,
+        "the deck should not be the fog colour: {deck:?} vs {fog:?}"
+    );
+}
+
+fn mean_rgb(texels: &[[f32; 4]]) -> [f32; 3] {
+    let mut sum = [0.0f32; 3];
+    for texel in texels {
+        for c in 0..3 {
+            sum[c] += texel[c];
+        }
+    }
+    sum.map(|v| v / texels.len() as f32)
+}
+
+// ---------------------------------------------------------------------------------------------
 // Finite values, temporal behaviour, flash
 // ---------------------------------------------------------------------------------------------
 
@@ -706,6 +769,12 @@ fn tint(c: [f32; 3]) -> f32 {
 /// 0.1 (measured 0.034 and 0.068). Sun 60° and 20° (the second is the low winter sun of the
 /// `snowfall` example), Snow (cover 1) and Overcast (0.95), looking away from the sun and
 /// toward it.
+///
+/// The weather's air is suppressed (`CloudDebug::air = 0`): at 1.5 km visibility Deviation 29's
+/// fog saturates both sides of the boundary to the same colour (measured ratio 1.000 at Snow),
+/// which would make the test blind to the step it exists to catch. Suppressing it leaves the
+/// veil-versus-deck comparison the test was written for, unchanged from the build before
+/// Deviation 29.
 #[test]
 #[ignore = "needs a GPU"]
 fn the_far_veil_continues_the_marched_deck_at_full_cover() {
@@ -742,6 +811,9 @@ fn the_far_veil_continues_the_marched_deck_at_full_cover() {
         case.hour = hour;
         case.linear_target = true;
         case.fov_deg = Some(fov_deg as f32);
+        // Measure the veil, not the weather's fog over both: Deviation 29 saturates a 1.5 km
+        // visibility to one colour and would hide the step this test exists to catch.
+        case.debug.air = Some(0.0);
         let mut app = app(case);
         run(&mut app, 4);
         let sun = *app.world().resource::<crate::celestial::SunState>();

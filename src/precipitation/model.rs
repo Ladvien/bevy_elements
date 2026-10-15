@@ -3,7 +3,7 @@
 //! `common.wesl`, `precip.wesl` and `draw.wesl` and the fog kernel evaluate the same formulas;
 //! the tests here pin them to the numbers in `docs/research/precipitation.md`.
 
-use crate::fog::{KOSCHMIEDER, extinction_for_visibility};
+use crate::fog::{CLEAR_AIR_EXTINCTION, extinction_for_visibility};
 
 /// Marshall–Palmer slope `Λ = 4.1 R^−0.21` in mm⁻¹ for a liquid-equivalent rate `R` in mm/h
 /// (Uijlenhoet 2001, Eq. 11). Rates below 0.01 mm/h are held there so Λ stays finite.
@@ -46,8 +46,9 @@ pub(crate) fn snow_extinction(rate_mm_h: f32) -> f32 {
     4.917e-3 * rate_mm_h.max(0.0)
 }
 
-/// Extinction of clear air at the `Clear` preset's 40 km visibility, m⁻¹.
-pub(crate) const FLOOR_EXTINCTION: f32 = KOSCHMIEDER / 40_000.0;
+/// Extinction of clear air at the `Clear` preset's 40 km visibility, m⁻¹: the fog module's one
+/// authority (`fog::CLEAR_AIR_EXTINCTION`).
+pub(crate) const FLOOR_EXTINCTION: f32 = CLEAR_AIR_EXTINCTION;
 
 /// The weather's extinction `σ_V`, split into the precipitation that is drawn as shafts and the
 /// haze that remains.

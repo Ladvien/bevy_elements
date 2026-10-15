@@ -56,8 +56,9 @@ pub use precipitation::{
 
 // Fog.
 pub use fog::{
-    FogPlugin, GROUND_FOG_EXTENT, GROUND_FOG_TEXELS, GroundFog, KOSCHMIEDER, distance_fog_falloff,
-    extinction_for_visibility, fog_hue, volume_light_compensation,
+    CLEAR_AIR_EXTINCTION, CLEAR_VISIBILITY_M, FogPlugin, GROUND_FOG_EXTENT, GROUND_FOG_TEXELS,
+    GroundFog, KOSCHMIEDER, distance_fog_falloff, extinction_for_visibility, fog_hue,
+    sky_air_extinction, volume_light_compensation,
 };
 
 // Clouds.

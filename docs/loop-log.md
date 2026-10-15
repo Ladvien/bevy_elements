@@ -112,3 +112,85 @@ Two problems in step 2 were fixed, because every later iteration needs them:
 
 Deferred/known, not ranked: the per-preset `docs/*.png` stills and `docs/tour.gif` were regenerated
 this iteration only where the shipped build changed them.
+
+## Iteration 3 — 2026-10-14 — the sky carries the weather's air (the whiteout's horizon line)
+
+**Commit:** (this iteration) · **Sibling repos:** none touched.
+
+### What changed, and why it ranked first
+
+The cloud composite now fogs **sky** pixels by the same air the distance fog gives every mesh:
+`σ_air = σ_fog − 3.912/40 km`, read from the camera's own `DistanceFog` (`fog::sky_air_extinction`,
+`CloudParams::air`, `composite.wesl`), multiplying the deck's radiance by `e^(−σ_air·t)` and adding
+the fog colour times the same share. `t` is the path to the layer's entry, the conservative limit
+(the veil beyond converges on the same colour, Validation 20).
+
+Ranked first because it is the **rank-1 backlog item from iteration 2 and the top of iteration 1's
+list**: a physically wrong result in the shipping crate's worst weather. The fog made the ground
+converge on the fog colour but left the sky at the deck's own radiance, so a 200 m-visibility
+blizzard showed a 40-level luminance step at the horizon — measured, and named "Blocker / inverted
+luminance" by iteration 2's visual review.
+
+Runner-up: snow's ground never whitens in `weather_tour` (backlog 3). It needs a terrain and the
+ground-cover maps, so it is a harness change, not a renderer defect; the horizon step is visible in
+every whiteout image in every scene.
+
+### Inspection findings (iteration 2's captures, `/tmp/i2/`, and this iteration's `/tmp/i3/before/`)
+
+Measured on the before build at the horizon (`x = 1000`): `tour_Blizzard.png` sky `(186, 193, 198)`
+at `y = 269` against ground `(224, 228, 230)` at `y = 270`; `terrain_blizzard_air.png` sky
+`(185, 188, 191)` at `y = 297` against terrain `(225, 228, 231)` at `y = 298`. `tour_Fog.png` had a
+dark cloud band `(144, 147, 154)` between a bright fog base and the upper sky. Crops and the
+before/after review are in `/tmp/i3/rev/`.
+
+### Verification
+
+Measured on the before/after captures at the horizon (`x = 1000`, mean of RGB), the step the
+review called a blocker:
+
+| scene | sky just above it | ground just below it | after |
+|---|---|---|---|
+| `tour_Blizzard` (200 m) | 192 | 225 | **227 / 225** — step gone |
+| `tour_Fog` (300 m) | 191 (mid-sky band 148) | 216 | **219 / 216** — the dark band is gone |
+| `tour_Snow` (1500 m) | 192 | 222 | **227 / 222** |
+| `tour_DustStorm` (800 m) | 188 (chromatic clash) | 194 | **198 / 194**, the sky takes the ochre tint |
+| `tour_Clear` (40 km) | — | — | **bit-identical, AE = 0** (also dawn, dusk, night) |
+| `terrain_blizzard_g` | 175 | 177 | **227 / 227** |
+
+The vision review's crops are in `/tmp/i3/rev/`; its verdict: "Fit to ship: horizon seam is
+completely eliminated under low visibility while clear conditions remain bit-exact", with the
+Blizzard horizon crop's standard deviation down from 4255.7 to 802.6 and `terrain_blizzard_g`'s
+from 7565.6 to 186.6.
+
+- `cargo test` — 211 lib + all suites pass (2 new unit tests: the air's arithmetic and monotonicity;
+  the `Clear` preset pinned to `CLEAR_AIR_EXTINCTION`); `tour.gif` and the per-preset stills are
+  regenerated from the new build and re-reviewed (no artifacts, all presets distinct).
+- New GPU test `the_weather_air_makes_the_sky_the_fog_colour`: straight-up Blizzard, linear target,
+  the frame's mean equals the fog colour to a half-float step (Δ 0.0026 of 6.91) with the air on and
+  differs from it by half its luminance with the air suppressed (`CloudDebug::air = 0`).
+- `the_far_veil_continues_the_marched_deck_at_full_cover` (Validation 20) now suppresses the air
+  explicitly, because Deviation 29's fog saturated both sides of its 32 km boundary (ratio 1.000)
+  and the test had gone blind; with the air off its measured ratios are 1.04–1.13 — the same values
+  the build before Deviation 29 produced.
+- `cargo clippy --all-targets --all-features -- -D warnings`, `RUSTDOCFLAGS="-D warnings" cargo doc
+  --no-deps --all-features`, `cargo build --lib --target wasm32-unknown-unknown` — see the gate run
+  below.
+
+### Top 5 remaining items, ranked
+
+1. **Snow's ground never whitens** under Snow or Blizzard in `weather_tour` (backlog 3 from
+   iteration 1). The harness's flat ground uses the plain material; giving it the ground-cover
+   shading (or moving the whiteout shots to `terrain_tour`) would let every later whiteout claim be
+   judged on a scene that can actually be white.
+2. **DustStorm keeps a Rayleigh-blue zenith** (backlog 4) with white cumulus at 800 m visibility:
+   the fog tint is only in the distance fog; the sky above is untouched. The air mechanism added
+   this iteration is the hook: the dust presets' *colour*, not just their extinction, is what is
+   missing (`fog_hue` already tints the distance fog for dust).
+3. **Particle-box edge** at 60 m under Rain/Thunderstorm (backlog 5): streaks stop abruptly against
+   distant un-occluded geometry, and the draw has no far-particle haze.
+4. **A bright horizon gap / step under Overcast and Rain** (~30 DN at `y ≈ 270`, iteration 1's
+   backlog 2): pre-existing before iteration 1 and only slightly reduced by it; the air added this
+   iteration changes it (Overcast's air is 9.78×10⁻⁵ m⁻¹), so re-measure it against these captures.
+5. **Cloud edge stair-stepping** (iteration 2's review 4): 1–3 px discrete steps along cloud
+   silhouettes in `tour_Clear`, `tour_Fog` and `tour_DustStorm`; a filtering or noise-octave
+   question, not an energy one.

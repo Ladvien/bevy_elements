@@ -548,6 +548,14 @@ mod tests {
     }
 
     #[test]
+    fn the_clear_preset_is_the_visibility_the_sky_air_is_measured_against() {
+        // `fog::CLEAR_AIR_EXTINCTION` treats the `Clear` preset's visibility as clear air
+        // (and `precipitation_split`'s floor follows); if either moves, the sky's fog moves
+        // with it, so pin them together.
+        assert_eq!(target(WeatherPreset::Clear).visibility, crate::fog::CLEAR_VISIBILITY_M);
+    }
+
+    #[test]
     fn snow_fraction_ramps_from_minus_one_to_two() {
         let at = |t| {
             Weather {

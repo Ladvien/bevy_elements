@@ -5,7 +5,7 @@
 import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput;
 import bevy_render::view::View;
 import bevy_elements::clouds::common::{
-    CloudParams, ground_before_layer, ray_dir, scene_distance, shell_range,
+    CloudParams, MAX_MARCH_M, ground_before_layer, ray_dir, scene_distance, shell_range,
 };
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -49,6 +49,25 @@ fn cloud_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         let shell = shell_range(o_r, dir.y, params.layer.x, params.layer.y, big_r);
         if ground_before_layer(o_r, dir.y, shell.x, big_r) < 0.0 {
             cloud.a *= mix(1.0, params.sky.x, smoothstep(OPAQUE_BELOW, SKY_ABOVE, cloud.a));
+            // The weather's air, over the path to the sky this pixel shows: the camera's
+            // distance fog (σ_fog) is what every mesh carries, and a sky pixel already has
+            // Bevy's atmosphere, which draws the clear air — so `air.x = σ_fog − 3.912/40 km`
+            // is what the sky must add on top of it. Without this the sky above the horizon
+            // keeps the deck's own radiance while the ground converges on the fog, and a
+            // whiteout shows a horizon line (measured 185–195 against fogged snow 225 at
+            // 200 m; clouds.md Deviation 29). Both the in-scatter and the extinction are the
+            // fog's, so a sky pixel over a long enough path is the fog colour exactly as a
+            // distant mesh is, and clear air (σ_air = 0) is the exact no-op this was before.
+            // The path is the layer entry. A ray that never enters the layer at all
+            // (`shell_range` found no crossing) shows only sky, and the weather's air over it
+            // is the weather's whole extent; a ray that starts inside the layer has no air
+            // between the camera and the cloud it draws.
+            let air_path = select(shell.x, MAX_MARCH_M, shell.y <= 0.0);
+            let t = exp(-params.air.x * air_path);
+            cloud = vec4<f32>(
+                cloud.rgb * t + params.haze.xyz * (1.0 - t),
+                cloud.a * t,
+            );
         }
     }
     return cloud;

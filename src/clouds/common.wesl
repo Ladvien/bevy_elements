@@ -46,6 +46,9 @@ struct CloudParams {
     tail: vec4<u32>,
     /// xyz: the camera's distance fog colour (linear, after exposure). w: its extinction, m⁻¹.
     haze: vec4<f32>,
+    /// x: extinction of the weather's air above clear air, m⁻¹; the composite fogs sky pixels
+    /// with it, so the sky converges on `haze.xyz` as the ground does. 0 for clear air.
+    air: vec4<f32>,
 }
 
 const PI: f32 = 3.14159265358979;

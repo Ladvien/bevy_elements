@@ -23,6 +23,12 @@ use crate::precipitation::model::{
 
 /// Koschmieder's constant for a 2 % contrast threshold: extinction = 3.912 / visibility.
 pub const KOSCHMIEDER: f32 = 3.912;
+/// Visibility of the `Clear` preset, m: the air this crate calls clear. A weather's visibility
+/// is measured against it, not against a vacuum (see [`sky_air_extinction`]).
+pub const CLEAR_VISIBILITY_M: f32 = 40_000.0;
+/// Extinction of clear air, m⁻¹: `KOSCHMIEDER / CLEAR_VISIBILITY_M`, the floor of every
+/// visibility a weather can carry.
+pub const CLEAR_AIR_EXTINCTION: f32 = KOSCHMIEDER / CLEAR_VISIBILITY_M;
 /// Size of the ground-fog volume, m: the near field, around the camera; distance fog carries
 /// the far field. Kept small because Bevy attenuates the light reaching every fog sample by the
 /// volume's bounding radius (see [`volume_light_compensation`]).
@@ -55,9 +61,20 @@ const OFFSET_WRAP_M: f32 = 80.0 * 4096.0;
 #[derive(Component, Clone, Copy, Debug, Default, Reflect)]
 pub struct GroundFog;
 
-/// Extinction coefficient for a visibility, m⁻¹ (Koschmieder, 2 % contrast).
+/// Extinction coefficient for a visibility, m-¹ (Koschmieder, 2 % contrast).
 pub fn extinction_for_visibility(visibility_m: f32) -> f32 {
     KOSCHMIEDER / visibility_m.max(1.0)
+}
+
+/// Extinction of the air the *sky* must carry above clear air, m⁻¹, for a camera whose
+/// `DistanceFog` has extinction `fog_extinction_m`: `fog_extinction − CLEAR_AIR_EXTINCTION`,
+/// floored at zero. Every mesh is fogged by the camera's distance fog, but a sky pixel already
+/// has Bevy's atmosphere (which draws the clear air), so the sky only adds the excess the
+/// weather's visibility implies over the `Clear` preset's. Taking the camera's own extinction
+/// keeps the sky and the ground on the same fog at all times; 0 without distance fog, and 0 at
+/// and above 40 km, so a clear sky is untouched. `docs/research/clouds.md` Deviation 29.
+pub fn sky_air_extinction(fog_extinction_m: f32) -> f32 {
+    (fog_extinction_m - CLEAR_AIR_EXTINCTION).max(0.0)
 }
 
 /// Distance fog for a visibility: grey extinction σ_V in every channel (fog, haze and dust
@@ -214,7 +231,9 @@ impl Plugin for FogPlugin {
                 (
                     // The clouds move the weather map's origin there; the fog kernel samples it.
                     update_volume.after(crate::clouds::CloudGpuUpdate),
-                    update_distance_fog,
+                    // The composite reads the camera's fog colour; write it first, or the sky
+                    // lags the ground by a frame (invisible except on a weather change).
+                    update_distance_fog.before(crate::clouds::CloudGpuUpdate),
                 )
                     .in_set(ElementsSystems::Simulation),
             );
@@ -412,6 +431,27 @@ fn update_distance_fog(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_skys_air_is_the_cameras_fog_extinction_above_clear_air() {
+        // The camera's extinction, not a visibility: whatever `DistanceFog` the meshes carry.
+        let air = |visibility: f32| sky_air_extinction(extinction_for_visibility(visibility));
+        // Clear air adds nothing: the atmosphere is the whole sky.
+        assert_eq!(air(CLEAR_VISIBILITY_M), 0.0);
+        assert_eq!(air(80_000.0), 0.0);
+        // The presets: 3.912/V minus the 40 km floor.
+        assert!((air(200.0) - 1.946_22e-2).abs() < 1e-9);
+        assert!((air(300.0) - 1.294_22e-2).abs() < 1e-9);
+        assert!((air(1_500.0) - 2.510_2e-3).abs() < 1e-9);
+        assert!((air(20_000.0) - 9.78e-5).abs() < 1e-9);
+        // Monotone in visibility: longer sight never adds more air.
+        let mut last = f32::MAX;
+        for visibility in [200.0, 300.0, 1_500.0, 5_000.0, 20_000.0, 40_000.0, 80_000.0] {
+            let a = air(visibility);
+            assert!(a <= last, "{a} > {last} at {visibility} m");
+            last = a;
+        }
+    }
 
     #[test]
     fn every_channel_reaches_two_percent_at_the_visibility_and_energy_is_conserved() {

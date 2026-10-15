@@ -270,6 +270,10 @@ pub(crate) struct CloudParams {
     /// xyz: the camera's `DistanceFog` colour (linear, after exposure). w: its extinction, m⁻¹
     /// (0 without distance fog).
     pub haze: Vec4,
+    /// x: extinction of the weather's air above clear air, m⁻¹ (`fog::sky_air_extinction`).
+    /// The composite fogs sky pixels with it, so the sky converges on `haze.xyz` as distant
+    /// ground does; 0 leaves the sky to the atmosphere alone. `clouds.md` Deviation 29.
+    pub air: Vec4,
 }
 
 /// The per-view images: this frame's march result and the two history textures.
@@ -333,6 +337,8 @@ pub(crate) struct CloudDebug {
     pub kind: Option<f32>,
     pub cover: Option<f32>,
     pub drift: Option<Vec2>,
+    /// The weather's air extinction, m⁻¹: 0 is clear air and leaves the sky to the atmosphere.
+    pub air: Option<f32>,
 }
 
 /// Volumetric clouds.
@@ -712,19 +718,34 @@ fn update_gpu(
         misc: Vec4::new(exposure_ratio, 0.0, 0.0, if reset { 1.0 } else { 0.0 }),
         tail: UVec4::ZERO,
         haze: fogs.get(entity).map_or(Vec4::ZERO, haze),
+        // The sky's air comes from the camera's own `DistanceFog`, so the sky and the meshes
+        // cannot disagree about the fog even if a game replaces it.
+        air: Vec4::new(
+            fogs.get(entity).map_or(0.0, |fog| {
+                crate::fog::sky_air_extinction(fog_extinction(fog))
+            }),
+            0.0,
+            0.0,
+            0.0,
+        ),
     };
 }
 
 /// The distance fog as the clouds' ground haze: its linear colour and its grey extinction
 /// (`fog::distance_fog_falloff` sets extinction and in-scattering equal).
 fn haze(fog: &DistanceFog) -> Vec4 {
-    let extinction = match fog.falloff {
+    let c = fog.color.to_linear();
+    Vec4::new(c.red, c.green, c.blue, fog_extinction(fog))
+}
+
+/// Extinction of a camera's distance fog, m⁻¹; 0 for a falloff this crate never writes
+/// (`FogFalloff::Linear` or `ExponentialSquared`, which a game that replaces the component may).
+fn fog_extinction(fog: &DistanceFog) -> f32 {
+    match fog.falloff {
         FogFalloff::Atmospheric { extinction, .. } => extinction.x,
         FogFalloff::Exponential { density } => density,
         FogFalloff::ExponentialSquared { .. } | FogFalloff::Linear { .. } => 0.0,
-    };
-    let c = fog.color.to_linear();
-    Vec4::new(c.red, c.green, c.blue, extinction)
+    }
 }
 
 #[cfg(test)]
@@ -744,6 +765,9 @@ fn apply_debug(debug: Option<Res<CloudDebug>>, mut gpu: ResMut<CloudGpu>) {
     }
     if let Some(cover) = debug.cover {
         p.layer.w = cover;
+    }
+    if let Some(air) = debug.air {
+        p.air.x = air;
     }
     if let Some(light) = debug.light {
         p.light = light.extend(0.0);
