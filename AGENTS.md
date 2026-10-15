@@ -40,6 +40,7 @@ No system is implemented without its `docs/research/<system>.md`, committed firs
 - **WebGPU limits.** Storage textures are write-only `rgba16float`/`rgba8unorm`, at most 4 per stage; ping-pong pairs, no read_write textures. Simulation state lives in storage buffers.
 - Close any Bevy app you launch for a test.
 - Do not hard-wrap markdown.
+- **Never judge an image yourself.** Delegate visual judgment to the `screenshot-reviewer` agent (the `@vision` model reads the image; a text model must not look at pixels).
 
 ## Bevy 0.20 traps found here
 

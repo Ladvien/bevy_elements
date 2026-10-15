@@ -5,6 +5,9 @@
 //!   captures the same frames (GPU results are not bit-deterministic, but the simulated time,
 //!   weather, clock and camera are). Without `ELEMENTS_FRAMES` the examples run on wall-clock time.
 //! - `ELEMENTS_SHOT=/tmp/x.png` saves a screenshot of the primary window on the last frame, then exits.
+//! - `ELEMENTS_GROW_HOURS=N` integrates `N` game hours of the forced weather before the first
+//!   frame (see [`grow_weather`]): a still of a snowfall or a rain shows accumulated snow, wet
+//!   ground and streaks instead of the first instant of the preset.
 //! - `ELEMENTS_SHOT_DIR=/tmp/frames` saves a frame sequence to that directory (created if
 //!   missing) as `frame0000.png` and up, `ELEMENTS_SHOT_EVERY=N` capturing every Nth frame
 //!   (default 1) from `ELEMENTS_SHOT_FROM` (default 1). With `ELEMENTS_FRAMES` the simulated time
@@ -55,6 +58,9 @@ struct RunConfig {
     shot_from: u32,
     frame: u32,
     shot_taken: bool,
+    /// `ELEMENTS_GROW_HOURS`: game hours of the held weather to integrate before the first
+    /// captured frame.
+    grow_hours: f64,
     /// Screenshots spawned but not yet written; the run does not end over one.
     pending: std::sync::Arc<std::sync::atomic::AtomicU32>,
 }
@@ -90,12 +96,16 @@ impl Plugin for ExampleHarness {
             shot_from: env_u32("ELEMENTS_SHOT_FROM", 1).max(1),
             frame: 0,
             shot_taken: false,
+            grow_hours: std::env::var("ELEMENTS_GROW_HOURS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.0),
             pending: std::sync::Arc::default(),
         })
         .add_systems(Startup, spawn_status)
         .add_systems(
             Update,
-            (fly, clock_keys, weather_keys).before(ElementsSystems::Clock),
+            (grow_weather, fly, clock_keys, weather_keys).before(ElementsSystems::Clock),
         )
         .add_systems(
             Update,
@@ -187,6 +197,51 @@ fn fly(
     }
 }
 
+/// `ELEMENTS_GROW_HOURS`: integrate the held weather's game time before the first frame.
+///
+/// Wetness, snow and the cover maps advance on *game* time, and a held clock (`ELEMENTS_HOUR`)
+/// adds none — so a still captured at the first frame of a preset shows bare ground under a
+/// snowfall whatever the material does. This system advances the clock one chunk per frame and
+/// then rewinds by exactly what it advanced: the last frame's delta comes back and the capture's
+/// hour, sun and sky are the example's own.
+///
+/// Two details make the growth exact. The consumers record the clock on their first frame and
+/// integrate nothing from it (their `last_hours` is `None`), so the first chunk is lost to them
+/// and an extra arming frame is spent; and a jump larger than 24 h is clamped by both consumers,
+/// so the growth is split into chunks of at most an hour. The weather is forced before the first
+/// frame, so the whole warm-up is under the held preset, and a rewound clock adds no game time.
+/// The cover maps drain their queue over the following frames, so a capture a few frames after
+/// the rewind still sees the growth. Only the warm-up frames are at a moved hour — a frame
+/// sequence should start past them.
+fn grow_weather(
+    config: Res<RunConfig>,
+    mut clock: ResMut<WorldClock>,
+    mut plan: Local<Option<(f64, u32)>>,
+    mut advanced: Local<f64>,
+) {
+    if config.grow_hours <= 0.0 {
+        return;
+    }
+    let Some(&mut (chunk, frames)) = plan.as_mut() else {
+        let hours = config.grow_hours.ceil();
+        // `ceil` frames of growth plus one arming frame; `grow_hours` is at most `ceil` hours, so
+        // the growth is integrated in chunks of at most one hour and the consumers' clamps are
+        // never reached.
+        *plan = Some((config.grow_hours / hours, hours as u32 + 1));
+        return;
+    };
+    if frames > 0 {
+        clock.advance_hours(chunk);
+        *advanced += chunk;
+        *plan = Some((chunk, frames - 1));
+        return;
+    }
+    let back = *advanced;
+    clock.advance_hours(-back);
+    *advanced = 0.0;
+    *plan = Some((0.0, 0));
+}
+
 fn clock_keys(keys: Res<ButtonInput<KeyCode>>, mut clock: ResMut<WorldClock>) {
     if keys.just_pressed(KeyCode::BracketLeft) {
         clock.time_scale *= 0.5;
@@ -242,8 +297,12 @@ fn spawn_status(mut commands: Commands) {
     ));
 }
 
-/// A 2 km ground plane (given per-pixel cloud shadows by the harness) and a ring of boxes,
-/// columns and spheres to read shadows and fog depth.
+/// A 40 km ground plane — out past the horizon the sky's own haze covers, so the ground meets the
+/// sky without the sliver of unlit below-horizon atmosphere a short plane leaves between its edge
+/// and the horizon (measured: a 35 DN dark shelf at the horizon of the 2 km plane under Overcast
+/// and PartlyCloudy, gone with this) — and a ring of boxes, columns and spheres to read shadows
+/// and fog depth. The plane gets `WeatheredMaterial` (cloud shadows, wetness, rain streaks and
+/// snow) from this harness.
 pub fn test_scene(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -251,7 +310,7 @@ pub fn test_scene(
 ) {
     commands.spawn((
         GroundPlane,
-        Mesh3d(meshes.add(Plane3d::default().mesh().size(2000.0, 2000.0))),
+        Mesh3d(meshes.add(Plane3d::default().mesh().size(40000.0, 40000.0))),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::srgb(0.30, 0.36, 0.22),
             perceptual_roughness: 0.95,

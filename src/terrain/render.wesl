@@ -160,8 +160,9 @@ fn layer_weights(slope_deg: f32, sediment: f32, detail: f32) -> vec4<f32> {
     return vec4<f32>(rock, sand, rest * band, rest * (1.0 - band));
 }
 
-// Cloud shadow scale ρ = (0.25 + 0.75 T_px) / (0.25 + 0.75 T_cam) at a world position, as the
-// examples' ground plane computes it (clouds.md, "Cloud shadow map").
+// Cloud shadow scale ρ = (0.25 + 0.75 T_px) / (0.25 + 0.75 T_cam) at a world position, the same
+// formula the weathered materials use (`surface_cover.wesl::cloud_shadow_ratio`; clouds.md,
+// "Cloud shadow map").
 fn cloud_shadow_ratio(p: vec3<f32>) -> f32 {
     let l = material.light.xyz;
     var t = 1.0;
