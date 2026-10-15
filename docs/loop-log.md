@@ -434,3 +434,88 @@ Gemini Flash batches (`/tmp/i6/reviews/b1.md` … `b11.md`), crops in `/tmp/i6/c
    sparse on a 6 m roof; near-shore foam is sub-pixel at nadir (view-ray thickness); the flood
    marker is outside the capture frustum; fresh erosion cuts facet; the status line clips at
    the window's right edge.
+
+## Iteration 6 — 2026-10-15 — a dust storm streams instead of sitting as static fog
+
+**Commit:** `19db0a4` (code + note + CHANGELOG + the three dust stills). **Sibling repos:** none.
+
+### What changed, and why it ranked first
+
+The full-feature inspection continued (the extra instruction): the iteration-5 backlog's rank 1
+was "precipitation and dust wash out against bright backgrounds". Re-measured properly this
+iteration — full-band histograms instead of the single 240 × 50 patches the finding came from —
+two thirds of it dissolves:
+
+- **Rain reads** (`before6/rain_day.png`, sky band rows 120–260): 50 150 of 161 000 pixels
+  (31 %) sit 25–75 DN below the 225 sky — streaks were visible all along; the earlier "Δ ≤ 3"
+  was measured on a streak-free patch.
+- **Snow reads, sparsely** (`before6/snow_day.png`): flake cores reach 190–204 against a 225
+  sky (Δ 21–35) on 4 558 pixels; the earlier "Δ ≤ 5" sampled a faint edge.
+
+The third member was real: **dust sprites were genuinely invisible.** They are drawn at the
+plan's 2 mm grain size, which is 0.02–0.1 px anywhere in the 60 m box, so the draw's own
+sub-pixel coverage rule (`draw.wesl`, Garg & Nayar 2007 Eqs. 21–22) fades their opacity to
+≈ 0.01: 1 247 pixels of 849 920 reached 150–199 against a 224 background and none below 150,
+and the reviewer measured ≤ 4 DN of movement over 14 frames — "the storm appears as static
+homogeneous fog" (`b5_dust_*`). The example's stated behaviour ("dust sprites stream past the
+camera with the wind") did not exist on screen. That is a visible, physically-wrong-at-the-pixel
+rank-1 defect in a shipped showcase, and it beat the runner-up (snow's flat overcast shading,
+which needs a whole lighting-model note) because it is one constant in one vertex path with a
+direct visual oracle.
+
+**The fix:** the draw diameter (`DUST_SPRITE_DRAW_M`, 0.35 m) and the sprite opacity
+(`DUST_ALPHA`, 0.5, below a flake's 0.8 so a cluster is a veil rather than a puff) are now
+separate from the grain size. `DUST_SIZE_M` (2 mm) remains the size the sprite *extinction*
+accounts — Validation 8's 8.7 · 10⁻⁷ m⁻¹ is untouched, as are the counts, the motion, the fog
+and every other physics number. `dust.md` Deviation 15 records the split with the measurements.
+
+### Inspection findings
+
+Crops in `/tmp/i6/crops/` (`b12_*`), review in `/tmp/i6/reviews/b12.md` (Gemini Flash,
+`screenshot-reviewer`):
+
+- **After the fix the storm reads as particulate:** 26 % of the frame moves more than 6 DN
+  (219 924 px), cores reach 150–199 (55 316 px), the tan chromaticity is preserved
+  (mean (221, 208, 189) → (216, 203, 183); R:G:B ratio 1.17 : 1.10 : 1.00 before and after),
+  and there are no opaque blobs (min channel 181/165/143), no whiteout, no quad edges. The
+  reviewer's verdict: *"Does the dust storm now READ as streaming particulate rather than
+  static haze? Yes … No artifact introduced … Ship."*
+- **Temporal check** (`b12_dust_seqA/B_2x.png`, frames 3 apart): mean difference 4.48 DN,
+  clusters advect downwind by (−2…−6, −8…−15) px over 3 frames, edges fade gracefully at the
+  box boundary — continuous drift, no popping.
+- **Corrections to last iteration's findings** (recorded so the backlog stops carrying them:
+  the rain and snow "washout" entries were single-patch sampling artifacts — full-band
+  histograms above).
+
+### Verification
+
+- `cargo test`: 211 pass, 0 fail. `cargo clippy --all-targets --all-features -- -D warnings`,
+  `RUSTDOCFLAGS=-D warnings cargo doc --no-deps --all-features`, wasm32 build: clean.
+- GPU suites, one process each: `clouds::` 10 + 1 (two parts, the adapter cap), `terrain::` 8,
+  `dust::` 6, integration 28 across 11 binaries; `cover::` 5/2 and `voxel::` 0/1 fail exactly
+  the three pre-existing tests from iteration 4's backlog item 2 — no new failures.
+- `precipitation` unit tests: 16 pass (the sprite extinction pin is unchanged).
+- Before/after captures under identical env (`/tmp/i6/before6` vs `/tmp/i6/after6`) and the
+  motion sequence (`/tmp/i6/seq6/dust`); the three README dust stills regenerated from the new
+  build (600/600/4200 frames, the commands the README documents).
+
+### Top 5 remaining items, ranked
+
+1. **Snow has no normal-dependent shading under an overcast sky** (iteration 5's rank 2):
+   saturated terrain reads 0.56 DN of standard deviation across 840 k pixels from the air, and
+   the flat-ground case reads < 0.4. Bevy's ambient is flat over normals; an overcast dome is
+   not. Needs a corpus search (overcast sky-luminance models) and a research note before code.
+2. **Three GPU tests fail on pristine HEAD, and the clouds suite needs two processes**
+   (unchanged): `cover::gpu_wetness_soaks_and_dries_on_the_formula`,
+   `cover::gpu_surface_weathering_follows_the_map`, `voxel::gpu_voxel_snow_covers_the_top`
+   (swap 1 at 22.8–23.1 h against 20.7 ± 2.0), plus the eleven-instance adapter cap.
+3. **`day_night` never shows the sun or the moon** (unchanged): camera yaw 106.7° against the
+   dawn sun at 64° and the sunset sun at 303°; the 23:30 moon is set at −12.3°. The discs the
+   domain exists to render cannot appear in the showcase.
+4. **The small cosmetic set** (unchanged): `STRIKE_LEAD=6` outlives the ~43 ms flash decay
+   (the doc says "inside the flash"); splash rings sparse on a 6 m roof; near-shore foam
+   sub-pixel at nadir; the flood marker sits outside the capture frustum; fresh erosion cuts
+   facet; the status line clips at the window's right edge.
+5. **Cloud shadow contrast under Clear is unverified** (carried from iteration 5): the crop
+   missed the cloud mass, so neither confirmation nor denial. Capture with the shadows in frame
+   (choose a heading where cumulus sit upwind) and measure the ground's shadow depressions.
