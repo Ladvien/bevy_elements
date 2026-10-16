@@ -37,6 +37,7 @@ use crate::gpu::grid::storage_buffer;
 use crate::gpu::readback::{Readbacks, decode};
 use crate::plugin::{ElementsQuality, ElementsSystems, ElementsView, ensure_gpu_core};
 use crate::query::EnvironmentSnapshot;
+use crate::terrain::TerrainGrid;
 
 /// Smoothstep, `S(a, b, x)` of the research note.
 fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
@@ -209,6 +210,10 @@ pub(crate) const WEATHER_EXTENT_M: f32 = 32_000.0;
 /// Texels per side of the shadow map and the world size it covers, m.
 pub(crate) const SHADOW_TEXELS: u32 = 1024;
 pub(crate) const SHADOW_EXTENT_M: f32 = 8_000.0;
+/// Shadow-map texels per cell edge of the gameplay query grid ([`CloudShadowSnapshot`]).
+pub(crate) const SHADOW_COARSE_STRIDE: u32 = 4;
+/// Cells per side of the gameplay query grid.
+pub(crate) const SHADOW_COARSE_CELLS: u32 = SHADOW_TEXELS / SHADOW_COARSE_STRIDE;
 /// Texels per side of the base and detail noise volumes.
 pub(crate) const NOISE_BASE_TEXELS: u32 = 128;
 pub(crate) const NOISE_DETAIL_TEXELS: u32 = 32;
@@ -294,6 +299,8 @@ pub(crate) struct CloudGpu {
     pub histogram: Handle<ShaderBuffer>,
     pub threshold: Handle<ShaderBuffer>,
     pub camera_t: Handle<ShaderBuffer>,
+    /// Every fourth shadow-map texel's transmittance, `SHADOW_COARSE_CELLS²` row-major.
+    pub shadow_coarse: Handle<ShaderBuffer>,
     pub view: Option<CloudViewImages>,
     pub params: CloudParams,
     /// Followed camera present: the weather and shadow kernels run.
@@ -382,7 +389,7 @@ impl Plugin for CloudPlugin {
                     )
                         .chain()
                         .in_set(ElementsSystems::Simulation),
-                    read_camera_transmittance.in_set(ElementsSystems::Readback),
+                    read_shadows.in_set(ElementsSystems::Readback),
                 ),
             );
         #[cfg(test)]
@@ -500,6 +507,12 @@ fn create_resources(
         histogram: storage_buffer(&mut buffers, "elements_clouds_histogram", vec![0u32; 256]),
         threshold: storage_buffer(&mut buffers, "elements_clouds_threshold", vec![0f32; 4]),
         camera_t: storage_buffer(&mut buffers, "elements_clouds_camera_t", vec![0f32; 4]),
+        // Nothing shadowed until the first dispatch: T = 1.
+        shadow_coarse: storage_buffer(
+            &mut buffers,
+            "elements_clouds_shadow_coarse",
+            vec![1f32; (SHADOW_COARSE_CELLS * SHADOW_COARSE_CELLS) as usize],
+        ),
         view: None,
         params: CloudParams::default(),
         active: false,
@@ -808,8 +821,12 @@ fn smooth_camera_transmittance(
     }
 }
 
-fn read_camera_transmittance(gpu: Option<Res<CloudGpu>>, mut readbacks: Readbacks) {
-    let Some(gpu) = gpu else {
+fn read_shadows(
+    gpu: Option<Res<CloudGpu>>,
+    shadows: Option<Res<CloudShadows>>,
+    mut readbacks: Readbacks,
+) {
+    let (Some(gpu), Some(shadows)) = (gpu, shadows) else {
         return;
     };
     if !gpu.active || !gpu.live.load(Ordering::Relaxed) {
@@ -823,4 +840,58 @@ fn read_camera_transmittance(gpu: Option<Res<CloudGpu>>, mut readbacks: Readback
             snapshot.cloud_transmittance = Some(t);
         }
     });
+    let grid = CloudShadowSnapshot::grid(shadows.origin);
+    let light = shadows.generation_direction();
+    readbacks.request(
+        "cloud_shadow",
+        gpu.shadow_coarse.clone(),
+        move |bytes, snapshot| {
+            let cells = (SHADOW_COARSE_CELLS * SHADOW_COARSE_CELLS) as usize;
+            if let Some(values) = decode::<f32>(bytes)
+                && values.len() >= cells
+            {
+                snapshot.cloud_shadow = Some(CloudShadowSnapshot {
+                    grid,
+                    light,
+                    transmittance: values[..cells].into(),
+                });
+            }
+        },
+    );
+}
+
+/// CPU copy of the cloud shadow map's query grid: the direct transmittance toward the light
+/// every 31.25 m over the map's 8 km square (`docs/research/cloud-shadow-query.md`).
+#[derive(Clone, Debug)]
+pub(crate) struct CloudShadowSnapshot {
+    /// The query grid: cell `k` is centred on shadow-map texel `4k + 2`.
+    pub grid: TerrainGrid,
+    /// Unit direction toward the light the map was generated for (elevation ≥ 5.74°).
+    pub light: Vec3,
+    /// Row-major transmittance, 0–1.
+    pub transmittance: Arc<[f32]>,
+}
+
+impl CloudShadowSnapshot {
+    /// The query grid of a shadow map whose minimum corner is `origin`.
+    pub(crate) fn grid(origin: Vec2) -> TerrainGrid {
+        let texel = SHADOW_EXTENT_M / SHADOW_TEXELS as f32;
+        TerrainGrid {
+            // Cell k's centre, origin + (k + 0.5)·4t, is texel 4k + 2's centre, origin + (4k + 2.5)·t.
+            origin: origin + Vec2::splat(0.5 * texel),
+            cell_m: texel * SHADOW_COARSE_STRIDE as f32,
+            size: UVec2::splat(SHADOW_COARSE_CELLS),
+            y0: 0.0,
+        }
+    }
+
+    /// Direct transmittance toward the light at a world position: the position projected along
+    /// the light onto the map's plane `y = 0`, bilinear; 1 outside the map.
+    pub(crate) fn transmittance_at(&self, position: Vec3) -> f32 {
+        let q = position.xz() - self.light.xz() * (position.y / self.light.y);
+        if !self.grid.contains(q) {
+            return 1.0;
+        }
+        self.grid.sample(&self.transmittance, q).clamp(0.0, 1.0)
+    }
 }

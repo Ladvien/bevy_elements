@@ -684,3 +684,67 @@ stays free to drag — holding the right button releases the aim, which resumes 
    and the reviewer confirmed the 37 % crescent renders faithfully — but no sweep has inspected
    the full moon (a month's phase sweep at a fixed hour) or the moon lighting terrain at
    different phases. Cheap to capture (`WorldClock` date), worth one batch.
+
+## Iteration 9 — 2026-10-16 — cloud shadow and illuminance at a point
+
+**Commits:** `c4f9340` (research note), `13f1092` (implementation, example, test, README), `cd77f34` + `da1a7ce` (0.5.1 release, changelog; the second makes `Environment`'s moon term optional so no new resource is required). **Sibling repos:** none. **Aspect:** clouds (iterations 7 and 8 were ground cover and sky).
+
+### What changed, and why it ranked first
+
+Gameplay could ask for wind, water, snow and wetness at a point but not for light: the cloud shadow map was GPU-only and `CloudShadows::camera_transmittance` is one number for 70 m around the camera. A stealth system, a shade-seeking creature, a solar panel or a growth model needs the cloud shadow and the light **at a position**. New: `Environment::cloud_shadow_at(Vec3) -> Option<f32>` (direct transmittance toward the light, the position projected along the light as the ground material does, 1 outside the 8 km map, `None` before the first readback) and `Environment::illuminance_at(Vec3) -> f32` (clear-sky sun + moon × Kasten & Czeplak's `0.25 + 0.75·T`). The `cloud_shadow` kernel stores every fourth texel's `T` in a 256² buffer (31.25 m cells) inside the existing dispatch; the 4 Hz readback copies it with the origin and light direction captured at request time. Cost: `elements_clouds_shadow` 0.083 → 0.087 ms (min, High, 3840×2160, P2 1590–1725 MHz). New example `cloud_shadow_probes`: a 15×15 grid of unlit markers coloured by the query (yellow open, blue shadowed) with the centre's lux on screen and logged every 120 frames.
+
+### Candidates scored (1–5)
+
+| Candidate | Game hook | Visible | Correctness | Cheap | Sum | Ownership |
+|---|---|---|---|---|---|---|
+| **Cloud shadow + illuminance at a point** | 5 | 3 | 3 | 5 | **16** | ours |
+| Occlusion term for the aerial snow relief (backlog 1) | 1 | 3 | 3 | 3 | 10 | ours |
+| The three pre-existing failing GPU tests (backlog 2) | 2 | 1 | 4 | 3 | 10 | ours |
+| Cloud shadow contrast under Clear verified (backlog 4) | 1 | 3 | 3 | 5 | 12 | ours (folded into this iteration's inventory) |
+| Full-moon / moonlit terrain sweep (backlog 5) | 1 | 3 | 2 | 5 | 11 | ours |
+| Save/restore of the weather state | 4 | 1 | 2 | 3 | 10 | ours |
+
+### Shot list (Gemini Flash `screenshot-reviewer`, `/tmp/i9/r1.md`–`r7.md`)
+
+| File | Inventory element | Verdict |
+|---|---|---|
+| `/tmp/i9/a_pc_above.png` (PartlyCloudy 11:00, 120 m, −25°) | (a) ground shadows, (b) probes | Defect (major): no shadow crossed the 560 m grid (0/225) — test-design defect, fixed by height-scaled spacing and a heading scan |
+| `/tmp/i9/b_pc_grazing.png` (6 m, −3°) | (a), (b) | Defect: same cause (0/225) |
+| `/tmp/i9/c_clear_above.png` (Clear) | (a), (b) | Pass |
+| `/tmp/i9/d_pc_afternoon_high.png` (17:00, 400 m, −45°) | (a), (b) | Defect: grid wholly in one shadow (225/225, probes all blue, consistent) — no edge in view |
+| `/tmp/i9/{a,d}_*_crop{2x,4x}.png` | (c) edges | Pass ×4 (no edge in crop) |
+| `/tmp/i9/e_overcast.png` | (a), (b) under a deck | Pass: 225/225 blue, ground uniform |
+| `/tmp/i9/seq_sheet.png` (6 frames, 1.5 s apart) | (b) temporal stability | Pass (r6): probes stable, lux readout smooth; r3's "blocker" was the 0/225 grid of round 1 |
+| `/tmp/i9/c_clear_above_crop2x.png` | (c) | Pass |
+| `/tmp/i9/f_pc_1500.png` (1500 m, −55°, 250 m spacing) | (a), (b) | Defect (major) → resolved by crops: the patch is faint at 2–3 km (haze); crops show the probe colour change on it |
+| `/tmp/i9/g_pc_800.png` (800 m, −35°, 150 m) | (a), (b) | Defect (major) → resolved by crops: in-patch probes are partial blends (thin cloud), readout threshold 0.5 |
+| `/tmp/i9/h_pc_1500_16h.png` (16:00) | (a), (b) | Pass: 220/225 blue, every visible probe blue |
+| `/tmp/i9/i_pc_200_grazing.png` (40 m, −4°) | (a) bands with depth | Defect (major): no bands visible — see open item 1 |
+| `/tmp/i9/{f,g}_*_crop{2x,4x}.png` | (c) | Pass ×4: probe colour change on the ground's gradient within one spacing; soft edges, no texel stepping |
+| `/tmp/i9/j_pc_h300.png` (120 m, −25°, heading 270, 36/225) | (a), (b), (c) | **Pass**: patch 14 % darker, ~32 blue probes all inside it, grey probes on the edge |
+| `/tmp/i9/k_pc_h315.png` (heading 315, 33/225) | (a), (b), (c) | **Pass**: diagonal soft edge, grey probes along the 150–158 DN contour |
+| `/tmp/i9/l_pc_h315_grazing.png` (8 m, −4°) | (a) | Defect (major): no bands — open item 1 |
+| `/tmp/i9/n_pc_grazing30.png` (30 m, −6°, 50/225) | (a), (b) | (b) Pass: blue probes form a coherent receding band; (a) Defect: ground only 4–5 % darker — open item 1 |
+| `/tmp/i9/m_tour_pair.png` (weather_tour PartlyCloudy, base `b7529f9` vs this) | before/after | **Pass**: 0 px differ at 2 % fuzz; ground and sky identical |
+
+### Defects found, fixed, re-shot
+
+- Round 1 grid never met an edge (40 m spacing, 560 m): the example's spacing now scales with height (`ELEMENTS_SPACING`, default height/3 ≥ 40 m), the readout is logged, and a heading scan (0–315°, 120 m) found shadowed probes at 270° and 315° — re-shot as j/k, both **Pass** with edges.
+- Grazing (a) investigated rather than assumed: a throwaway build tinted `t < 0.5` blue in `weathered.wesl` (reverted, rebuilt). The ground's `t < 0.5` pixels lie exactly where the blue probes are (rows 288–336 of n), and there the debug tint's red channel still reads ~95 DN: the aerial perspective adds ~95 DN at 0.3–1 km, so a ¼-light shadow reads 8 % darker. Query and render agree; the contrast loss is haze.
+
+### Defects still open
+
+1. **Grazing cloud shadows are washed out by the haze** (minor; not this change): from 6–40 m the nearest PartlyCloudy shadows over the origin are 0.3–1 km out, where inscatter adds ~95 DN; they read 4–8 % darker. The note's grazing target (a) is unmet; an example with a shadow nearer the camera, or a check that the haze level at 1 km under `PartlyCloudy` is right, is the follow-up.
+
+### Verification
+
+- New tests: `query::tests` (2, headless: `None` before a readback and the cover estimate for the light; a shadowed cell, its neighbour, a raised point projected along the light, outside the map, illuminance ratio 0.25) and `gpu_clouds::the_cloud_shadow_query_reads_the_shadow_map` (2 704 samples, mean |query − map| 0.0000, 1 314 lit / 1 247 dark, 27 324–109 298 lx).
+- Gates: `cargo build --release`, `cargo test` (all suites ok), `cargo build --examples --all-features`, clippy `-D warnings`, `RUSTDOCFLAGS=-D warnings cargo doc`, wasm32 — clean. GPU: integration binaries all ok (gpu_clouds 5, hydrology 9, imports 1, precipitation 6, water 2, weathered 4, wind 2); lib `terrain::`, `dust::` ok; `clouds::` 10 + `the_horizon_sky` 1 ok; `cover::` 5/2 and `voxel::` 0/1 — the three documented pre-existing failures.
+
+### Top 5 remaining items, ranked
+
+1. **Grazing cloud shadows vs haze** (new, open item 1): verify the `PartlyCloudy` aerial perspective at 1 km against the visibility the weather states (95 DN of inscatter at 1 km is a lot for 20+ km visibility); if it is right, frame a near shadow in an example.
+2. **Three GPU tests fail on pristine HEAD** (unchanged): `cover::gpu_wetness_soaks_and_dries_on_the_formula`, `cover::gpu_surface_weathering_follows_the_map`, `voxel::gpu_voxel_snow_covers_the_top`.
+3. **Occlusion for the aerial snow relief** (carried).
+4. **The moon's phase sweep / moonlit terrain** (carried); `illuminance_at` now gives a number to check the moonlight against (full moon ≈ 0.1–0.3 lx).
+5. **The small cosmetic set** (carried): `STRIKE_LEAD`, sparse roof splashes, nadir foam, flood marker, erosion faceting, status-line clipping.

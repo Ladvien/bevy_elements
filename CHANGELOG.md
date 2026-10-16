@@ -4,6 +4,13 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-10-16
+
+### Added
+
+- **`Environment::cloud_shadow_at(Vec3)` and `Environment::illuminance_at(Vec3)`**: the cloud's shadow and the horizontal illuminance (lx) at a world position, for stealth, shade-seeking, solar or growth gameplay. The cloud shadow kernel writes every fourth texel of the shadow map into a 256² grid (31.25 m cells over the map's 8 km) that the 4 Hz readback copies; the query projects the position along the light as the ground's material does, and is 1 outside the map. The illuminance is the clear-sky sun and moon light times Kasten & Czeplak's `0.25 + 0.75 · T` at that point. Clouds only: terrain and meshes do not shadow either answer. `docs/research/cloud-shadow-query.md`.
+- **`cloud_shadow_probes` example**: a grid of unlit markers coloured by `cloud_shadow_at` (yellow open, blue shadowed) over the cloud shadows on the ground, with the illuminance at the grid's centre on screen.
+
 ### Fixed
 
 - **`day_night` now frames the sun and the moon.** The example's camera was aimed west-south-west
@@ -63,4 +70,5 @@ Everything from 0.2 through 0.5 lands in one release. Every system was studied i
 
 New: `terrain_tour`, `external_ground`, `flood`, `lake`, `erosion_bake`, `weathered_town`, `ground_cover`, `dust_storm`, `voxel_snow` (feature `isomesh`), and `quickstart` now stands on hills. `bench_elements` times every pass, with `ELEMENTS_TERRAIN=hills|mountains|dunes|lake|none`.
 
+[0.5.1]: https://github.com/Ladvien/bevy_elements/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Ladvien/bevy_elements/compare/v0.1.0...v0.5.0

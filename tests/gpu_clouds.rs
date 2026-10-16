@@ -325,6 +325,64 @@ fn the_shadow_map_starts_unshadowed() {
     }
 }
 
+/// `Environment::cloud_shadow_at` reads the shadow map back: at the texels its grid samples
+/// (every fourth, `4k + 2`) it gives the map's transmittance, under a partly cloudy sky with
+/// both shadow and sun in the map; and `illuminance_at` keeps a quarter of the open ground's
+/// light in the darkest shadow.
+#[test]
+#[ignore = "needs a GPU"]
+fn the_cloud_shadow_query_reads_the_shadow_map() {
+    use bevy::ecs::system::RunSystemOnce;
+
+    let mut app = app(setup(WeatherPreset::Clear));
+    app.world_mut().resource_mut::<CoverOverride>().0 = Some(0.4);
+    run(&mut app, 420);
+    let t = shadow_transmittance(&mut app);
+    let shadows = app.world().resource::<CloudShadows>().clone();
+    let texel = shadows.extent / 1024.0;
+    let samples: Vec<(usize, Vec3)> = (0..256usize)
+        .step_by(5)
+        .flat_map(|ky| (0..256usize).step_by(5).map(move |kx| (kx, ky)))
+        .map(|(kx, ky)| {
+            let (x, y) = (4 * kx + 2, 4 * ky + 2);
+            let at = shadows.origin + (Vec2::new(x as f32, y as f32) + 0.5) * texel;
+            (y * 1024 + x, Vec3::new(at.x, 0.0, at.y))
+        })
+        .collect();
+    let points: Vec<Vec3> = samples.iter().map(|s| s.1).collect();
+    let (answers, lights) = app
+        .world_mut()
+        .run_system_once(move |env: Environment| {
+            let answers: Vec<Option<f32>> =
+                points.iter().map(|&p| env.cloud_shadow_at(p)).collect();
+            let lights: Vec<f32> = points.iter().map(|&p| env.illuminance_at(p)).collect();
+            (answers, lights)
+        })
+        .expect("the query runs");
+    finish(&mut app);
+
+    let (mut error, mut lit, mut dark) = (0.0, 0, 0);
+    for ((index, _), answer) in samples.iter().zip(&answers) {
+        let answer = answer.expect("a readback has completed");
+        // The readback is up to a quarter second older than the map: the clouds drift a metre.
+        error += (answer - t[*index]).abs();
+        lit += usize::from(answer > 0.9);
+        dark += usize::from(answer < 0.1);
+    }
+    let error = error / samples.len() as f32;
+    println!(
+        "{} samples: mean |query − map| {error:.4}, lit {lit}, dark {dark}",
+        samples.len()
+    );
+    assert!(error < 0.02, "{error}");
+    assert!(lit > 0 && dark > 0, "lit {lit}, dark {dark}");
+    let (lo, hi) = lights
+        .iter()
+        .fold((f32::MAX, 0.0f32), |(lo, hi), &e| (lo.min(e), hi.max(e)));
+    println!("illuminance {lo:.0}–{hi:.0} lx");
+    assert!((lo / hi - 0.25).abs() < 0.03, "{lo} / {hi}");
+}
+
 /// Validation 14 (GPU part): switching the quality at run time keeps the weather map, shadow
 /// map and noise (the same handles, the same area fraction) and keeps rendering.
 #[test]
