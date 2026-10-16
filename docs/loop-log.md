@@ -689,6 +689,8 @@ stays free to drag — holding the right button releases the aim, which resumes 
 
 **Commits:** `c4f9340` (research note), `13f1092` (implementation, example, test, README), `cd77f34` + `da1a7ce` (0.5.1 release, changelog; the second makes `Environment`'s moon term optional so no new resource is required). **Sibling repos:** none. **Aspect:** clouds (iterations 7 and 8 were ground cover and sky).
 
+**Shipped:** merged to `main` (`1e4c0f3`), tag `v0.5.1`, published at https://crates.io/crates/bevy_elements/0.5.1.
+
 ### What changed, and why it ranked first
 
 Gameplay could ask for wind, water, snow and wetness at a point but not for light: the cloud shadow map was GPU-only and `CloudShadows::camera_transmittance` is one number for 70 m around the camera. A stealth system, a shade-seeking creature, a solar panel or a growth model needs the cloud shadow and the light **at a position**. New: `Environment::cloud_shadow_at(Vec3) -> Option<f32>` (direct transmittance toward the light, the position projected along the light as the ground material does, 1 outside the 8 km map, `None` before the first readback) and `Environment::illuminance_at(Vec3) -> f32` (clear-sky sun + moon × Kasten & Czeplak's `0.25 + 0.75·T`). The `cloud_shadow` kernel stores every fourth texel's `T` in a 256² buffer (31.25 m cells) inside the existing dispatch; the 4 Hz readback copies it with the origin and light direction captured at request time. Cost: `elements_clouds_shadow` 0.083 → 0.087 ms (min, High, 3840×2160, P2 1590–1725 MHz). New example `cloud_shadow_probes`: a 15×15 grid of unlit markers coloured by the query (yellow open, blue shadowed) with the centre's lux on screen and logged every 120 frames.
