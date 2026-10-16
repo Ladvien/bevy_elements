@@ -750,3 +750,57 @@ Gameplay could ask for wind, water, snow and wetness at a point but not for ligh
 3. **Occlusion for the aerial snow relief** (carried).
 4. **The moon's phase sweep / moonlit terrain** (carried); `illuminance_at` now gives a number to check the moonlight against (full moon ≈ 0.1–0.3 lx).
 5. **The small cosmetic set** (carried): `STRIKE_LEAD`, sparse roof splashes, nadir foam, flood marker, erosion faceting, status-line clipping.
+
+## Iteration 10 — 2026-10-16 — gameplay queries stay fresh without a window
+
+**Commits:** `3ad816d` (research note `docs/research/readback-pacing.md`), implementation + test + docs, 0.5.2 release, this log. **Sibling repos:** none. **Aspect:** gameplay queries / GPU readback (iterations 8 and 9 were sky and clouds).
+
+### What changed, and why it ranked first
+
+Backlog item 2, the three GPU tests failing on pristine HEAD since iteration 4, turned out to be a consumer-visible bug, not test noise. Traced (temporary prints in `readback.rs`, reverted): in an app with no window every readback's request-to-delivery latency went 2, 4, 8 … frames and the last delivery of any field was 3.1 s into the run; 85 s later `Environment::wetness` answered 0.325 while the map read 0.0. Only presenting a swap chain makes the CPU wait for the GPU, so a headless app (a server, a simulation tool, every GPU test) queued frames without bound and every gameplay query froze on the state of its first seconds. A non-blocking `Poll` per frame only moved the freeze to 23 s: the queue, not the callbacks, was the cause. Windowed apps were fine (`cloud_shadow_probes` logged `snapshot_age` 250 ms, one interval, over 1500 frames).
+
+**The fix**: `pace_without_window` (`src/gpu/readback.rs`, `Render`/`PostCleanup`, after `map_buffers`): a frame with no `ExtractedWindow` waits for its own GPU work (`RenderDevice::poll(PollType::wait_indefinitely())`), so the queue is bounded at one frame and each readback lands on the next frame. With a window it returns at once. No-op on WebGPU.
+
+It ranked first over the haze item (backlog 1): measuring the haze showed the distance fog's colour already matches Bevy's horizon (fog ≈ 0.53 linear display vs horizon sky 0.6–0.7) and the 30 km `PartlyCloudy` extinction gives 12 % fog at 1 km, so the iteration-9 "95 DN of inscatter" was the auto exposure lifting sunlit ground beyond a cloud shadow, not a fog defect — no change there (left in the backlog as a capture item, below).
+
+### Candidates scored (1–5)
+
+| Candidate | Game hook | Visible | Correctness | Cheap | Sum | Ownership |
+|---|---|---|---|---|---|---|
+| **Readbacks freeze without a window (backlog 2's root cause)** | 5 | 1 | 5 | 5 | **16** | ours |
+| Grazing cloud shadows vs haze (backlog 1) | 1 | 3 | 2 | 3 | 9 | ours (measured: no fog defect) |
+| Occlusion for the aerial snow relief (backlog 3) | 1 | 3 | 3 | 3 | 10 | ours |
+| Moon phase sweep / moonlit terrain (backlog 4) | 1 | 3 | 2 | 5 | 11 | ours (sky: last two iterations) |
+| Mesh distance fog double-counts the 40 km clear-air floor that Bevy's aerial perspective also draws | 1 | 2 | 3 | 5 | 11 | ours (Bevy's ground extinction is ~2×10⁻⁵ m⁻¹ against the 9.8×10⁻⁵ floor: ≤ 2 % at 1 km) |
+| Save/restore of the weather state | 4 | 1 | 2 | 3 | 10 | ours |
+
+### Inventory and shot list (Gemini Flash `screenshot-reviewer`, `/tmp/i10/review1.md`)
+
+The change creates and alters no visual element: the wait never runs in a windowed app. The inventory is therefore the windowed frame itself, checked before/after.
+
+| File | Inventory element | Verdict |
+|---|---|---|
+| `/tmp/i10/pair_PartlyCloudy.png` (`base_tour_PartlyCloudy.png` vs `after_tour_PartlyCloudy.png`, `weather_tour` noon) | windowed frame unchanged | **Pass**: 1 px of 921 600 differs by 1 LSB (GPU noise); sky, clouds, horizon, ground, props identical |
+| `/tmp/i10/pair_Overcast.png` (`base_tour_Overcast.png` vs `after_tour_Overcast.png`) | windowed frame unchanged | **Pass**: bit-identical (same SHA-256); no banding, shelf or black holes in either half |
+
+### Defects found, fixed, re-shot
+
+None visual. The functional defect is the change itself.
+
+### Defects still open
+
+None from this change.
+
+### Verification
+
+- New test `tests/gpu_readback.rs::the_queries_stay_fresh_without_a_window` (`Ultra`, 256² terrain, 100 ms interval, 1200 frames): oldest snapshot **683 ms before** the fix (fails the 200 ms limit), **83 ms after**.
+- Gates: `cargo build --release`, `cargo test` (all suites ok), `cargo build --examples --all-features`, clippy `-D warnings`, `RUSTDOCFLAGS=-D warnings cargo doc`, wasm32 — clean. GPU, one process per suite: integration binaries all ok (gpu_clouds 5, hydrology 9, imports 1, precipitation 6, readback 1, water 2, weathered 4, wind 2); lib `terrain::` 8, `cover::` **7/7**, `dust::` 6, `voxel::` **1/1**, `clouds::` 10 + `the_horizon_sky` 1. **The whole GPU suite is green for the first time since iteration 4.**
+- Note for the loop: `.omp/skills/bevy-elements-build-loop/SKILL.md` §6.5 still lists the three tests as pre-existing failures; they now pass and any failure is a regression (the skill is user-authored, so it is not edited here).
+
+### Top 5 remaining items, ranked
+
+1. **Occlusion for the aerial snow relief** (carried).
+2. **The moon's phase sweep / moonlit terrain** (carried); `illuminance_at` gives the number to check (full moon ≈ 0.1–0.3 lx).
+3. **Save/restore of the weather state** (new to the top 5): a game hook for save games — `Weather`, `WorldClock`, the director's schedule and the cover/water layers.
+4. **Grazing cloud-shadow capture** (re-scoped from iteration 9's item 1): the fog is right; frame a shadow within 300 m of a grazing camera so the shadow contrast can be judged without 1 km of air.
+5. **The small cosmetic set** (carried): `STRIKE_LEAD`, sparse roof splashes, nadir foam, flood marker, erosion faceting, status-line clipping.

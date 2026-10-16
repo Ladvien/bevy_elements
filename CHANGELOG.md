@@ -4,6 +4,12 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-10-16
+
+### Fixed
+
+- **Gameplay queries stay fresh in an app with no window.** Nothing paced an app that renders only to images (a headless server, a simulation tool, every GPU test): its frames were submitted faster than the GPU retired them, the latency of each readback doubled every few requests, and in the ground-cover suite no readback arrived again after three seconds, so `wind_at`, `water_depth`, `snow_depth`, `wetness`, `cloud_shadow_at` and the map-backed `SurfaceWeathering` answered with the state of the first seconds. A frame with no window now waits for its own GPU work, so every readback lands on the next frame; windowed apps, which presenting already paces, are untouched. This also fixes the three GPU tests that failed on `main` since the loop's iteration 4 (`cover::gpu_wetness_soaks_and_dries_on_the_formula`, `cover::gpu_surface_weathering_follows_the_map`, `voxel::gpu_voxel_snow_covers_the_top`). `docs/research/readback-pacing.md`.
+
 ## [0.5.1] — 2026-10-16
 
 ### Added
