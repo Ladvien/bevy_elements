@@ -753,7 +753,9 @@ Gameplay could ask for wind, water, snow and wetness at a point but not for ligh
 
 ## Iteration 10 — 2026-10-16 — gameplay queries stay fresh without a window
 
-**Commits:** `3ad816d` (research note `docs/research/readback-pacing.md`), implementation + test + docs, 0.5.2 release, this log. **Sibling repos:** none. **Aspect:** gameplay queries / GPU readback (iterations 8 and 9 were sky and clouds).
+**Commits:** `3ad816d` (research note `docs/research/readback-pacing.md`), implementation + test + docs, 0.5.2 release, this log. **Sibling repos:** none.
+
+**Shipped:** merged to `main` (`b6a690a`), tag `v0.5.2`, published at https://crates.io/crates/bevy_elements/0.5.2. **Aspect:** gameplay queries / GPU readback (iterations 8 and 9 were sky and clouds).
 
 ### What changed, and why it ranked first
 
