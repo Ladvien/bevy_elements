@@ -289,6 +289,8 @@ fn seek_shelter(env: Environment) {
 
 `snow_depth(Vec2)` is the snow on the ground in metres and `wetness(Vec2)` how wet it is (0 dry, 1 a full 2 mm film); like the water queries they are `None` before the first readback or off the terrain.
 
+`cloud_shadow_at(Vec3)` is the direct transmittance of the clouds toward the sun (the moon at night) at a world position, 0 in a thick cloud's shadow to 1 in the open, from the cloud shadow map sampled every 31.25 m over 8 km around the camera (1 outside it); `illuminance_at(Vec3)` is the horizontal illuminance there in lux, the clear-sky sun and moon light times `0.25 + 0.75 · T`. Only the clouds shadow them, not terrain or meshes. `cloud_shadow_at` is `None` before the first readback; `illuminance_at` then uses the cover-only estimate.
+
 ## Plays well with
 
 - **`bevy_flora`** (feature `flora`): add `ElementsFloraPlugin` next to `FloraPlugin`. It writes `FloraWind` (direction, strength = 10 m speed / 20 m/s, turbulence, gust strength, and every `WindGust` as a `GustFront`), `FloraSeason` (autumn, leaf fall, blossom, snow = `SurfaceWeathering::snow_cover`) and `FloraWetness`. Trees and their sway stay `bevy_flora`'s.
@@ -402,6 +404,7 @@ Run with `cargo run --release --example <name>`. Every example takes `ELEMENTS_F
 | `external_ground` | A plain plane of your own shaded by `GroundExtension` over an `external()` terrain |
 | `day_night` | A solstice day at 45° N in two minutes; the camera follows the sun while it is up and the moon after; `ELEMENTS_HOUR=19.5` holds an hour and frames the body, `ELEMENTS_DATE=2026-07-14` sets the date (a moon-phase sweep) |
 | `weather_tour` | Every preset for 20 s; `ELEMENTS_PRESET=Fog` holds one, `ELEMENTS_HOUR` holds an hour, `ELEMENTS_PITCH` / `ELEMENTS_HEADING` aim the camera (degrees), `ELEMENTS_GROW_HOURS=6` integrates 6 game hours of the held preset before the first frame (accumulated snow, wet ground) |
+| `cloud_shadow_probes` | A grid of markers coloured by `cloud_shadow_at` (yellow open, blue shadowed) over the cloud shadows on the ground; `ELEMENTS_PRESET`, `ELEMENTS_HOUR`, `ELEMENTS_HEIGHT`, `ELEMENTS_PITCH`, `ELEMENTS_HEADING`, `ELEMENTS_SPACING` |
 | `storm` | A forced thunderstorm printing every strike and thunder; `ELEMENTS_HOUR=12` holds an hour, `ELEMENTS_STRIKE=1500` scripts a strike that far ahead on the last frame (for screenshots), `ELEMENTS_STRIKE_LEAD=3` that many frames earlier |
 | `rain` | Rain over a shelter with a blocker roof; `ELEMENTS_PRESET=Thunderstorm`, `ELEMENTS_HOUR=23` |
 | `snowfall` | The `Snow` preset (or `ELEMENTS_PRESET=Blizzard`); `ELEMENTS_HOUR` holds an hour, `ELEMENTS_GROW_HOURS` grows the snow before the first frame |

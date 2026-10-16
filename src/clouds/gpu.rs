@@ -188,6 +188,7 @@ fn init_pipelines(
                 sampler(SamplerBindingType::Filtering),
                 texture_storage_2d(TextureFormat::Rgba16Float, write),
                 storage_buffer_sized(false, None),
+                storage_buffer_sized(false, None),
             ),
         ),
     );
@@ -339,10 +340,11 @@ fn prepare_global(
         commands.remove_resource::<CloudGlobalGroups>();
         return;
     };
-    let (Some(histogram), Some(threshold), Some(camera_t)) = (
+    let (Some(histogram), Some(threshold), Some(camera_t), Some(shadow_coarse)) = (
         buffer(&cloud.histogram),
         buffer(&cloud.threshold),
         buffer(&cloud.camera_t),
+        buffer(&cloud.shadow_coarse),
     ) else {
         commands.remove_resource::<CloudGlobalGroups>();
         return;
@@ -367,6 +369,7 @@ fn prepare_global(
             &pipelines.repeat,
             &shadow.texture_view,
             camera_t,
+            shadow_coarse,
         )),
     );
     commands.insert_resource(CloudGlobalGroups {
