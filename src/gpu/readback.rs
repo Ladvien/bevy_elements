@@ -11,7 +11,11 @@ use std::time::Duration;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::render::gpu_readback::{ReadbackComplete, ReadbackOnce};
+use bevy::render::render_resource::PollType;
+use bevy::render::renderer::RenderDevice;
 use bevy::render::storage::ShaderBuffer;
+use bevy::render::view::ExtractedWindow;
+use bevy::render::{Render, RenderApp, RenderSystems};
 
 use crate::plugin::ElementsSystems;
 use crate::query::EnvironmentSnapshot;
@@ -65,6 +69,27 @@ impl Plugin for ReadbackPlugin {
                     drop_stale.in_set(ElementsSystems::Readback),
                 ),
             );
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            render_app.add_systems(
+                Render,
+                pace_without_window.in_set(RenderSystems::PostCleanup),
+            );
+        }
+    }
+}
+
+/// Without a window nothing paces the frames: presenting to a swap chain is what makes the CPU
+/// wait for the GPU, and an app that renders only to images submits frames faster than the GPU
+/// retires them. The queue then grows without bound, every readback's latency grows with it
+/// (measured: 2, 4, 8 … frames, past the drop timeout within 3 s), and the queries freeze. So
+/// a frame with no window waits for its own work, which also delivers the readback mapped this
+/// frame. See `docs/research/readback-pacing.md`.
+fn pace_without_window(device: Res<RenderDevice>, windows: Query<(), With<ExtractedWindow>>) {
+    if !windows.is_empty() {
+        return;
+    }
+    if let Err(error) = device.poll(PollType::wait_indefinitely()) {
+        error!("waiting for the GPU's frame failed: {error}");
     }
 }
 
