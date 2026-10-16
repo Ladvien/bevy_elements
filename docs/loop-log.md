@@ -809,7 +809,9 @@ None from this change.
 
 ## Iteration 11 — 2026-10-16 — the weather can be saved and restored
 
-**Commits:** `7a0a241` (research note `docs/research/weather-save.md`), implementation + test, 0.5.3 release, this log. **Sibling repos:** none. **Aspect:** climate and weather / save state (iterations 9 and 10 were clouds and GPU readback).
+**Commits:** `7a0a241` (research note `docs/research/weather-save.md`), implementation + test, 0.5.3 release, this log. **Sibling repos:** none.
+
+**Shipped:** merged to `main` (`8f90456`), tag `v0.5.3`, published at https://crates.io/crates/bevy_elements/0.5.3. **Aspect:** climate and weather / save state (iterations 9 and 10 were clouds and GPU readback).
 
 ### What changed, and why it ranked first
 
