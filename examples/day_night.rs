@@ -8,6 +8,9 @@
 //! `ELEMENTS_HOUR=19.5` pauses the clock at that local hour (for screenshots) and aims once, so
 //! the still is framed on the body; otherwise a day passes in two minutes. Hold the right mouse
 //! button to look around; the aim resumes when you let go.
+//! `ELEMENTS_DATE=2026-07-14` sets the calendar date (proleptic Gregorian, out-of-range months
+//! and days clamped), which is how a moon-phase sweep is captured — the date fixes the moon's
+//! phase and the status line prints it.
 
 mod common;
 
@@ -19,7 +22,17 @@ fn main() {
     let fixed: Option<f64> = std::env::var("ELEMENTS_HOUR")
         .ok()
         .and_then(|h| h.parse().ok());
-    let clock = WorldClock::new(CivilDate::new(2026, 6, 21)).at_hour(fixed.unwrap_or(4.0));
+    let date = std::env::var("ELEMENTS_DATE")
+        .ok()
+        .and_then(|d| {
+            let mut part = d.split('-');
+            let year: i32 = part.next()?.trim().parse().ok()?;
+            let month: u8 = part.next()?.trim().parse().ok()?;
+            let day: u8 = part.next()?.trim().parse().ok()?;
+            Some(CivilDate::new(year, month, day))
+        })
+        .unwrap_or(CivilDate::new(2026, 6, 21));
+    let clock = WorldClock::new(date).at_hour(fixed.unwrap_or(4.0));
     let clock = match fixed {
         Some(_) => WorldClock {
             paused: true,
@@ -68,6 +81,15 @@ fn aim_at_sky(
     mut cameras: Query<(&mut Transform, &mut FlyCamera)>,
     mut framed: Local<bool>,
 ) {
+    if std::env::var("DAYNIGHT_DEBUG").as_deref() == Ok("1") {
+        eprintln!(
+            "AIMENTRY paused={} mouse={} sun {:.2} moon {:.2}",
+            clock.paused,
+            mouse.pressed(MouseButton::Right),
+            sun.altitude_deg,
+            sun.moon_altitude_deg
+        );
+    }
     if mouse.pressed(MouseButton::Right) {
         *framed = false;
         return;
@@ -82,6 +104,15 @@ fn aim_at_sky(
     } else {
         None
     };
+    if std::env::var("DAYNIGHT_DEBUG").as_deref() == Ok("1") {
+        eprintln!(
+            "AIM sun {:.2} moon {:.2} dir {:?} branch {}",
+            sun.altitude_deg,
+            sun.moon_altitude_deg,
+            sun.moon_direction,
+            dir.is_some()
+        );
+    }
     let Some(dir) = dir else {
         *framed = clock.paused;
         return;
