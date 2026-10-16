@@ -51,7 +51,8 @@ pub struct Environment<'w> {
     weather: Res<'w, Weather>,
     clock: Res<'w, WorldClock>,
     sun: Res<'w, SunState>,
-    frame: Res<'w, CelestialFrame>,
+    /// The moon's illuminance; absent without the celestial plugin (no moonlight then).
+    frame: Option<Res<'w, CelestialFrame>>,
     wind: Res<'w, WindState>,
     time: Res<'w, Time<Real>>,
 }
@@ -163,12 +164,13 @@ impl Environment<'_> {
     /// illuminance (direct plus sky, twilight included) times `0.25 + 0.75 · T`, with `T`
     /// [`cloud_shadow_at`](Self::cloud_shadow_at) (the cover-only estimate `1 − cover^3.4`
     /// before the first readback). The cloud's shadow only, like `cloud_shadow_at`; about
-    /// 0.0005 lx on a moonless night.
+    /// 0.0005 lx on a moonless night (and without the celestial plugin, the moon is not counted).
     pub fn illuminance_at(&self, position: Vec3) -> f32 {
         let beam = self
             .cloud_shadow_at(position)
             .unwrap_or_else(|| beam_transmittance(self.weather.cloud_cover));
-        scene_illuminance(&self.sun, self.frame.moon_lux, CloudLight::from_beam(beam))
+        let moon_lux = self.frame.as_ref().map_or(0.0, |f| f.moon_lux);
+        scene_illuminance(&self.sun, moon_lux, CloudLight::from_beam(beam))
     }
 
     /// Real time since the snapshot was last filled; `Duration::MAX` before the first readback.
