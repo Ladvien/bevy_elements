@@ -4,6 +4,12 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ## [Unreleased]
 
+## [0.5.3] — 2026-10-16
+
+### Added
+
+- **The weather can be saved and restored.** `WeatherDirector` derives `Reflect`, `PartialEq` and, with the `serde` feature, `Serialize`/`Deserialize`. Saved with `WorldClock`, `Climate` and `GeoLocation` and inserted into a fresh app, it continues the same scheduler chain, forced preset and blend in progress, where a fresh director restarted at `Clear` and walked a different chain. `docs/research/weather-save.md`, `tests/save.rs`.
+
 ## [0.5.2] — 2026-10-16
 
 ### Fixed

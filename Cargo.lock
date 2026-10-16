@@ -853,7 +853,7 @@ dependencies = [
 
 [[package]]
 name = "bevy_elements"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "bevy",
  "bevy_flora",
@@ -861,6 +861,7 @@ dependencies = [
  "bytemuck",
  "isomesh",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
