@@ -806,3 +806,52 @@ None from this change.
 3. **Save/restore of the weather state** (new to the top 5): a game hook for save games — `Weather`, `WorldClock`, the director's schedule and the cover/water layers.
 4. **Grazing cloud-shadow capture** (re-scoped from iteration 9's item 1): the fog is right; frame a shadow within 300 m of a grazing camera so the shadow contrast can be judged without 1 km of air.
 5. **The small cosmetic set** (carried): `STRIKE_LEAD`, sparse roof splashes, nadir foam, flood marker, erosion faceting, status-line clipping.
+
+## Iteration 11 — 2026-10-16 — the weather can be saved and restored
+
+**Commits:** `7a0a241` (research note `docs/research/weather-save.md`), implementation + test, 0.5.3 release, this log. **Sibling repos:** none. **Aspect:** climate and weather / save state (iterations 9 and 10 were clouds and GPU readback).
+
+### What changed, and why it ranked first
+
+Backlog item 3. A game could serialize `WorldClock`, `Climate`, `GeoLocation` and `Weather`, but not `WeatherDirector`: private fields, no `serde`, no `Reflect`. A reloaded save therefore started a fresh director, which arms at `Clear` on its first frame, drops a forced preset, cuts a blend in progress, and then walks a different Markov chain (each hour's step depends on the previous preset). `WeatherDirector` and its private `Blend`, `Transition` and `Request` now derive `Reflect`, `PartialEq` and (feature `serde`) `Serialize`/`Deserialize`. The scheduler's draws are a pure hash of `(seed, hour)`, so the chain position is the only state; no RNG cursor exists to save. The highest Game hook of the open items, a small CPU-only surface, no GPU cost. The GPU layers (snow cover, wetness, water, terrain) are out of scope and listed below.
+
+### Candidates scored (1–5)
+
+| Candidate | Game hook | Visible | Correctness | Cheap | Sum | Ownership |
+|---|---|---|---|---|---|---|
+| **Save/restore of the weather director (backlog 3)** | 5 | 1 | 4 | 5 | **15** | ours |
+| Save/restore of the GPU layers (cover, water, terrain) | 5 | 1 | 3 | 1 | 10 | ours (needs whole-layer readback and upload) |
+| Occlusion for the aerial snow relief (backlog 1) | 1 | 3 | 3 | 3 | 10 | ours |
+| Moon phase sweep / moonlit terrain (backlog 2) | 1 | 3 | 2 | 5 | 11 | ours |
+| Grazing cloud-shadow capture (backlog 4) | 1 | 3 | 1 | 5 | 10 | ours (capture only) |
+
+### Inventory and shot list (Gemini Flash `screenshot-reviewer`, `/tmp/i11/review1.md`)
+
+The change creates and alters no visual element (CPU derives only). The inventory is the windowed frame, before (`main`, `/tmp/base`) and after.
+
+| File | Inventory element | Verdict |
+|---|---|---|
+| `/tmp/i11/pair_PartlyCloudy.png` (`base_`/`after_PartlyCloudy.png`, `weather_tour` noon) | windowed frame unchanged | **Pass**: 0 px differ at 2 % fuzz, max 2/255 |
+| `/tmp/i11/pair_Thunderstorm.png` (`base_`/`after_Thunderstorm.png`) | windowed frame unchanged | **Pass**: 0.3 % px differ, all thin rain streaks (a 2×2 opening removes every one); mean signed delta ≈ 0, no sky/cloud/ground change |
+
+### Defects found, fixed, re-shot
+
+None.
+
+### Defects still open
+
+None from this change.
+
+### Verification
+
+- New `tests/save.rs` (`required-features = ["serde"]`, `serde_json` dev-dependency): a director saved through JSON after 72 game hours and loaded into a fresh app gives the same `Weather` as the uninterrupted run at all 720 updates of the next 72 h (with preset changes in that window); restoring only the clock diverges; a director saved one hour into a two-hour forced Thunderstorm blend restores forced, at the same blend, and reaches 25 mm/h. Before the fix the test does not compile (`WeatherDirector: serde::Serialize` not satisfied).
+- Gates: `cargo build --release`, `cargo test` (all suites ok), `cargo test --features serde --test save` (2 ok), `cargo build --examples --all-features`, clippy `-D warnings`, `RUSTDOCFLAGS=-D warnings cargo doc`, wasm32 — clean. GPU, one process per suite: gpu_clouds 5, hydrology 9, imports 1, precipitation 6, readback 1, water 2, weathered 4, wind 2; lib `terrain::` 8, `cover::` 7, `dust::` 6, `voxel::` 1, `clouds::` 10 + `the_horizon_sky` 1 — all ok.
+- `hs status` failed in the loop's shell ("No such device or address", no TTY); research used the synced corpus (Gregory 2018 §16.4.5) and the existing climate-weather sources.
+
+### Top 5 remaining items, ranked
+
+1. **Save/restore of the GPU layers** (new): snow cover, wetness, water and terrain live in storage buffers; a save needs a whole-layer readback and a restore an upload through `Assets<ShaderBuffer>`.
+2. **Occlusion for the aerial snow relief** (carried).
+3. **The moon's phase sweep / moonlit terrain** (carried); check against `illuminance_at` (full moon ≈ 0.1–0.3 lx).
+4. **Grazing cloud-shadow capture** (carried): frame a shadow within 300 m of a grazing camera.
+5. **The small cosmetic set** (carried): `STRIKE_LEAD`, sparse roof splashes, nadir foam, flood marker, erosion faceting, status-line clipping.
