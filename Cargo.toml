@@ -1,6 +1,6 @@
 [package]
 name = "bevy_elements"
-version = "0.5.2"
+version = "0.5.3"
 edition = "2024"
 rust-version = "1.97.1"
 description = "Living environments for Bevy: sun, moon and stars, climate-driven weather, GPU wind, volumetric clouds, rain, snow and fog, lightning, terrain with hydraulic and thermal erosion, flooding, snow cover, wetness and dust — simulated in compute shaders."
@@ -59,6 +59,7 @@ isomesh = { version = "0.0.11", optional = true }
 # `[dependencies]` only, deliberately.
 [dev-dependencies]
 bevy = { version = "0.20.0" }
+serde_json = "1"
 
 # Compute shaders are not in WebGL2, so wasm means WebGPU. `web` makes `bevy::platform::time::Instant`
 # use `web_time` rather than a `std::time::Instant` whose `now()` panics on wasm.
@@ -72,6 +73,10 @@ required-features = ["flora"]
 [[example]]
 name = "voxel_snow"
 required-features = ["isomesh"]
+
+[[test]]
+name = "save"
+required-features = ["serde"]
 
 [lints.rust]
 missing_docs = "warn"

@@ -176,7 +176,8 @@ pub struct WeatherChanged {
 }
 
 /// Every value a transition blends.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 struct Blend {
     cover: f32,
     mm_h: f32,
@@ -231,7 +232,8 @@ impl Blend {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 struct Transition {
     from: Blend,
     to: Blend,
@@ -240,7 +242,8 @@ struct Transition {
     duration_h: f64,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 enum Request {
     Force(WeatherPreset, Duration),
     Release(Duration),
@@ -250,7 +253,13 @@ enum Request {
 ///
 /// The scheduler keeps stepping while weather is forced, so [`release`](Self::release) blends to
 /// the preset an unforced run would show at that hour. Transition durations are game time.
-#[derive(Resource, Clone, Debug, Default)]
+///
+/// This is the weather's save state, with [`WorldClock`], [`Climate`] and [`GeoLocation`]:
+/// insert a saved copy (through `serde` with the `serde` feature, or a reflected scene) and the
+/// scheduler continues the same chain, forced preset and blend; a fresh director would restart
+/// at `Clear`. [`Weather`] is recomputed from it each frame and need not be saved.
+#[derive(Resource, Clone, Debug, Default, PartialEq, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct WeatherDirector {
     scheduled: WeatherPreset,
     scheduled_direction: Option<Vec2>,
