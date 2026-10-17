@@ -415,13 +415,13 @@ fn run_cover(
     time: Res<Time<Real>>,
     tick: Res<ReadbackTick>,
     terrain: Option<Res<TerrainState>>,
-    terrain_gpu: Option<Res<TerrainGpu>>,
+    terrain_gpu: Option<ResMut<TerrainGpu>>,
     gpu: Option<ResMut<CoverGpu>>,
     mut runtime: ResMut<CoverRuntime>,
     mut stats: ResMut<CoverStats>,
     blockers: Query<(Entity, &PrecipitationBlocker, &GlobalTransform)>,
 ) {
-    let (Some(terrain), Some(terrain_gpu), Some(mut gpu)) = (terrain, terrain_gpu, gpu) else {
+    let (Some(terrain), Some(mut terrain_gpu), Some(mut gpu)) = (terrain, terrain_gpu, gpu) else {
         return;
     };
     let grid = terrain.grid;
@@ -542,7 +542,7 @@ fn run_cover(
     gpu.downsample = tick.is_due() || !gpu.live.load(Ordering::Relaxed);
     if steps > 0 {
         // The terrain pack publishes the melt to the render buffer's water depth.
-        terrain_gpu.dirty.store(true, Ordering::Relaxed);
+        terrain_gpu.changes += 1;
     }
 }
 

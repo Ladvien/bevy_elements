@@ -334,9 +334,13 @@ pub(crate) struct TerrainGpu {
     pub state: TerrainState,
     pub params: TerrainParamsGpu,
     pub source: GenerateSource,
-    /// Set by anything that changed bedrock, sediment or water: the pack, bounds and readback
-    /// kernels run once on the next frame. The generation itself sets it.
-    pub dirty: Arc<std::sync::atomic::AtomicBool>,
+    /// Bumped by anything that changed bedrock, sediment or water this frame; the render world
+    /// runs the pack, bounds and readback kernels while it is ahead of `packed`. Extracted by
+    /// value, so a later frame's bump never reaches an earlier render frame. Starts at 1: the
+    /// generation itself is a change.
+    pub changes: u64,
+    /// The `changes` value the render world last packed.
+    pub packed: Arc<std::sync::atomic::AtomicU64>,
     /// Set by the render world once the generator has run.
     pub generated: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -624,7 +628,8 @@ fn ensure_terrain(
         state: new_state.clone(),
         params: TerrainParamsGpu::new(&grid, ds, true),
         source,
-        dirty: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        changes: 1,
+        packed: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         generated: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
     let cells_handle = new_state.cells.clone();

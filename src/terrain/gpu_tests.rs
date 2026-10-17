@@ -570,10 +570,7 @@ fn rain_lands_on_the_terrain_and_on_a_flood() {
             | bevy::render::render_resource::BufferUsages::COPY_SRC
             | bevy::render::render_resource::BufferUsages::COPY_DST;
     }
-    app.world()
-        .resource::<super::TerrainGpu>()
-        .dirty
-        .store(true, std::sync::atomic::Ordering::Relaxed);
+    app.world_mut().resource_mut::<super::TerrainGpu>().changes += 1;
     for _ in 0..180 {
         app.update();
     }

@@ -306,12 +306,12 @@ fn carve_the_top_lowers_the_top() {
         readback_size: UVec2::splat(32),
         version: Arc::new(AtomicU32::new(1)),
     };
-    let dirty = Arc::new(std::sync::atomic::AtomicBool::new(false));
     app.insert_resource(TerrainGpu {
         state: live_state.clone(),
         params: TerrainParamsGpu::default(),
         source: GenerateSource::Procedural(GenParams::default()),
-        dirty: dirty.clone(),
+        changes: 0,
+        packed: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         generated: Arc::new(std::sync::atomic::AtomicBool::new(true)),
     })
     .insert_resource(live_state);
@@ -343,6 +343,7 @@ fn carve_the_top_lowers_the_top() {
         })
         .before(VoxelGroundSystems),
     );
+    let before = app.world().resource::<TerrainGpu>().changes;
     app.update();
 
     let s = state(&app, volume);
@@ -358,7 +359,10 @@ fn carve_the_top_lowers_the_top() {
         .cast_slice()
         .expect("the buffer holds data");
     assert_eq!(written, &s.top[..], "bedrock was rewritten with the tops");
-    assert!(dirty.load(std::sync::atomic::Ordering::Relaxed));
+    assert!(
+        app.world().resource::<TerrainGpu>().changes > before,
+        "the bedrock write asks for a repack"
+    );
     assert!(
         Arc::ptr_eq(
             &app.world()

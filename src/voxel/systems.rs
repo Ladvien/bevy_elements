@@ -404,10 +404,10 @@ pub(crate) fn voxel_ground_snow(
 pub(crate) fn voxel_ground_sync(
     mut states: Query<&mut VoxelGroundState>,
     terrain: Option<Res<TerrainState>>,
-    gpu: Option<Res<TerrainGpu>>,
+    gpu: Option<ResMut<TerrainGpu>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
-    let (Some(terrain), Some(gpu)) = (terrain, gpu) else {
+    let (Some(terrain), Some(mut gpu)) = (terrain, gpu) else {
         return;
     };
     for mut state in &mut states {
@@ -423,7 +423,7 @@ pub(crate) fn voxel_ground_sync(
         };
         buffer.clear();
         buffer.extend_from_slice(&state.top);
-        gpu.dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+        gpu.changes += 1;
         state.tops_dirty = false;
     }
 }

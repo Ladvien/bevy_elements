@@ -580,7 +580,7 @@ fn collect_sources(
 fn run_hydrology(
     inputs: Inputs,
     terrain: Option<Res<TerrainState>>,
-    terrain_gpu: Option<Res<TerrainGpu>>,
+    terrain_gpu: Option<ResMut<TerrainGpu>>,
     gpu: Option<ResMut<HydrologyGpu>>,
     mut runtime: ResMut<HydrologyRuntime>,
     mut stats: ResMut<HydrologyStats>,
@@ -592,7 +592,7 @@ fn run_hydrology(
     mut baked: MessageWriter<TerrainBaked>,
 ) {
     runtime.queue.extend(requests.read().copied());
-    let (Some(terrain), Some(terrain_gpu), Some(mut gpu)) = (terrain, terrain_gpu, gpu) else {
+    let (Some(terrain), Some(mut terrain_gpu), Some(mut gpu)) = (terrain, terrain_gpu, gpu) else {
         return;
     };
     let Inputs {
@@ -807,7 +807,7 @@ fn run_hydrology(
     runtime.scheduled += u64::from(n);
     if n > 0 {
         // The pack, bounds and height readback run once this frame, after the substeps.
-        terrain_gpu.dirty.store(true, Ordering::Relaxed);
+        terrain_gpu.changes += 1;
     }
 }
 
