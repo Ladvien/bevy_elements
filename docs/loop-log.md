@@ -867,3 +867,5 @@ No iteration was started. The skill's preflight sent one image to the `screensho
 Every iteration needs a GREAT verdict from this reviewer, so the pass stopped (skill Rules: a reviewer that cannot run is a blocker). Unblock by raising the OpenRouter key's monthly limit. 42 467 affordable output tokens at $20 per 1M is about $0.85 left, under one multi-image review.
 
 State at the stop: `main` at `096719b`, every gate and GPU suite green (2026-10-17). home-still healthy (distill idle on CUDA, both scribes up). The backlog is unchanged from iteration 11, plus the crate-review fixes F1–F11 that landed between iterations (`12ad5f3`..`4cf0527`). F12 (bind groups re-created every frame) was not fixed and is not measured.
+
+Second pass, same day: the reviewer preflight failed again in 0.4 s, `402 … You requested up to 65536 tokens, but can only afford 42177.` The key's limit has not been raised; the pass stopped before any capture.
