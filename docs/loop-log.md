@@ -857,3 +857,13 @@ None from this change.
 3. **The moon's phase sweep / moonlit terrain** (carried); check against `illuminance_at` (full moon ≈ 0.1–0.3 lx).
 4. **Grazing cloud-shadow capture** (carried): frame a shadow within 300 m of a grazing camera.
 5. **The small cosmetic set** (carried): `STRIKE_LEAD`, sparse roof splashes, nadir foam, flood marker, erosion faceting, status-line clipping.
+
+## Blocked pass — 2026-10-17 — the Opus 5.5 reviewer cannot run
+
+No iteration was started. The skill's preflight sent one image to the `screenshot-reviewer` agent (`openrouter/anthropic/claude-opus-5.5`) before any capture, and it failed in 0.6 s:
+
+> 402 This request requires more credits, or fewer max_tokens. You requested up to 65536 tokens, but can only afford 42467. To increase, visit https://openrouter.ai/workspaces/default/keys/bd57b3406fa7580c26d459649a68144eccacb275026701a7bfaf041bef55a088 and adjust the key's monthly limit
+
+Every iteration needs a GREAT verdict from this reviewer, so the pass stopped (skill Rules: a reviewer that cannot run is a blocker). Unblock by raising the OpenRouter key's monthly limit. 42 467 affordable output tokens at $20 per 1M is about $0.85 left, under one multi-image review.
+
+State at the stop: `main` at `096719b`, every gate and GPU suite green (2026-10-17). home-still healthy (distill idle on CUDA, both scribes up). The backlog is unchanged from iteration 11, plus the crate-review fixes F1–F11 that landed between iterations (`12ad5f3`..`4cf0527`). F12 (bind groups re-created every frame) was not fixed and is not measured.
