@@ -180,7 +180,8 @@ pub struct WaterSink {
 /// Start an erosion bake: hydrology runs at the quality's full substep rate with `rain_mm_h` of
 /// uniform liquid rain (the weather's rain is ignored) until `duration_s` of simulated time has
 /// passed, then [`TerrainBaked`] is written. A bake requested during a bake starts when the
-/// first one ends.
+/// first one ends; a bake interrupted by the terrain being rebuilt or removed restarts in full
+/// on the next terrain.
 #[derive(Message, Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ErodeTerrain {
@@ -401,6 +402,18 @@ struct HydrologyRuntime {
     wet_area_m2: f64,
 }
 
+impl HydrologyRuntime {
+    /// The bake requests to keep across a rebuild: the running bake first (it restarts in full on
+    /// the new layers), then the queue.
+    fn take_requests(&mut self) -> VecDeque<ErodeTerrain> {
+        let mut queue = std::mem::take(&mut self.queue);
+        if let Some(bake) = self.bake.take() {
+            queue.push_front(bake.request);
+        }
+        queue
+    }
+}
+
 /// Hydrology, erosion and the water readback.
 ///
 /// Needs a [`Terrain`](crate::Terrain); idles without one. Inserts, if absent,
@@ -462,7 +475,7 @@ fn ensure_hydrology(
         if gpu.is_some() {
             commands.remove_resource::<HydrologyGpu>();
             // A bake asked for before the terrain exists (or while it is rebuilt) waits for it.
-            let queue = std::mem::take(&mut runtime.queue);
+            let queue = runtime.take_requests();
             *runtime = HydrologyRuntime {
                 queue,
                 ..HydrologyRuntime::default()
@@ -496,7 +509,7 @@ fn ensure_hydrology(
     *runtime = HydrologyRuntime {
         built_for: Some(terrain.water.id()),
         source_epoch: 1,
-        queue: std::mem::take(&mut runtime.queue),
+        queue: runtime.take_requests(),
         ..HydrologyRuntime::default()
     };
     *stats = HydrologyStats::default();
@@ -891,4 +904,33 @@ fn update_stats(
     runtime.wet_area_m2 = f64::from(water.wet_cells) * cell * cell;
     stats.volume_m3 = water.volume_m3;
     stats.lost_m3 = volume0 + (water.input_m3 - input0) - water.volume_m3;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_interrupted_bake_restarts_before_the_queue() {
+        let a = ErodeTerrain {
+            duration_s: 60.0,
+            rain_mm_h: 10.0,
+        };
+        let b = ErodeTerrain {
+            duration_s: 30.0,
+            rain_mm_h: 5.0,
+        };
+        let mut runtime = HydrologyRuntime {
+            bake: Some(Bake {
+                request: a,
+                remaining: 5,
+                done_at: 9,
+            }),
+            queue: VecDeque::from([b]),
+            ..default()
+        };
+        assert_eq!(runtime.take_requests(), VecDeque::from([a, b]));
+        assert!(runtime.bake.is_none());
+        assert!(runtime.queue.is_empty());
+    }
 }
