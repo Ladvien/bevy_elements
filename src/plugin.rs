@@ -250,6 +250,9 @@ impl Plugin for ElementsGpuCorePlugin {
             crate::terrain::insert_placeholder(&mut buffers);
         }
         load_shader_library!(app, "climate/snow.wesl");
+        // The terrain grid's placement, imported by wind, precipitation, cover and water
+        // shaders whether or not `TerrainPlugin` is added.
+        load_shader_library!(app, "terrain/common.wesl");
         app.add_plugins(ReadbackPlugin).add_observer(dress_camera);
     }
 }

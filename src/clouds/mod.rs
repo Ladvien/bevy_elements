@@ -370,6 +370,7 @@ impl Plugin for CloudPlugin {
         app.init_resource::<LightningFlash>()
             .init_resource::<CloudLayer>()
             .init_resource::<CloudRuntime>()
+            .init_resource::<CelestialFrame>()
             .add_systems(Startup, create_resources)
             .add_systems(
                 Update,

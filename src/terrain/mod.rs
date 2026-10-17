@@ -33,7 +33,6 @@ use bevy::pbr::MaterialPlugin;
 use bevy::prelude::*;
 use bevy::render::render_resource::{ShaderType, TextureFormat};
 use bevy::render::storage::ShaderBuffer;
-use bevy::shader::load_shader_library;
 use bevy::transform::TransformSystems;
 pub(crate) use gpu::TerrainDispatch;
 use lod::{BoundsTree, LodConfig, Patch, select_patches};
@@ -404,7 +403,6 @@ pub struct TerrainPlugin;
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
         ensure_gpu_core(app);
-        load_shader_library!(app, "common.wesl");
         embedded_asset!(app, "generate.wesl");
         embedded_asset!(app, "heightmap.wesl");
         embedded_asset!(app, "pack.wesl");

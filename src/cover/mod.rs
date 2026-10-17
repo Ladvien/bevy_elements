@@ -291,7 +291,8 @@ struct CoverRuntime {
 /// Ground cover: snow and wetness maps, their kernels and their readback.
 ///
 /// Needs a [`Terrain`](crate::Terrain); idles without one. Inserts, if absent,
-/// [`SnowSettings`], [`WetnessSettings`] and [`CoverStats`]. Add it with
+/// [`SnowSettings`], [`WetnessSettings`], [`CoverStats`], [`Climate`], [`WorldClock`] and
+/// [`SurfaceWeathering`]. Add it with
 /// [`ElementsPlugins`](crate::ElementsPlugins).
 pub struct GroundCoverPlugin;
 
@@ -307,6 +308,7 @@ impl Plugin for GroundCoverPlugin {
             .init_resource::<CoverStats>()
             .init_resource::<Climate>()
             .init_resource::<WorldClock>()
+            .init_resource::<SurfaceWeathering>()
             .init_resource::<CoverRuntime>()
             .add_systems(
                 Update,

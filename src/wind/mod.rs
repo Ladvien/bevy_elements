@@ -241,6 +241,7 @@ impl Plugin for WindPlugin {
         ensure_gpu_core(app);
         embedded_asset!(app, "sim.wesl");
         app.init_resource::<WindRuntime>()
+            .init_resource::<Climate>()
             .add_message::<WindGust>()
             .add_systems(
                 Update,

@@ -225,6 +225,8 @@ impl Plugin for FogPlugin {
         ensure_gpu_core(app);
         embedded_asset!(app, "density.wesl");
         app.init_resource::<FogRuntime>()
+            .init_resource::<WeatherDirector>()
+            .init_resource::<CelestialFrame>()
             .add_systems(Startup, spawn_volume)
             .add_systems(
                 Update,
