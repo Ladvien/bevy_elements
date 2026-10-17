@@ -272,12 +272,18 @@ pub(crate) fn ensure_gpu_core(app: &mut App) {
     }
 }
 
+/// On an [`ElementsCamera`] whose clear colour the crate owns (it kept Bevy's default): the
+/// celestial systems clear it to the night sky's background radiance at the camera's exposure.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub(crate) struct SkyBackground;
+
 fn dress_camera(
     add: On<Add<ElementsCamera>>,
     mut commands: Commands,
     quality: Res<ElementsQuality>,
     atmospheres: Query<(), With<Atmosphere>>,
     mut media: ResMut<Assets<ScatteringMedium>>,
+    mut cameras: Query<&mut Camera>,
 ) {
     commands.entity(add.entity).insert_if_new((
         AtmosphereSettings::default(),
@@ -303,6 +309,16 @@ fn dress_camera(
     // requires a default `Msaa::Sample4`, so `insert_if_new` would never replace it. A game that
     // wants MSAA inserts `Msaa` after spawning the camera.
     commands.entity(add.entity).insert(Msaa::Off);
+    // Behind the atmosphere is the night sky's own faint glow, not Bevy's default `ClearColor`
+    // (sRGB 43, 44, 47), which is written before the sky, never exposed, and showed through the
+    // atmosphere as a constant brown night sky. A camera that kept Bevy's default gets
+    // `SkyBackground`, and the celestial systems set its clear colour each frame.
+    if let Ok(mut camera) = cameras.get_mut(add.entity)
+        && matches!(camera.clear_color, ClearColorConfig::Default)
+    {
+        camera.clear_color = ClearColorConfig::Custom(Color::BLACK);
+        commands.entity(add.entity).insert(SkyBackground);
+    }
     if atmospheres.is_empty() {
         let medium = media.add(ScatteringMedium::default());
         commands.spawn((Name::new("Elements atmosphere"), Atmosphere::earth(medium)));

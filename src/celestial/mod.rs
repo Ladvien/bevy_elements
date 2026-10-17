@@ -16,7 +16,7 @@ pub use clock::{CivilDate, GeoLocation, WorldClock};
 
 use crate::climate::Weather;
 use crate::clouds::CloudShadows;
-use crate::plugin::{ElementsCamera, ElementsSystems, ensure_gpu_core};
+use crate::plugin::{ElementsCamera, ElementsSystems, SkyBackground, ensure_gpu_core};
 
 /// Marks the sun's `DirectionalLight`.
 #[derive(Component, Clone, Copy, Debug, Default, Reflect)]
@@ -88,7 +88,9 @@ impl Default for CelestialFrame {
 ///
 /// Spawns one [`Sun`] and one [`Moon`] `DirectionalLight` at startup and moves them every frame
 /// in [`ElementsSystems::Celestial`]; keeps [`SunState`] current; drives `Exposure` on every
-/// [`ElementsCamera`] with `auto_exposure` set.
+/// [`ElementsCamera`] with `auto_exposure` set. The sun keeps lighting the atmosphere below the
+/// horizon through twilight, to −18°; a camera that kept Bevy's default clear colour is cleared
+/// to the night sky's faint background instead.
 pub struct CelestialPlugin;
 
 impl Plugin for CelestialPlugin {
@@ -100,7 +102,7 @@ impl Plugin for CelestialPlugin {
             .add_systems(Startup, spawn_lights)
             .add_systems(
                 Update,
-                (update_sky, update_ambient, auto_exposure)
+                (update_sky, update_ambient, auto_exposure, sky_background)
                     .chain()
                     .in_set(ElementsSystems::Celestial),
             );
@@ -111,11 +113,51 @@ impl Plugin for CelestialPlugin {
 /// (Saemundsson's reference state).
 const REFRACTION_PRESSURE_MBAR: f64 = 1010.0;
 const REFRACTION_TEMP_C: f64 = 10.0;
-/// Below this true altitude a light is switched off, degrees.
-const SUN_OFF_DEG: f32 = -2.0;
+/// Below this true altitude the sun no longer lights the atmosphere, degrees: astronomical
+/// twilight ends (Haber et al. 2005, `docs/research/twilight.md`).
+const SUN_OFF_DEG: f32 = -18.0;
+/// Above this true altitude the sun's disc is up and its shadow maps are drawn, degrees; below
+/// it Bevy's visible-disc factor already keeps the sun off every surface.
+const SUN_SHADOWS_ABOVE_DEG: f32 = -0.5;
+/// Below the horizon the sun's light falls as `exp(k · h)` (h in degrees) down to the knee, so
+/// Bevy's zenith twilight sky follows the brightness Hulburt (1953) measured
+/// (`docs/research/twilight.md`).
+const TWILIGHT_FALL_PER_DEG: f32 = 0.44;
+/// Below this true altitude Bevy's zenith is its multiple-scattering floor, degrees.
+const TWILIGHT_KNEE_DEG: f32 = -6.0;
+/// The fall below the knee, per degree: Hulburt's 0.427 decades per degree (`ln 10 · 0.427`),
+/// which a sky held up by a constant floor only follows if the light itself falls that fast.
+const TWILIGHT_TAIL_PER_DEG: f32 = 0.983;
+/// Below this true altitude the moon's light is switched off, degrees.
 const MOON_OFF_DEG: f32 = -0.5;
 /// Moon shadows are drawn only when the sun is lower than this, degrees (civil twilight).
 const MOON_SHADOWS_BELOW_SUN_DEG: f32 = -6.0;
+
+/// The factor on the sun's light at true altitude `altitude_deg`: 1 with the sun up, the
+/// twilight fall below the horizon (steeper past the knee), 0 once astronomical twilight has
+/// ended, by when it is under 10⁻⁶.
+pub(crate) fn twilight_factor(altitude_deg: f32) -> f32 {
+    if altitude_deg >= 0.0 {
+        1.0
+    } else if altitude_deg >= TWILIGHT_KNEE_DEG {
+        (TWILIGHT_FALL_PER_DEG * altitude_deg).exp()
+    } else if altitude_deg > SUN_OFF_DEG {
+        (TWILIGHT_FALL_PER_DEG * TWILIGHT_KNEE_DEG
+            + TWILIGHT_TAIL_PER_DEG * (altitude_deg - TWILIGHT_KNEE_DEG))
+            .exp()
+    } else {
+        0.0
+    }
+}
+
+/// Fraction of the sun's disc above the horizon at true altitude `altitude_deg`: the share of
+/// its light that reaches the ground directly. Bevy applies the same factor to every surface
+/// (`calculate_visible_sun_ratio`); what lights without Bevy (the precipitation draw) takes it
+/// from here.
+pub(crate) fn sun_disc_visible(altitude_deg: f32) -> f32 {
+    let radius = SunDisk::EARTH.angular_size.to_degrees() * 0.5;
+    ((altitude_deg + radius) / (2.0 * radius)).clamp(0.0, 1.0)
+}
 
 /// The moon light's colour, the tint of the moon's share of the sky's diffuse light and of the
 /// moonlit cloud.
@@ -227,16 +269,28 @@ pub(crate) fn cloud_light(cover: f32, shadows: Option<&CloudShadows>) -> CloudLi
 /// Smallest beam fraction [`sky_gain`] divides by.
 const MIN_SKY_BEAM: f32 = 0.001;
 
+/// The cloud factor on the sun's `DirectionalLight`: the beam `T̄` while its disc is up (the
+/// light then lights the ground, and its shadows fade with the beam), blending over the disc to
+/// the dome's total factor `0.25 + 0.75 T̄` once it has set, when the light lights only the sky
+/// (`docs/research/twilight.md`, Model 3). A sun below the horizon has no beam to the camera,
+/// and the cloud shadow over the camera says nothing about the sky it lights.
+pub(crate) fn sun_cloud_factor(state: &SunState, cloud: CloudLight) -> f32 {
+    let up = sun_disc_visible(state.altitude_deg);
+    cloud.total() + (cloud.direct - cloud.total()) * up
+}
+
 /// The factor that keeps the sky's brightness where it was. Bevy's atmosphere is lit by the
-/// sun's `DirectionalLight`, which under cloud carries only the beam `T̄`, so the sky dome (and
-/// the sun disc in a gap) would dim to `T̄` of its clear value with the shadow the camera stands
-/// in, and go black under full cloud. The clouds compose the sky pixels with `total / T̄`, which
-/// restores the dome to the total factor `0.25 + 0.75 T̄` it has always had (a limit of the
-/// change, not physics: the sky above a cloud layer is not dimmed by it at all [INFERENCE]).
-/// 1 when the sun's light is off (the moon's sky and the stars are not rescaled).
+/// sun's `DirectionalLight`, which under cloud carries only the beam `T̄` while the sun is up
+/// ([`sun_cloud_factor`]), so the sky dome (and the sun disc in a gap) would dim to `T̄` of its
+/// clear value with the shadow the camera stands in, and go black under full cloud. The clouds
+/// compose the sky pixels with `total / factor`, which restores the dome to the total factor
+/// `0.25 + 0.75 T̄` it has always had (a limit of the change, not physics: the sky above a cloud
+/// layer is not dimmed by it at all [INFERENCE]). Exactly 1 once the sun has set (its light then
+/// carries the total already) and when its light is off, so the night background, the moon's
+/// sky and the stars are never rescaled.
 pub(crate) fn sky_gain(state: &SunState, cloud: CloudLight) -> f32 {
     if state.altitude_deg > SUN_OFF_DEG {
-        cloud.total() / cloud.direct.max(MIN_SKY_BEAM)
+        cloud.total() / sun_cloud_factor(state, cloud).max(MIN_SKY_BEAM)
     } else {
         1.0
     }
@@ -315,13 +369,10 @@ pub(crate) fn update_sky(
     for (mut transform, mut light, is_sun, is_moon) in &mut lights {
         if is_sun {
             *transform = light_transform(sun_dir);
-            let up = state.altitude_deg > SUN_OFF_DEG;
-            light.illuminance = if up {
-                lux::RAW_SUNLIGHT * cloud.direct
-            } else {
-                0.0
-            };
-            set_shadows(&mut light, up);
+            light.illuminance = lux::RAW_SUNLIGHT
+                * twilight_factor(state.altitude_deg)
+                * sun_cloud_factor(&state, cloud);
+            set_shadows(&mut light, state.altitude_deg > SUN_SHADOWS_ABOVE_DEG);
         } else if is_moon {
             *transform = light_transform(moon_dir);
             let up = state.moon_altitude_deg > MOON_OFF_DEG;
@@ -367,6 +418,65 @@ fn clear_sky_illuminance(state: &SunState, moon_lux: f32) -> (f32, f32) {
 pub(crate) fn scene_illuminance(state: &SunState, moon_lux: f32, cloud: CloudLight) -> f32 {
     let (sun, moon) = clear_sky_illuminance(state, moon_lux);
     (sun + moon) * cloud.total() + ILLUMINANCE_FLOOR_LUX
+}
+
+/// Display value (1 = display peak, before tonemapping) the sun-side horizon glow may reach: the
+/// glow at a sun of 27° under the illuminance metering, so the afternoon is metered as before and
+/// only the low sun is capped.
+const GLOW_DISPLAY_MAX: f32 = 3.2;
+
+/// Cloud-free luminance of the horizon sky toward the sun, 5° above the horizon, cd/m², against
+/// the sun's true altitude: Bevy's atmosphere lit by the twilight-scaled sun, measured on a
+/// linear target (`docs/research/twilight.md`, Parameters). Below the first row the glow is
+/// far under any exposure the floor allows.
+// −6.28° is a measured sun altitude, not τ.
+#[allow(clippy::approx_constant)]
+const GLOW_TABLE: [(f32, f32); 17] = [
+    (-13.91, 4.648e-5),
+    (-12.04, 1.079e-3),
+    (-10.70, 1.057e-2),
+    (-9.29, 1.054e-1),
+    (-8.19, 5.721e-1),
+    (-7.05, 3.063),
+    (-6.28, 9.431),
+    (-5.49, 2.301e1),
+    (-3.87, 9.334e1),
+    (-2.20, 3.878e2),
+    (-0.49, 1.981e3),
+    (2.18, 4.476e3),
+    (6.81, 8.167e3),
+    (11.65, 1.069e4),
+    (27.02, 1.432e4),
+    (65.40, 1.524e4),
+    (90.0, 1.524e4),
+];
+
+/// Log-linear interpolation of [`GLOW_TABLE`], clamped at its ends.
+pub(crate) fn horizon_glow(altitude_deg: f32) -> f32 {
+    let first = GLOW_TABLE[0];
+    if altitude_deg <= first.0 {
+        return first.1;
+    }
+    for pair in GLOW_TABLE.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        if altitude_deg <= b.0 {
+            let t = (altitude_deg - a.0) / (b.0 - a.0);
+            return (a.1.ln() + (b.1.ln() - a.1.ln()) * t).exp();
+        }
+    }
+    GLOW_TABLE[GLOW_TABLE.len() - 1].1
+}
+
+/// The lowest EV₁₀₀ at which the sun-side glow stays at or under [`GLOW_DISPLAY_MAX`]. The glow
+/// is light scattered along tens of kilometres of air toward the sun, so it is dimmed by the
+/// cover's mean beam ([`beam_transmittance`]), not by the cloud shadow over the camera (which a
+/// low sun's slant ray almost always finds).
+pub(crate) fn ev100_for_glow(altitude_deg: f32, cover: f32) -> f32 {
+    let glow = horizon_glow(altitude_deg) * beam_transmittance(cover);
+    if glow <= 0.0 {
+        return f32::NEG_INFINITY;
+    }
+    (glow / (1.2 * GLOW_DISPLAY_MAX)).log2()
 }
 
 /// Colour of the sun's light toward the end of the day: white above `DUSK_ONSET_DEG`, tinted
@@ -499,11 +609,11 @@ fn auto_exposure(
     mut cameras: Query<(Entity, &ElementsCamera, &mut Exposure)>,
     mut adapted: Local<Vec<Entity>>,
 ) {
-    let target = ev100_for(scene_illuminance(
-        &state,
-        frame.moon_lux,
-        cloud_light(weather.cloud_cover, shadows.as_deref()),
-    ));
+    // Illuminance-based, with the sky toward the sun as the highlight that caps it (Patry 2021;
+    // `docs/research/twilight.md`).
+    let cloud = cloud_light(weather.cloud_cover, shadows.as_deref());
+    let target = ev100_for(scene_illuminance(&state, frame.moon_lux, cloud))
+        .max(ev100_for_glow(state.altitude_deg, weather.cloud_cover));
     let k = 1.0 - (-time.delta_secs() / EXPOSURE_TAU_S).exp();
     for (entity, camera, mut exposure) in &mut cameras {
         if !camera.auto_exposure {
@@ -514,6 +624,24 @@ fn auto_exposure(
         } else {
             exposure.ev100 = target;
             adapted.push(entity);
+        }
+    }
+}
+
+/// Luminance of the moonless night sky behind the atmosphere (airglow, zodiacal light,
+/// starlight; Jensen et al. 2001), cd/m²: the uniform sky that gives the metered illuminance
+/// floor, `E / π`.
+const NIGHT_SKY_LUMINANCE: f32 = ILLUMINANCE_FLOOR_LUX / std::f32::consts::PI;
+
+/// Clear every [`SkyBackground`] camera to the night sky's background radiance at its exposure.
+/// The clear colour is written to the target before the sky and is never exposed, so it is
+/// given in display units; Bevy's atmosphere then draws over it with its transmittance.
+fn sky_background(mut cameras: Query<(&mut Camera, &Exposure), With<SkyBackground>>) {
+    for (mut camera, exposure) in &mut cameras {
+        let v = NIGHT_SKY_LUMINANCE * exposure.exposure();
+        let colour = Color::linear_rgb(v, v, v);
+        if !matches!(camera.clear_color, ClearColorConfig::Custom(c) if c == colour) {
+            camera.clear_color = ClearColorConfig::Custom(colour);
         }
     }
 }
@@ -838,5 +966,77 @@ mod tests {
             ..default()
         };
         assert_eq!(sky_gain(&night, CloudLight::from_beam(0.2)), 1.0);
+    }
+
+    #[test]
+    fn the_sky_gain_never_amplifies_the_sky_once_the_sun_has_set() {
+        let at = |altitude_deg: f32| SunState {
+            altitude_deg,
+            ..default()
+        };
+        for t in [0.0f32, 0.01, 0.5, 1.0] {
+            let light = CloudLight::from_beam(t);
+            // Up: the beam, restored to the dome's total.
+            assert!((sun_cloud_factor(&at(5.0), light) - t).abs() < 1e-6, "{t}");
+            // Set: the dome's total on the light itself, and no gain on the night behind it.
+            for altitude in [-0.3, -3.0, -10.0, -17.0, -30.0] {
+                assert_eq!(sun_cloud_factor(&at(altitude), light), light.total());
+                assert!(
+                    (sky_gain(&at(altitude), light) - 1.0).abs() < 1e-6,
+                    "{altitude} {t}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_sun_lights_the_sky_through_twilight_and_the_ground_only_while_its_disc_is_up() {
+        // Continuous at sunset, falling through twilight, off at astronomical night.
+        assert_eq!(twilight_factor(0.0), 1.0);
+        assert!((twilight_factor(-0.01) - 1.0).abs() < 0.01);
+        let mut last = 1.0;
+        for tenth in 1..180 {
+            let g = twilight_factor(-0.1 * tenth as f32);
+            assert!(g < last && g > 0.0, "{tenth}: {g}");
+            last = g;
+        }
+        assert_eq!(twilight_factor(-18.0), 0.0);
+        // Off where it no longer shows: Bevy's sky keeps ~4 cd/m² per full sun from its
+        // multiple-scattering floor; at the switch-off that is under 2 % of the 1.6e-4 cd/m² night
+        // background (about a fifth of a code value at the night exposure).
+        assert!(4.1 * twilight_factor(-17.99) < 0.02 * NIGHT_SKY_LUMINANCE);
+        // The disc: whole above its radius, gone below it, half on the horizon.
+        assert_eq!(sun_disc_visible(0.3), 1.0);
+        assert_eq!(sun_disc_visible(-0.3), 0.0);
+        assert!((sun_disc_visible(0.0) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_glow_caps_the_exposure_only_for_a_low_sun() {
+        let target = |altitude_deg: f32, cover: f32| {
+            let state = SunState {
+                altitude_deg,
+                moon_altitude_deg: -30.0,
+                ..default()
+            };
+            let cloud = CloudLight::from_beam(beam_transmittance(cover));
+            let illuminance = ev100_for(scene_illuminance(&state, 0.0, cloud));
+            (illuminance, ev100_for_glow(altitude_deg, cover))
+        };
+        // The afternoon is metered on illuminance alone.
+        for altitude in [27.0, 45.0, 68.0, 90.0] {
+            let (lux, glow) = target(altitude, 0.05);
+            assert!(glow <= lux + 0.1, "{altitude}°: {glow} over {lux}");
+        }
+        // Around sunset the glow wins, by more than a stop at the horizon.
+        for altitude in [8.0, 2.0, -0.5, -2.0, -4.0] {
+            let (lux, glow) = target(altitude, 0.05);
+            assert!(glow > lux, "{altitude}°: {glow} under {lux}");
+        }
+        let (lux, glow) = target(-0.5, 0.05);
+        assert!(glow - lux > 1.0, "{glow} against {lux}");
+        // Under overcast the glow is hidden and the illuminance meters again.
+        let (lux, glow) = target(-0.5, 1.0);
+        assert!(glow < lux, "{glow} against {lux}");
     }
 }

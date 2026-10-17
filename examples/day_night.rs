@@ -7,7 +7,8 @@
 //!
 //! `ELEMENTS_HOUR=19.5` pauses the clock at that local hour (for screenshots) and aims once, so
 //! the still is framed on the body; otherwise a day passes in two minutes. Hold the right mouse
-//! button to look around; the aim resumes when you let go.
+//! button to look around; the aim resumes when you let go. `ELEMENTS_START=19.5` starts the
+//! running day at that hour instead of 04:00 (a dusk time-lapse: one game hour is 300 frames).
 //! `ELEMENTS_DATE=2026-07-14` sets the calendar date (proleptic Gregorian, out-of-range months
 //! and days clamped), which is how a moon-phase sweep is captured — the date fixes the moon's
 //! phase and the status line prints it.
@@ -32,7 +33,12 @@ fn main() {
             Some(CivilDate::new(year, month, day))
         })
         .unwrap_or(CivilDate::new(2026, 6, 21));
-    let clock = WorldClock::new(date).at_hour(fixed.unwrap_or(4.0));
+    // A running day starts at `ELEMENTS_START` (default 04:00), so a sequence can begin at dusk.
+    let start: f64 = std::env::var("ELEMENTS_START")
+        .ok()
+        .and_then(|h| h.parse().ok())
+        .unwrap_or(4.0);
+    let clock = WorldClock::new(date).at_hour(fixed.unwrap_or(start));
     let clock = match fixed {
         Some(_) => WorldClock {
             paused: true,
