@@ -61,7 +61,13 @@ impl SurfaceWeathering {
 
         // Snow: accumulate, settle, melt.
         let new_swe = weather.precipitation_mm_h * snow_fraction * hours;
-        let old_depth = self.snow_depth_m;
+        // The published depth may be the cover map's (`cover::weathering_from_map`); integrate
+        // from the point model's own pack.
+        let old_depth = if self.snow_water_mm > 0.0 {
+            self.snow_water_mm / self.snow_density.max(NEW_SNOW_DENSITY)
+        } else {
+            0.0
+        };
         self.snow_water_mm += new_swe;
         if self.snow_water_mm > 0.0 {
             let added_depth = new_swe / NEW_SNOW_DENSITY;
@@ -157,5 +163,25 @@ mod tests {
         // 0.05/h × (1 + 0) × (1 + 20/20) × (1 − 0.5) × (1 + 1) = 0.1/h: 1.0 → 0.1 in 9 h.
         g.step(&weather(0.0, 20.0), 1.0, 9.0);
         assert!((g.wetness - 0.1).abs() < 1e-4, "{}", g.wetness);
+    }
+
+    #[test]
+    fn a_map_override_does_not_corrupt_the_point_pack() {
+        let mut g = SurfaceWeathering::default();
+        g.step(&weather(1.5, -5.0), 0.0, 10.0);
+        let mut reference = g;
+        let mut overridden = g;
+        // What `cover::weathering_from_map` publishes where the map has no snow.
+        overridden.snow_depth_m = 0.0;
+        overridden.snow_cover = 0.0;
+        reference.step(&weather(0.0, -5.0), 0.0, 1.0);
+        overridden.step(&weather(0.0, -5.0), 0.0, 1.0);
+        assert!(
+            (overridden.snow_depth_m - reference.snow_depth_m).abs() < 1e-6,
+            "{} against {}",
+            overridden.snow_depth_m,
+            reference.snow_depth_m
+        );
+        assert_eq!(overridden.snow_cover, reference.snow_cover);
     }
 }
