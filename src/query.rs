@@ -41,9 +41,13 @@ pub struct EnvironmentSnapshot {
 
 impl EnvironmentSnapshot {
     /// World height of the ground at `xz`: the terrain surface at the last readback where there
-    /// is terrain, the plane y = 0 elsewhere (outside it, without one, or before the first readback).
+    /// is terrain, the plane y = 0 elsewhere (outside it, without one, or before the first
+    /// readback).
     pub(crate) fn ground_height(&self, xz: Vec2) -> f32 {
-        self.terrain.as_ref().and_then(|t| t.height(xz)).unwrap_or(0.0)
+        self.terrain
+            .as_ref()
+            .and_then(|t| t.height(xz))
+            .unwrap_or(0.0)
     }
 }
 

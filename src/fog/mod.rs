@@ -16,11 +16,11 @@ use crate::climate::{Weather, WeatherDirector, WeatherPreset};
 use crate::clouds::{CloudShadows, CloudWeatherMap};
 use crate::gpu::grid::storage_volume;
 use crate::plugin::{ElementsCamera, ElementsSystems, ElementsView, ensure_gpu_core};
-use crate::query::EnvironmentSnapshot;
 use crate::precipitation::model::{
     marshall_palmer_lambda, precipitation_split, rain_extinction, snow_extinction,
     water_weighted_fall_speed,
 };
+use crate::query::EnvironmentSnapshot;
 
 /// Koschmieder's constant for a 2 % contrast threshold: extinction = 3.912 / visibility.
 pub const KOSCHMIEDER: f32 = 3.912;
