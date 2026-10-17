@@ -8,6 +8,7 @@ use super::bolt::{self, Strokes};
 use crate::climate::{Climate, Weather, hash64};
 use crate::clouds::CloudLayer;
 use crate::plugin::ElementsView;
+use crate::query::EnvironmentSnapshot;
 
 /// Decouples the strike streams from the hourly weather scheduler, which hashes the same way:
 /// the ASCII bytes of "lightnin".
@@ -161,11 +162,13 @@ pub(crate) struct Clocks<'w> {
 }
 
 /// Advance the strike process, fire scripted strikes and deliver thunder.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_strikes(
     clocks: Clocks,
     weather: Res<Weather>,
     climate: Res<Climate>,
     view: Res<ElementsView>,
+    snapshot: Res<EnvironmentSnapshot>,
     mut strikes: ResMut<Strikes>,
     mut io: StrikeIo,
     mut commands: Commands,
@@ -189,12 +192,8 @@ pub(crate) fn run_strikes(
     let mut fired: Vec<(Vec3, u64, f64)> = draws
         .iter()
         .map(|d| {
-            // The ground is y = 0 until terrain exists (M3).
-            let at = Vec3::new(
-                view.position.x + d.offset.x,
-                0.0,
-                view.position.z + d.offset.y,
-            );
+            let xz = Vec2::new(view.position.x + d.offset.x, view.position.z + d.offset.y);
+            let at = Vec3::new(xz.x, snapshot.ground_height(xz), xz.y);
             (at, d.seed, start - d.time)
         })
         .collect();
@@ -343,5 +342,63 @@ mod tests {
         let expected = n as f64 / 8.0;
         let chi: f64 = bins.iter().map(|b| (b - expected).powi(2) / expected).sum();
         assert!(chi < 18.48, "chi-square {chi}");
+    }
+
+    #[test]
+    fn drawn_strikes_land_on_the_terrain() {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use bevy::time::TimeUpdateStrategy;
+
+        use crate::lightning::LightningPlugin;
+        use crate::plugin::ElementsSystems;
+        use crate::terrain::{TerrainGrid, TerrainSnapshot};
+
+        #[derive(Resource, Default)]
+        struct Seen(Vec<LightningStrike>);
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, LightningPlugin))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_nanos(
+                16_666_667,
+            )))
+            .insert_resource(Climate::temperate().with_seed(42))
+            .insert_resource(Weather {
+                storminess: 6.0,
+                ..default()
+            })
+            // A flat terrain 250 m up over the whole 8 km strike disc.
+            .insert_resource(EnvironmentSnapshot {
+                terrain: Some(TerrainSnapshot {
+                    grid: TerrainGrid {
+                        origin: Vec2::splat(-10_000.0),
+                        cell_m: 625.0,
+                        size: UVec2::splat(32),
+                        y0: 250.0,
+                    },
+                    surface: Arc::from(vec![0.0f32; 1024]),
+                    version: 1,
+                }),
+                ..default()
+            })
+            .init_resource::<Seen>()
+            .add_systems(
+                Update,
+                (|mut strikes: MessageReader<LightningStrike>, mut seen: ResMut<Seen>| {
+                    seen.0.extend(strikes.read().copied());
+                })
+                .after(ElementsSystems::Simulation),
+            );
+        for _ in 0..36_000 {
+            app.update();
+        }
+        let seen = &app.world().resource::<Seen>().0;
+        assert!(seen.len() >= 40, "{} strikes", seen.len());
+        assert!(
+            seen.iter().all(|s| s.position.y == 250.0),
+            "{:?}",
+            seen.iter().find(|s| s.position.y != 250.0)
+        );
     }
 }

@@ -16,6 +16,7 @@ use crate::climate::{Weather, WeatherDirector, WeatherPreset};
 use crate::clouds::{CloudShadows, CloudWeatherMap};
 use crate::gpu::grid::storage_volume;
 use crate::plugin::{ElementsCamera, ElementsSystems, ElementsView, ensure_gpu_core};
+use crate::query::EnvironmentSnapshot;
 use crate::precipitation::model::{
     marshall_palmer_lambda, precipitation_split, rain_extinction, snow_extinction,
     water_weighted_fall_speed,
@@ -276,6 +277,15 @@ fn spawn_volume(
     });
 }
 
+/// Centre of the ground-fog volume: camera XZ snapped to whole texels, the bottom on the
+/// texel plane at or below `ground`.
+fn volume_centre(camera: Vec3, ground: f32) -> Vec3 {
+    let texel = GROUND_FOG_EXTENT / GROUND_FOG_TEXELS.as_vec3();
+    let xz = (camera.xz() / texel.xz()).round() * texel.xz();
+    let floor = (ground / texel.y).floor() * texel.y;
+    Vec3::new(xz.x, floor + GROUND_FOG_EXTENT.y * 0.5, xz.y)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn update_volume(
     time: Res<Time<Virtual>>,
@@ -289,6 +299,7 @@ fn update_volume(
     gpu: Option<ResMut<FogGpu>>,
     cloud_map: Option<Res<CloudWeatherMap>>,
     mut volumes: Query<(&mut FogVolume, &mut Transform), With<GroundFog>>,
+    snapshot: Res<EnvironmentSnapshot>,
 ) {
     let Some(mut gpu) = gpu else {
         return;
@@ -316,10 +327,8 @@ fn update_volume(
     let wind = weather.wind_direction * weather.wind_speed_ms;
     runtime.wind_offset = (runtime.wind_offset + wind * dt).rem_euclid(Vec2::splat(OFFSET_WRAP_M));
 
-    let texel = GROUND_FOG_EXTENT / GROUND_FOG_TEXELS.as_vec3();
-    let ground = 0.0;
-    let centre_xz = (camera.xz() / texel.xz()).round() * texel.xz();
-    let centre = Vec3::new(centre_xz.x, ground + GROUND_FOG_EXTENT.y * 0.5, centre_xz.y);
+    let ground = snapshot.ground_height(camera.xz());
+    let centre = volume_centre(camera, ground);
     *transform = Transform::from_translation(centre).with_scale(GROUND_FOG_EXTENT);
 
     let dust = weather.dust.clamp(0.0, 1.0);
@@ -433,6 +442,25 @@ fn update_distance_fog(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_fog_volume_stands_on_the_ground() {
+        let texel = GROUND_FOG_EXTENT / GROUND_FOG_TEXELS.as_vec3();
+        let camera = Vec3::new(13.7, 500.0, -2.2);
+        for ground in [412.3, -37.0, 0.0] {
+            let centre = volume_centre(camera, ground);
+            let bottom = centre.y - GROUND_FOG_EXTENT.y * 0.5;
+            assert!(
+                bottom <= ground && bottom > ground - texel.y,
+                "bottom {bottom} for ground {ground}"
+            );
+            let cells = centre.xz() / texel.xz();
+            assert!(
+                (cells - cells.round()).abs().max_element() < 1e-3,
+                "centre {centre} is not on a texel"
+            );
+        }
+    }
 
     #[test]
     fn the_skys_air_is_the_cameras_fog_extinction_above_clear_air() {
