@@ -75,21 +75,23 @@ impl TerrainGrid {
 /// constructor had to adjust the request.
 ///
 /// `resolution` is clamped per axis to `max` and rounded down to a power of two (at least one
-/// leaf, 32 cells). Cells must be square: `c = extent.x / res.x`; if `extent.y / res.y` differs,
-/// `res.y` is re-derived as `round(extent.y / c / 32) · 32`.
+/// leaf, 32 cells). Cells must be square: the cell `c` is the larger of `extent.x / res.x` and
+/// `extent.y / res.y` (the coarser axis binds), and if they differ both axes are re-derived as
+/// `round(extent / c / 32) · 32`, which keeps each within its clamped resolution.
 pub(crate) fn resolve_resolution(extent: Vec2, resolution: UVec2, max: u32) -> (UVec2, f32, bool) {
     let snap = |r: u32| {
         let r = r.clamp(LEAF_CELLS, max.max(LEAF_CELLS));
         1 << r.ilog2()
     };
     let res = UVec2::new(snap(resolution.x), snap(resolution.y));
-    let cell = extent.x / res.x as f32;
-    let adjusted = ((extent.y / res.y as f32) - cell).abs() > cell * 1e-4;
+    let cells = extent / res.as_vec2();
+    let cell = cells.max_element();
+    let adjusted = (cells - cell).abs().max_element() > cell * 1e-4;
     if !adjusted {
         return (res, cell, false);
     }
-    let rows = ((extent.y / cell / LEAF_CELLS as f32).round().max(1.0) as u32) * LEAF_CELLS;
-    (UVec2::new(res.x, rows), cell, true)
+    let derive = |e: f32| ((e / cell / LEAF_CELLS as f32).round().max(1.0) as u32) * LEAF_CELLS;
+    (UVec2::new(derive(extent.x), derive(extent.y)), cell, true)
 }
 
 /// Octaves the generator uses: the request, clamped so the finest octave's wavelength stays
@@ -171,11 +173,17 @@ mod tests {
         assert_eq!(res, UVec2::new(1024, 512));
         assert_eq!(cell, 2.0);
         assert!(adjusted);
-        let (res, _, adjusted) =
+        // 1000 × 1500 at 256²: the rows bind (5.86 m cells), so the columns become 160.
+        let (res, cell, adjusted) =
             resolve_resolution(Vec2::new(1000.0, 1500.0), UVec2::splat(256), 256);
         assert!(adjusted);
-        assert_eq!(res.y % LEAF_CELLS, 0);
-        assert_eq!(res.y, 384);
+        assert_eq!(res, UVec2::new(160, 256));
+        assert_eq!(cell, 1500.0 / 256.0);
+        // A long strip never exceeds the cap on its long axis: 4096 m of rows at 512 cells.
+        assert_eq!(
+            resolve_resolution(Vec2::new(256.0, 4096.0), UVec2::splat(1024), 512),
+            (UVec2::new(32, 512), 8.0, true)
+        );
     }
 
     #[test]

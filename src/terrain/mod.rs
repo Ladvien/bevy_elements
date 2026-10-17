@@ -163,8 +163,9 @@ pub struct Terrain {
     pub extent_m: Vec2,
     /// Cells per axis: clamped to
     /// [`ElementsQuality::terrain_max_resolution`] and rounded down to a power of two. Cells
-    /// are square: when `extent_m` and `resolution` disagree about the cell size, the row count
-    /// is re-derived from the column count (with a warning). Default 1024².
+    /// are square: when `extent_m` and `resolution` disagree about the cell size, the coarser
+    /// axis's cell is kept and both counts are re-derived from it (with a warning), so neither
+    /// exceeds the cap. Default 1024².
     pub resolution: UVec2,
     /// Who draws it.
     pub render: TerrainRender,
@@ -581,8 +582,8 @@ fn ensure_terrain(
     };
     if adjusted {
         warn!(
-            "terrain extent {:?} and resolution {:?} give non-square cells; the rows are re-derived as {} for {:.3} m cells",
-            terrain.extent_m, terrain.resolution, size.y, cell
+            "terrain extent {:?} and resolution {:?} give non-square cells; the grid is re-derived as {} for {:.3} m cells",
+            terrain.extent_m, terrain.resolution, size, cell
         );
     }
 

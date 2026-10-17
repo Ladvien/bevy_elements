@@ -4,6 +4,12 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ## [Unreleased]
 
+### Fixed
+
+- **Each domain plugin works on its own.** `WindPlugin`, `FogPlugin`, `CloudPlugin` and `GroundCoverPlugin` read `Climate`, `WeatherDirector`, `CelestialFrame` or `SurfaceWeathering` that only `ClimatePlugin` or `CelestialPlugin` created, so `ElementsPlugins.build().disable::<…>()` panicked on a missing resource; each now inserts, if absent, every resource its systems read. The wind, precipitation, cover and water shaders import the terrain's `terrain::common` library, which only `TerrainPlugin` registered: the wind kernel without a terrain plugin failed to compile and the field never went live. The library is now registered with the shared GPU core. `tests/gpu_plugins.rs`.
+- **Ground fog and lightning stand on the terrain.** The ground-fog volume was placed at y = 0–120 m whatever the ground, so over a terrain it hung below the hills or in the valleys' air; its bottom is now the terrain surface under the camera (snapped to the volume's texel plane), y = 0 outside a terrain. Drawn lightning strikes attached at y = 0 and now attach at the terrain height (`docs/research/lightning.md`); scripted `StrikeLightning` keeps its point.
+- **A terrain's resolution never exceeds the quality cap.** When the extent and resolution gave non-square cells, the rows were re-derived from the columns' cell without the cap, so 256 × 4096 m at High got 512 × 8192 cells; the coarser axis's cell now binds and both axes are re-derived from it (512 rows, 32 columns).
+
 ## [0.5.3] — 2026-10-16
 
 ### Added
