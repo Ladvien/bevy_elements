@@ -4,6 +4,15 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ## [Unreleased]
 
+### Changed
+
+- **Twilight exists, and the sunset is not blown out.** The sun's light was switched off at −2°, and Bevy's atmosphere is lit only by directional lights, so from −2° to −18° (over an hour of every summer evening) the sky had no light at all. The sun now lights the atmosphere down to −18°, falling below the horizon at the rate Hulburt (1953) measured for the zenith twilight sky (0.427 decades per degree; checked on a linear target to within 0.65–1.0×); it lights no surface once its disc has set (Bevy's own visible-disc factor), its shadow maps are off below −0.5°, and the precipitation draw takes it only while its disc is up. Civil and nautical twilight now render as they should: a blue to blue-purple zenith (the ozone in Bevy's medium), an orange glow on the sun's side, the Belt of Venus on the other, the afterglow shrinking into night. The automatic exposure, metered on illuminance, is now capped by the sky toward the sun (Patry 2021): from a sun of about 25° down through twilight the brightest sky stays at 3.2 × display peak, where it reached 6–20, so the golden hour keeps its colour and the ground reads as silhouettes against it. The afternoon under a clear sky is metered as before; a camera standing in a cloud shadow no longer opens up past the sunlit sky (PartlyCloudy at noon 0.4 stop darker). `docs/research/twilight.md`, `tests/gpu_twilight.rs`.
+- **The night sky is no longer brown.** Bevy's default `ClearColor` (sRGB 43, 44, 47) is written behind the sky before any exposure, so it showed through the atmosphere as a constant warm-brown sky of about 40 DN at night. A camera that kept the default clear colour is now cleared every frame to the night sky's own faint glow (1.6×10⁻⁴ cd/m², the sky that gives the exposure's illuminance floor) at its exposure; a camera with its own `ClearColorConfig` keeps it.
+
+### Added
+
+- **`ELEMENTS_START` in the `day_night` example** starts the running day at that hour (a dusk time-lapse: one game hour is 300 frames).
+
 ### Fixed
 
 - **Each domain plugin works on its own.** `WindPlugin`, `FogPlugin`, `CloudPlugin` and `GroundCoverPlugin` read `Climate`, `WeatherDirector`, `CelestialFrame` or `SurfaceWeathering` that only `ClimatePlugin` or `CelestialPlugin` created, so `ElementsPlugins.build().disable::<…>()` panicked on a missing resource; each now inserts, if absent, every resource its systems read. The wind, precipitation, cover and water shaders import the terrain's `terrain::common` library, which only `TerrainPlugin` registered: the wind kernel without a terrain plugin failed to compile and the field never went live. The library is now registered with the shared GPU core. `tests/gpu_plugins.rs`.

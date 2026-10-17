@@ -871,3 +871,63 @@ State at the stop: `main` at `096719b`, every gate and GPU suite green (2026-10-
 Second pass, same day: the reviewer preflight failed again in 0.4 s, `402 … You requested up to 65536 tokens, but can only afford 42177.` The key's limit has not been raised; the pass stopped before any capture.
 
 Third pass, same day: preflight failed again, `402 … can only afford 42174.` Stopped before any capture.
+
+## Iteration 12 — 2026-10-17 — twilight, the sunset exposure and the night sky
+
+**Commits:** `5a96d37` (research note `docs/research/twilight.md`), `2559c3f` (implementation + `tests/gpu_twilight.rs`), `80f3772` (README, CHANGELOG, `celestial.md` Deviation 19, regenerated stills), this log. **Sibling repos:** none. **Not released** (the loop no longer bumps, tags or publishes). **Visual judgment:** by the loop agent itself (user decision 2026-10-17, after the Opus 5.5 reviewer hit OpenRouter's credit limit three passes in a row).
+
+### What changed, and why it ranked first
+
+The baseline sweep (29 captures, `/tmp/i12/before/`, findings in `/tmp/i12/critique.md`) found three linked defects in the sky, each measured on a linear `Rgba16Float` target:
+
+1. **Every night sky was brown, ~40 DN.** Bevy's default `ClearColor` (sRGB 43, 44, 47) is written behind the sky before any exposure and Bevy's atmosphere draws over it with its transmittance: a constant linear (0.022, 0.0205, 0.0186) behind every sky pixel with every light off, on four dates.
+2. **Twilight did not exist.** The sun's light was switched off at −2° (an unsourced M1 constant), so from −2° to −18° Bevy's atmosphere had no light; what showed was item 1.
+3. **The low sun blew the frame out.** The illuminance-metered exposure left the sky toward the sun at 6–20× display peak from +12° to −2° (`dn_dusk.png` zenith 245 DN; `wt_sun_18.6` 252 DN).
+
+Fixed: the sun lights the atmosphere to −18°, scaled below the horizon by `g(h)` fitted on Bevy's renderer to Hulburt's measured zenith twilight (`k` 0.44/° to −6°, then Hulburt's own 0.983/°); below the horizon its cloud factor is the dome's total so the composite's `sky_gain` is 1; the precipitation draw takes the sun only while its disc is up; the auto exposure is the larger of the illuminance target and a cap from the sky toward the sun (Patry 2021's highlight threshold, ceiling 3.2× display peak, the glow at a 27° sun); a camera that kept Bevy's default clear colour is cleared to the night sky's own glow (`E_floor/π` = 1.6×10⁻⁴ cd/m²) at its exposure.
+
+It ranked first because the twilight sky had no light source at all, wrong for an hour of every evening in any game with a day cycle, and its fix also needed the exposure and the background. Runner-up: the flat, washed-out terrain shading on `hills` and `mountains`, a matter of degree rather than a missing light.
+
+### Candidates ranked
+
+| # | Candidate | Category | Note |
+|---|---|---|---|
+| 1 | **Twilight missing, brown night sky, low-sun blowout** | 1 (wrong sky for the time) | picked |
+| 2 | Flat terrain shading (`tt_hills42_eye`, `tt_mtn_elev`) | 2 (beauty) | runner-up |
+| 3 | Night thunderstorm rain reads as white static (`storm.png`) | 2 | needs a look at streak brightness under a flash |
+| 4 | Clouds in twilight flat grey; moonlit cloud rims | 2 | cloud lighting below `SUN_HANDOVER_DEG` |
+| 5 | Pillar edge steps through the cloud composite (`dn_dusk` 4× crop) | 1 (cosmetic) | composite against geometry |
+| — | Backlog: GPU-layer save, aerial snow occlusion, moon phase sweep, grazing shadow capture, cosmetic set | | carried |
+
+### Sources
+
+Hulburt 1953, *JOSA* 43:113 (`10.1364/JOSA.43.000113`); Haber, Magnor & Seidel 2005, *ACM TOG* 24(4) (`10.1145/1095878.1095884`) — both fetched through SciDB and read from `pdftotext`, not yet ingested (S3 upload failure, note's `Pending index`); Bruneton & Neyret 2008 (`10.1111_j.1467-8659.2008.01245.x`); Hillaire 2020 (`10.1111_cgf.14050`); Patry 2021 (`s2021-advances-pdf-66-mb`); Jensen et al. 2001 (`10.1145_383259.383306`, through `hs distill search`); Bevy 0.20 source (`pbr_lighting.wesl` visible-sun factor, `volumetric_fog.wesl`, `ScatteringMedium::earth`'s ozone).
+
+### Critique and verdicts (`/tmp/i12/critique.md`; before `/tmp/i12/before/`, after `/tmp/i12/after/`)
+
+| Feature | Evidence | Verdict |
+|---|---|---|
+| Twilight sky, toward the sun (−2.2° … −10.9°) | `after/tw/wt_sun_19.{0,3,6,9}.png`, `cmp/sheet_wt_sun_19.3.png` | GREAT: violet sky over an orange band shrinking to a red afterglow under navy with stars |
+| Twilight sky, away from the sun | `after/tw/wt_away_19.{0,3,6}.png` | GREAT: Earth's shadow under the pink Belt of Venus |
+| Golden hour / sunrise exposure | `after/tw/wt_sun_18.6.png`, `wt_away_18.6.png`, `dn_dawn.png` | GREAT: no white field, orange cloud rims, silhouettes |
+| Zenith (GPU) | `tests/gpu_twilight.rs` | 0.94×, 1.01×, 0.65× of Hulburt at −2.2°, −3.9°, −5.5°; blue-purple |
+| Night background | `after/tw/wt_night_23.png`, `wt_*_21.2.png` | GREAT; cosmetic: the horizon reads (9,5,2) DN, the neutral glow reddened by the horizon transmittance, visible only stretched |
+| Continuity | `/tmp/i12/lapse_after.png`, `lapse_after.gif` (19:24 → 22:36) | GREAT on round 3 (round 1: olive bloom then a snap to black from Bevy's multiple-scattering floor, fixed by the −6° tail; round 2: the same from `sky_gain` amplifying the night 250×, fixed by the dome-total cloud factor) |
+| Clouds in twilight / moonlit | `after/tw/wt_sun_19.3.png`, `wt_sun_21.2.png` | not touched; NOT YET, next item |
+
+Daytime regression check (MAE against before, same frames): every noon and terrain capture ≤ 0.002 except `wt_PartlyCloudy_noon` 0.086 and `wt_Fog_noon` 0.059 — deterministic (after-vs-after 0): a camera in a cloud shadow no longer opens up past the sunlit sky (0.4 stop darker, richer sky), kept and documented. `docs/storm.png` was not regenerated: its change is the flash moment (nondeterministic), not this iteration.
+
+### Verification
+
+- New tests: `tests/gpu_twilight.rs` (3 GPU tests; all three fail on `eaf51e0`: glow 21.9× peak, night floor 0.022, zenith ratio 0.066 against Hulburt's 0.18), `celestial` unit tests for the twilight factor, the disc factor, the glow cap's range and the sky gain once the sun has set.
+- Gates: `cargo build --release`, `cargo test` (all ok, lib 221; `the_lightning_schedule_is_frozen` unchanged), flora/voxel feature tests, `cargo build --examples --all-features`, clippy `-D warnings`, `RUSTDOCFLAGS=-D warnings cargo doc`, wasm32 — clean. GPU, one process per file/module: clouds 5, hydrology 9, imports 1, plugins 1, precipitation 6, readback 1, twilight 3, water 2, weathered 4, wind 2; lib `clouds` 10 + `the_horizon_sky` 1, `terrain` 8, `cover` 7, `dust` 6 — all ok.
+- Performance: no GPU pass added; the sun's shadow cascades are now off below −0.5° (they were on to −2°). `bench_elements` at the default 4K/High and at 1080p could not allocate: another tenant (`VLLM::EngineCore` 15.9 GB + `hs-distill-server` 7.5 GB) held 23.5 of the card's 24 GB. Measured at `ELEMENTS_QUALITY=low ELEMENTS_TERRAIN=none ELEMENTS_PRESET=PartlyCloudy`, 1920×1080, GPU P2 at 1755–1800 MHz logged in the same shell: total min 0.571 ms before, 0.558 ms after; every pass's minimum within 0.006 ms.
+- `lake` example: out of GPU memory in the same shared-memory state (environment, not a defect).
+
+### Top 5 remaining items, ranked
+
+1. **Clouds in twilight and moonlight**: post-sunset cumulus are flat neutral grey (no warm underside for the first degrees, no sky tint), and moonlit cloud edges form a light rim around a dark core against the now-dark sky (`pick_light` hands over at −4°; `cloud_ambient` tint).
+2. **A view-dependent exposure cap**: the glow cap ignores where the camera looks, so a camera facing away from a low sun is up to ~2.5 stops darker than the illuminance alone (`docs/dawn.png`); meter the brightest sky in the frame (Patry's screen highlights).
+3. **Flat terrain shading** (runner-up): `hills` reads uniform green at noon, `mountains` pale at 16 h.
+4. **Night thunderstorm rain** (`storm.png`): flash-lit streaks read as white static over a black sky.
+5. **Save/restore of the GPU layers** (carried) and the cosmetic set (`STRIKE_LEAD`, sparse roof splashes, nadir foam, flood marker, erosion faceting, status-line clipping, the composite's pillar edge step).
