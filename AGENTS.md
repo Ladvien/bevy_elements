@@ -42,7 +42,7 @@ No system is implemented without its `docs/research/<system>.md`, committed firs
 - **WebGPU limits.** Storage textures are write-only `rgba16float`/`rgba8unorm`, at most 4 per stage; ping-pong pairs, no read_write textures. Simulation state lives in storage buffers.
 - Close any Bevy app you launch for a test.
 - Do not hard-wrap markdown.
-- **Never judge an image yourself.** Delegate visual judgment to the `screenshot-reviewer` agent (pinned to Opus 5.5, `openrouter/anthropic/claude-opus-5.5`; it ends every review with `VERDICT: GREAT`, `NOT YET` or `FAIL`, and only GREAT ships).
+- **Judge images yourself, as a hostile art director.** Read the captures and zoomed crops directly; write the critique (file, region, severity) before the verdict `GREAT`, `NOT YET` or `FAIL`. Only GREAT ships; "fine", "acceptable" and "good" are NOT YET.
 
 ## Bevy 0.20 traps found here
 

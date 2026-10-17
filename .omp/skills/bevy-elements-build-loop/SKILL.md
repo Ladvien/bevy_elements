@@ -1,11 +1,13 @@
 ---
 name: bevy-elements-build-loop
-description: "Run one iteration of the bevy_elements improvement loop: capture every feature from many angles, have the Opus 5.5 screenshot-reviewer judge it, pick the single most valuable improvement for a game developer, research it in home-still, implement it, and ship it only when the reviewer says GREAT and the benchmark holds. Commits and pushes; never bumps the version or publishes. Use when asked to iterate, advance, or build out bevy_elements. Run from the repo root."
+description: "Run one iteration of the bevy_elements improvement loop: capture every feature from many angles, inspect and judge the images yourself as a hostile art director, pick the single most valuable improvement for a game developer, research it in home-still, implement it, and ship it only on a written critique, a GREAT verdict and a clean benchmark. Commits and pushes; never bumps the version or publishes. Use when asked to iterate, advance, or build out bevy_elements. Run from the repo root."
 ---
 
 One run of this skill is one iteration of a long-running loop on bevy_elements, a Bevy 0.20 crate for living environments (sky, weather, terrain, water, sand, snow) that ships in a real game. Do ONE improvement per iteration, the single most valuable one from a game developer's point of view, finish it completely, then stop.
 
 This crate must be performant AND beautiful. Both are gates: a feature that is fast but merely "fine" looking is not done, and a gorgeous feature that blows the frame budget is not done.
+
+You do all the work yourself, including looking at the images and judging them. Do not delegate visual review.
 
 Extra instructions for this run (a focus such as "clouds only") come from the invoking prompt: `/elements-loop <focus>` or the text after the skill name. They override the choice of item in section 4, not the gates.
 
@@ -47,22 +49,21 @@ xvfb-run -a -s "-screen 0 1920x1080x24" env ELEMENTS_FRAMES=600 ELEMENTS_SHOT=/t
 
 Every capture carries the harness's status band in its top ~56 rows (preset, cover, visibility, wind, sun and moon). Keep it in full frames, where it names the weather state; crop below it when judging horizons. Launch long capture scripts as their own bash call with `timeout: 0`; never poll.
 
-## 3. Inspect closely (the reviewer judges; you prepare the evidence)
+## 3. Inspect closely (you judge the images yourself)
 
-All visual judgment goes to the `screenshot-reviewer` agent, pinned to Opus 5.5 (`openrouter/anthropic/claude-opus-5.5`, `~/.omp/agent/agents/screenshot-reviewer.md`). Never judge images yourself. You prepare what it sees:
+You do all the work yourself, including looking at the images and judging them. Do not delegate visual review. Look hard: read each image with `read` (it decodes PNGs inline) and zoom in on every feature.
 
-- Zoom in on every feature: crop and upscale (nearest-neighbour, 2x-4x) the critical regions, each from several angles: `magick in.png -crop WxH+X+Y +repage -filter point -resize 400% out.png`.
-- Use OpenCV or Pillow where useful (not installed system-wide; run scripts with `uv run --no-project --with opencv-python-headless --with pillow python script.py`): crops, side-by-side and difference images, contrast stretches, histograms or gradient plots for banding, edge maps for seams and aliasing, per-frame diffs for flicker and ghosting.
-- Always include at least one actual-resolution full frame, because a crop can pass while the whole looks wrong.
+- Crop and upscale (nearest-neighbour, 2x-4x) the critical regions, each from several angles: `magick in.png -crop WxH+X+Y +repage -filter point -resize 400% out.png`.
+- Use OpenCV or Pillow where useful (not installed system-wide; run scripts with `uv run --no-project --with opencv-python-headless --with pillow python script.py`): crops, side-by-side and difference images, contrast stretches, histograms or gradient plots for banding, edge maps for seams and aliasing, per-frame diffs for flicker and ghosting. Quote pixel values when a number settles it (`magick file.png -crop 1x400+X+Y +repage txt:`).
+- Always view at least one actual-resolution full frame, because a crop can pass while the whole looks wrong.
 - Cover, at minimum: horizon, sun and moon discs, star field, atmosphere gradient, cloud edges and shadows, light shafts, precipitation against dark and bright backgrounds, water surface, foam and shoreline, terrain blend seams, snow edges, CDLOD transitions, fog against geometry.
-- Batch related crops into one reviewer call; send frames in sequence order for temporal checks. Opus 5.5 is $4 / $20 per 1M tokens on OpenRouter and image-heavy reviews add up, so batch rather than send one image per call. Up to two reviewer tasks may run at once.
-- Give the reviewer, for each image: what it shows (example, preset, hour, camera), which inventory element it belongs to, its target from the research note's `Validation targets`, and which image is before or after.
+- For temporal features, step through frames in sequence order.
 
-Record the reviewer's concrete findings (file, region, severity, evidence), scores and verdict, not impressions.
+Write down concrete findings with locations (file and region `x,y,w,h` or pixel coordinates) and severity (blocker / noticeable / cosmetic), not impressions: banding, seams, popping, flicker, ghosting, aliasing, clipping, wrong colour, flat lighting, unreadable detail. Judge beauty separately from correctness: composition, colour harmony, contrast, depth cues, lighting realism, atmosphere. Keep the findings in `/tmp/iN/findings.md`; they feed section 4 and the log.
 
 ## 4. Pick the single most valuable item
 
-Rank candidates from the reviewer's findings, the loop log's backlog and the extra instructions, always asking what matters most to a game developer who will ship this:
+Rank candidates from your findings, the loop log's backlog and the extra instructions, always asking what matters most to a game developer who will ship this:
 
 1. Visible artifacts or physically wrong results (banding, seams, popping, flicker, energy blowouts, wrong sky for a date and time).
 2. Features that look flat, dull or unconvincing next to what shipping games achieve. Beauty gaps rank here, not last.
@@ -97,10 +98,15 @@ Every feature gets researched, new or improved, with no exceptions.
 
 ## 7. Verify and sign off: it must look GREAT
 
+You are grading your own work, so grade it as a hostile art director would.
+
 - Rebuild the examples, re-capture the same scenes, seeds, clocks, cameras and angles as section 2 under `/tmp/iN/after/`, and rebuild the same zoomed evidence set.
-- Send before/after pairs to `screenshot-reviewer`. Every feature you touched needs `VERDICT: GREAT` across all angles and the temporal sequence.
-- NOT YET and FAIL are a loop-back: apply the reviewer's specific changes, rebuild, re-capture, re-review. Do not argue a verdict down or reword a request until it passes.
-- After 5 failed rounds on one feature, stop: log the blocker, the reviewer's remaining notes and your best hypothesis, and revert to the last GREAT state rather than shipping something weaker.
+- View before and after side by side, every angle, and the temporal sequence frame by frame.
+- Write the critique BEFORE the verdict (`/tmp/iN/critique.md`): list every flaw you can find in the "after", at zoom and at full frame, and compare against the research note's `What great looks like` and `Validation targets`. Look for what is wrong, not for confirmation that your change worked.
+- Then give each feature exactly one verdict: GREAT, NOT YET or FAIL. GREAT means you would be proud to ship it in a showcase. "Fine", "acceptable" and "good" are NOT YET.
+- On NOT YET or FAIL, write the specific changes that would move it to GREAT, apply them, rebuild, re-capture and re-judge. Do not lower the bar to pass.
+- Every feature you touched needs GREAT across all angles and the temporal sequence.
+- After 5 failed rounds on one feature, stop: log the blocker, the remaining flaws and your best hypothesis, and revert to the last GREAT state rather than shipping something weaker.
 - Performance gate, equal in weight to the visual one: benchmark with `bench_elements` and report the minimum over the pass's `Diagnostic::values()`, with `nvidia-smi --query-gpu=pstate,clocks.gr --format=csv,noheader -lms 1000` logged in the same shell. An unloaded GPU under Xvfb reads 5-10x slow, so never compare across machines or loads. Compare against the previous iteration's logged numbers; no regression without a logged, justified trade.
 - Run the full gate (the `AGENTS.md` set, which covers features and GPU modules):
   1. `cargo build --release && cargo test && cargo build --examples --all-features`
@@ -120,7 +126,7 @@ Start only after section 7 passes. Never bump the version, tag or publish; relea
 3. Log: append `## Iteration N — <date> — <title>` to `docs/loop-log.md`:
    - what changed and why it ranked first (and the runner-up)
    - the sources used (home-still stems or links)
-   - reviewer verdicts and scores per angle, with evidence filenames
+   - your critique and verdict per angle, with evidence filenames
    - benchmark numbers, before and after, with clocks
    - the commit hash, and any sibling-repo commits
    - the top 5 remaining items, ranked, for the next iteration
@@ -131,5 +137,5 @@ Start only after section 7 passes. Never bump the version, tag or publish; relea
 ## Rules
 
 - One improvement per iteration, fully finished: researched, implemented, GREAT-signed-off, benchmarked, gated, committed, documented, logged.
-- No feature ships without a GREAT verdict from the Opus 5.5 reviewer and a clean performance check.
-- If blocked, log the blocker and pick the next item. A failed gate or a visible defect is not a blocker: fix it. A failed push or merge, or a reviewer that cannot run (provider error, out of credits), is: log the exact error and stop. Never force-push.
+- No feature ships without a written critique, a GREAT verdict and a clean performance check.
+- If blocked, log the blocker and pick the next item. A failed gate or a visible defect is not a blocker: fix it. A failed push or merge is: log the exact error and stop. Never force-push.
