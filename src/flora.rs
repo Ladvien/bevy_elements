@@ -38,6 +38,8 @@ pub struct ElementsFloraPlugin;
 impl Plugin for ElementsFloraPlugin {
     fn build(&self, app: &mut App) {
         ensure_core(app);
+        // `drive_wind` reads gusts with or without `WindPlugin`; a no-op when it registered them.
+        app.add_message::<WindGust>();
         app.add_systems(
             Update,
             (drive_wind, drive_season, drive_ground).after(ElementsSystems::Readback),
@@ -119,4 +121,23 @@ fn drive_ground(
         None => commands.remove_resource::<FloraGround>(),
     }
     *inserted = key;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_flora_hook_runs_without_the_wind_plugin() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, ElementsFloraPlugin))
+            .init_resource::<FloraWind>()
+            .insert_resource(WindState {
+                prevailing: Vec2::Y,
+                ..default()
+            });
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<FloraWind>().direction, Vec2::Y);
+    }
 }

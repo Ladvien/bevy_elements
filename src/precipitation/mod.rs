@@ -344,7 +344,9 @@ fn update_precipitation(
     state.snow = counts.snow;
     state.dust = counts.dust;
     gpu.drawn = counts.total();
-    gpu.active = dt > 0.0 && counts.total() > 0;
+    // A paused clock (dt = 0) still dispatches: the particles hold still and stay drawn, as the
+    // clouds do.
+    gpu.active = counts.total() > 0;
     if !gpu.active {
         return;
     }

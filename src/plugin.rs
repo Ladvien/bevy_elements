@@ -87,9 +87,10 @@ pub enum ElementsSystems {
 /// `DepthPrepass`, `VolumetricFog`, `DistanceFog` and `Exposure`, and spawns one Earth
 /// `Atmosphere` if the world has none. It always sets `Msaa::Off` (a `Camera3d` requires `Msaa`,
 /// so there is no "absent" to fill): the cloud pass reads the non-multisampled depth prepass.
-/// With more than one `ElementsCamera` the one with the lowest `Camera::order` is followed and a
-/// warning is logged once. With none, the camera-relative simulations (wind, fog volume, clouds)
-/// idle while the clock, weather and gameplay queries keep running.
+/// With more than one active `ElementsCamera` the one with the lowest `Camera::order` is followed
+/// and a warning is logged once; inactive cameras (`Camera::is_active == false`) are ignored. With
+/// none, the camera-relative simulations (wind, fog volume, clouds) idle while the clock, weather
+/// and gameplay queries keep running.
 #[derive(Component, Clone, Copy, Debug, Reflect)]
 #[require(Hdr)]
 pub struct ElementsCamera {
@@ -317,6 +318,9 @@ fn follow_camera(
     let mut count = 0usize;
     let mut best: Option<(Entity, isize, Vec3)> = None;
     for (entity, camera, transform) in &cameras {
+        if !camera.is_active {
+            continue;
+        }
         count += 1;
         if best.is_none_or(|(_, order, _)| camera.order < order) {
             best = Some((entity, camera.order, transform.translation()));
@@ -324,7 +328,7 @@ fn follow_camera(
     }
     if count > 1 && !*warned {
         warn!(
-            "{count} entities carry ElementsCamera; the environment follows the one with the lowest Camera::order"
+            "{count} active entities carry ElementsCamera; the environment follows the one with the lowest Camera::order"
         );
         *warned = true;
     }
@@ -343,5 +347,36 @@ fn follow_camera(
             view.entity = None;
             view.velocity = Vec3::ZERO;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_inactive_camera_is_not_followed() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, ElementsCorePlugin));
+        // The inactive camera has the lower order, so it would win if it were counted.
+        app.world_mut().spawn((
+            Camera {
+                order: -1,
+                is_active: false,
+                ..default()
+            },
+            ElementsCamera::default(),
+            GlobalTransform::from_xyz(100.0, 0.0, 0.0),
+        ));
+        app.world_mut().spawn((
+            Camera::default(),
+            ElementsCamera::default(),
+            GlobalTransform::from_xyz(5.0, 2.0, 0.0),
+        ));
+        app.update();
+        assert_eq!(
+            app.world().resource::<ElementsView>().position,
+            Vec3::new(5.0, 2.0, 0.0)
+        );
     }
 }

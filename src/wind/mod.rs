@@ -449,13 +449,15 @@ fn read_wind(grid: Option<Res<WindGpu>>, mut readbacks: Readbacks) {
         let Some(cells) = decode::<[f32; 4]>(bytes) else {
             return;
         };
-        if cells.len() != (size.x * size.y * size.z) as usize {
+        // The readback pool can hand back a larger buffer than asked for: decode only the grid.
+        let n = (size.x * size.y * size.z) as usize;
+        if cells.len() < n {
             return;
         }
         snapshot.wind = Some(WindSnapshot {
             origin_cell,
             size,
-            data: cells.into_iter().map(Vec4::from_array).collect(),
+            data: cells[..n].iter().copied().map(Vec4::from_array).collect(),
         });
     });
 }
