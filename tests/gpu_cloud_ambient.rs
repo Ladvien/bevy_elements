@@ -1,8 +1,9 @@
-//! The clouds' ambient takes the colour of the light it stands for (`docs/research/clouds.md`
-//! Deviation 30, Validation 22): the sky's, plus the sunlight the cloud has scattered out of the
-//! beam. The shaded deck overhead under `Overcast` is read from a linear `Rgba16Float` target with
-//! no tonemapping, with the camera's atmosphere environment map (the sky the ambient reads) and
-//! without it (the neutral white ambient).
+//! The clouds take the colour of the light that fills them (`docs/research/clouds.md`
+//! Deviation 30, Validation 22; `docs/research/cloud-lighting.md` Deviation 3): the sunlight
+//! their diffusion carries and the sky's ambient in the sky's colour. The shaded deck overhead
+//! under `Overcast` is read from a linear `Rgba16Float` target with no tonemapping, with the
+//! camera's atmosphere environment map (the sky the ambient reads) and without it (the neutral
+//! white ambient).
 //!
 //! Needs a GPU: `cargo test --test gpu_cloud_ambient -- --ignored`.
 
@@ -109,11 +110,11 @@ fn purpleness(c: Vec3) -> f32 {
 
 /// In civil twilight (20:12 on the solstice) the purple light makes the deck purpler than the
 /// neutral ambient leaves it: with the sun's light off the clouds, the diffuse light is the
-/// sky's. At noon the inside of a thick deck is lit by the sunlight the cloud above has
-/// scattered, not by the blue sky, so it stays within 10 % of the neutral deck's blue/red but no
-/// less blue (the sky adds its share). Measured: red/green 1.26 against 1.02 at dusk; blue/red
-/// 0.915 against 0.868 at noon (1.05×; an ambient in the sky's colour alone gave 1.27×, a blue
-/// deck). The build before Deviation 30 gives the same deck with and without the map and fails
+/// sky's. At noon the inside of a thick deck is lit mostly by the sunlight its diffusion
+/// carries, so the sky's ambient makes it bluer than the neutral deck but well short of an
+/// ambient alone (1.27×, a blue deck). Measured: red/green 1.26 against 1.02 at dusk; blue/red
+/// 0.892 against 0.797 at noon (1.12×; 1.05× when the ambient also stood in for the scattered
+/// sun). The build before Deviation 30 gives the same deck with and without the map and fails
 /// both.
 #[test]
 #[ignore = "needs a GPU"]
@@ -127,7 +128,7 @@ fn the_deck_takes_the_colour_of_its_light() {
     );
     let ratio = blueness(noon) / blueness(noon_neutral);
     assert!(
-        ratio > 1.0 && ratio < 1.1,
+        ratio > 1.0 && ratio < 1.2,
         "noon: {noon} against {noon_neutral} (blue/red ratio {ratio})"
     );
 }

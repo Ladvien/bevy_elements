@@ -412,10 +412,10 @@ fn hg(cos_t: f32, g: f32) -> f32 {
     return (1.0 - g2) / (4.0 * PI * pow(1.0 + g2 - 2.0 * g * cos_t, 1.5));
 }
 
-/// Dual-lobe phase of octave `n` of the multiple-scattering sum: both lobes' g scaled by
-/// c^n (`c_pow`), forward lobe weighted 0.7.
-fn phase_octave(cos_t: f32, c_pow: f32) -> f32 {
-    return 0.7 * hg(cos_t, 0.8 * c_pow) + 0.3 * hg(cos_t, -0.5 * c_pow);
+/// The single-scattering dual lobe: forward lobe (g = 0.8) weighted 0.7, backward lobe
+/// (g = −0.5) weighted 0.3.
+fn phase(cos_t: f32) -> f32 {
+    return 0.7 * hg(cos_t, 0.8) + 0.3 * hg(cos_t, -0.5);
 }
 
 /// Visibility of the light from a point of altitude `h` whose local vertical makes cosine `mu`
