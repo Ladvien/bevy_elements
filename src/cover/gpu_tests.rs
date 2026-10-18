@@ -902,7 +902,7 @@ fn gpu_a_restored_snowpack_seeds_the_maps() {
     // 20 mm of SWE at 200 kg/m³: 10 cm.
     sim.app
         .world_mut()
-        .insert_resource(SurfaceWeathering::restored(20.0, 200.0, 0.6));
+        .insert_resource(SurfaceWeathering::with_snowpack(0.1, 200.0, 0.6));
     run_until(&mut sim.app, "the seeded map's readback", |app| {
         app.world_mut()
             .run_system_once(|env: Environment| env.snow_depth(Vec2::new(20.0, 20.0)))

@@ -636,7 +636,7 @@ fn spawn_snow_volume(app: &mut App, transform: Transform) -> Entity {
 /// above the half-voxel (0.25 m) swap threshold of the test layout even halved by a scale of 2.
 fn snowy_app() -> App {
     let mut app = ground_app(false);
-    app.insert_resource(SurfaceWeathering::restored(120.0, 200.0, 0.0));
+    app.insert_resource(SurfaceWeathering::with_snowpack(0.6, 200.0, 0.0));
     app
 }
 

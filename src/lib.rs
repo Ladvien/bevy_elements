@@ -99,7 +99,7 @@ pub use hydrology::{
 pub use cover::{CoverState, CoverStats, GroundCoverPlugin, SnowSettings, WetnessSettings};
 
 // Trails: footprints, ruts and tracks in snow, sand and mud.
-pub use trails::{Imprint, TrailSettings, TrailState, TrailsPlugin};
+pub use trails::{Imprint, TrailGround, TrailSettings, TrailState, TrailsPlugin};
 
 // Waves: ripples and wakes from bodies in the water.
 pub use waves::{WaterContact, WaveSettings, WaveState, WavesPlugin};

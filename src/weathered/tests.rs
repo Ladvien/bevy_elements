@@ -343,6 +343,11 @@ fn the_globals_pack_as_the_shader_struct() {
         streak_phase: 14.0,
         light_direction: Vec3::new(15.0, 16.0, 17.0),
         units_per_metre: 3.2808,
+        snow_depth_m: 0.25,
+        trail_texel_m: 0.05,
+        trail_texels: 1024,
+        trail_centre: Vec2::new(18.0, 19.0),
+        trail_direct_share: 0.75,
     };
     assert_eq!(
         globals.pack(),
@@ -353,16 +358,20 @@ fn the_globals_pack_as_the_shader_struct() {
             [12.0, 13.0, 14.0, 0.0],
             [15.0, 16.0, 17.0, 0.0],
             [3.2808, 0.0, 0.0, 0.0],
+            [0.05, 1024.0, 1.0, crate::trails::model::MARCH_BOUND_M],
+            [0.75, 18.0, 19.0, 0.25],
         ]
     );
     let source = include_str!("../surface_cover.wesl");
     let body = &source[source.find("struct ElementsGlobals").expect("the struct")..];
     let body = &body[..body.find("\n}").expect("its end")];
-    assert_eq!(body.matches("vec4<f32>,").count(), 6, "six vec4 fields");
-    // Without clouds the mean transmittance is 1 and no map is bound.
-    let none = ElementsGlobals::gather(None, &Weather::default(), None, 0.0, 1.0);
+    assert_eq!(body.matches("vec4<f32>,").count(), 8, "eight vec4 fields");
+    // Without clouds the mean transmittance is 1 and no map is bound; without trails the window
+    // is not bound.
+    let none = ElementsGlobals::gather(None, &Weather::default(), None, None, 0.0, 1.0);
     assert_eq!(none.mean_transmittance, 1.0);
     assert!(!none.shadow_enabled);
+    assert_eq!(none.pack()[6][2], 0.0);
 }
 
 /// Wetness Validation 10 (declaration level; `tests/gpu_weathered.rs` checks the real layout):

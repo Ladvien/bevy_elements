@@ -94,18 +94,34 @@ impl SurfaceWeathering {
         self.snow_water_mm
     }
 
-    /// A pack as read back from a save: `snow_water_mm` at `density_kg_m3`, `wetness`.
-    #[cfg(test)]
-    pub(crate) fn restored(snow_water_mm: f32, density_kg_m3: f32, wetness: f32) -> Self {
-        let mut pack = Self {
-            wetness,
-            snow_water_mm,
-            snow_density: density_kg_m3,
-            restored: true,
-            ..Self::default()
+    /// A pack a game inserts: `snow_depth_m` of snow at `density_kg_m3` (fresh snow about 100,
+    /// settled 300) on ground `wetness` (0–1) wet, for a scene that starts under snow. It is
+    /// taken as a pack read back from a save: it continues from the first frame's clock, and with
+    /// a terrain the ground-cover maps are seeded from it. Non-finite or negative values read
+    /// as none; the density is clamped to 100–917 kg/m³ (fresh snow to ice).
+    pub fn with_snowpack(snow_depth_m: f32, density_kg_m3: f32, wetness: f32) -> Self {
+        let finite = |v: f32| if v.is_finite() { v.max(0.0) } else { 0.0 };
+        let density = if density_kg_m3.is_finite() {
+            density_kg_m3.clamp(NEW_SNOW_DENSITY, 917.0)
+        } else {
+            NEW_SNOW_DENSITY
         };
-        pack.snow_depth_m = pack.pack_seed().x;
-        pack
+        let depth = finite(snow_depth_m);
+        let c = (depth / FULL_COVER_DEPTH_M).clamp(0.0, 1.0);
+        Self {
+            wetness: finite(wetness).min(1.0),
+            snow_cover: c * c * (3.0 - 2.0 * c),
+            snow_depth_m: depth,
+            snow_water_mm: depth * density,
+            snow_density: density,
+            last_hours: None,
+            restored: true,
+        }
+    }
+
+    /// Bulk density of the snowpack, kg/m³.
+    pub(crate) fn snow_density(&self) -> f32 {
+        self.snow_density.max(NEW_SNOW_DENSITY)
     }
 
     /// Whether this was read back from a save and has not been stepped since.

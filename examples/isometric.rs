@@ -16,6 +16,13 @@
 //! ambient and a plain clear colour, no physical sky, fog or exposure from the crate, and the
 //! crate's weather on top (`ElementsCamera::bare()` with `msaa_off`, `CelestialSettings` off).
 //! For a still: `ELEMENTS_PRESET=Rain ELEMENTS_FRAMES=600 ELEMENTS_SHOT=/tmp/x.png`.
+//!
+//! The town's ground is the game's own (a plain box in `WeatheredMaterial`, no crate `Terrain`):
+//! a `TrailGround` at y = 0 and the ground's material `with_trails()` let the walker's feet press
+//! prints into it (`docs/research/trails-game-ground.md`), in a window of 8 cm texels wide enough
+//! for the view. `ELEMENTS_SNOWPACK=0.15` starts the scene under that many metres of snow
+//! (`SurfaceWeathering::with_snowpack`), e.g. with `ELEMENTS_PRESET=Clear ELEMENTS_HOUR=7.5` for a
+//! dawn after a snowfall.
 
 mod common;
 
@@ -40,6 +47,12 @@ const BACK_M: f32 = 1500.0;
 /// The walker's loop around the town, m, and its speed, m/s.
 const LOOP_RADIUS_M: f32 = 14.0;
 const WALK_MS: f32 = 1.4;
+/// The walker's gait: a step every half second, the feet 11 cm either side of the line, each
+/// sole an ellipse 0.10 × 0.26 m under 760 N (77.5 kg on one foot).
+const STEP_S: f32 = 0.5;
+const STEP_WIDTH_M: f32 = 0.11;
+const FOOT_HALF: Vec2 = Vec2::new(0.05, 0.13);
+const FOOT_LOAD_N: f32 = 760.0;
 
 fn env_f64(name: &str) -> Option<f64> {
     std::env::var(name).ok().and_then(|v| v.parse().ok())
@@ -65,6 +78,13 @@ fn main() {
     app.add_plugins((DefaultPlugins, ElementsPlugins, ExampleHarness))
         .insert_resource(clock)
         .insert_resource(Climate::temperate())
+        // The ground is the game's: trails press into it without a crate terrain, in a window
+        // of 8 cm texels (82 m across) that covers the view.
+        .insert_resource(TrailGround::flat(0.0))
+        .insert_resource(TrailSettings {
+            texel_m: Some(env_f64("ELEMENTS_TRAIL_TEXEL").unwrap_or(0.08) as f32),
+            ..default()
+        })
         .insert_resource(CelestialSettings {
             lights: !game_look(),
             sky: !game_look(),
@@ -72,8 +92,11 @@ fn main() {
         .add_systems(Startup, setup)
         .add_systems(
             Update,
-            (walk, follow).chain().before(ElementsSystems::Clock),
+            (walk, step, follow).chain().before(ElementsSystems::Clock),
         );
+    if let Some(depth) = env_f64("ELEMENTS_SNOWPACK") {
+        app.insert_resource(SurfaceWeathering::with_snowpack(depth as f32, 150.0, 0.0));
+    }
     if fixed_preset().is_none() {
         app.add_systems(Update, cycle.before(ElementsSystems::Clock));
     }
@@ -106,13 +129,52 @@ fn cycle(
 #[derive(Component)]
 struct Walker;
 
+/// A foot of the walker: left (-1) or right (+1).
+#[derive(Component)]
+struct Foot(f32);
+
+/// A point on the walker's loop at arc length `s`, and the direction along it.
+fn on_loop(s: f32) -> (Vec2, Vec2) {
+    let (sin, cos) = (s / LOOP_RADIUS_M).sin_cos();
+    (LOOP_RADIUS_M * Vec2::new(cos, sin), Vec2::new(-sin, cos))
+}
+
 /// Walk the loop around the town.
 fn walk(time: Res<Time>, mut walker: Query<&mut Transform, With<Walker>>) {
-    let angle = time.elapsed_secs() * WALK_MS / LOOP_RADIUS_M;
+    let (at, along) = on_loop(time.elapsed_secs() * WALK_MS);
     for mut t in &mut walker {
-        let at = Vec3::new(angle.cos(), 0.0, angle.sin()) * LOOP_RADIUS_M;
-        let heading = Vec3::new(-angle.sin(), 0.0, angle.cos());
-        *t = Transform::from_translation(at + Vec3::Y * 0.9).looking_to(heading, Vec3::Y);
+        *t = Transform::from_xyz(at.x, 0.9, at.y)
+            .looking_to(Vec3::new(along.x, 0.0, along.y), Vec3::Y);
+    }
+}
+
+/// The feet: each is planted for a step (5 cm below the snow's surface, so it presses) and
+/// swings 30 cm up through the next.
+fn step(
+    time: Res<Time>,
+    snow: Option<Res<SurfaceWeathering>>,
+    mut feet: Query<(&Foot, &mut Transform)>,
+) {
+    let t = time.elapsed_secs();
+    let surface = snow.map_or(0.0, |s| s.snow_depth_m);
+    let stride = WALK_MS * STEP_S;
+    for (foot, mut transform) in &mut feet {
+        // Left plants on even steps, right on odd ones, half a step ahead of the body.
+        let offset = if foot.0 < 0.0 { 0.0 } else { 1.0 };
+        let phase = t / STEP_S + offset;
+        let index = (phase / 2.0).floor();
+        let within = phase - 2.0 * index;
+        let plant = (2.0 * index - offset) * stride + 0.5 * stride;
+        let planted = within < 1.0;
+        let (at, along) = on_loop(if planted {
+            plant
+        } else {
+            plant + 2.0 * stride * (within - 1.0)
+        });
+        let xz = at + Vec2::new(along.y, -along.x) * foot.0 * STEP_WIDTH_M;
+        let lift = if planted { -0.05 } else { 0.3 };
+        *transform = Transform::from_xyz(xz.x, surface + lift, xz.y)
+            .looking_to(Vec3::new(along.x, 0.0, along.y), Vec3::Y);
     }
 }
 
@@ -227,6 +289,9 @@ fn setup(
             Transform::from_xyz(LOOP_RADIUS_M, 0.9, 0.0),
         ))
         .id();
+    for side in [-1.0, 1.0] {
+        commands.spawn((Foot(side), Imprint::new(FOOT_HALF, FOOT_LOAD_N)));
+    }
     let zoom = env_f64("ELEMENTS_ZOOM").unwrap_or(40.0) as f32;
     let mut camera = commands.spawn((
         Camera3d::default(),
@@ -288,7 +353,15 @@ fn setup(
         meshes: &mut meshes,
         materials: &mut materials,
     };
-    let ground = b.material(Color::srgb(0.30, 0.34, 0.22), 0.95, 0.0);
+    // The game's own ground draws the trails pressed into it.
+    let ground = b.materials.add(WeatheredMaterial {
+        base: StandardMaterial {
+            base_color: Color::srgb(0.30, 0.34, 0.22),
+            perceptual_roughness: 0.95,
+            ..default()
+        },
+        extension: WeatheredExtension::default().with_trails(),
+    });
     b.commands.spawn((
         Mesh3d(b.meshes.add(Cuboid::new(600.0, 0.2, 600.0))),
         MeshMaterial3d(ground),

@@ -14,6 +14,7 @@ use crate::cover::CoverSnapshot;
 use crate::hydrology::{WaterDepthSnapshot, WaterVelocitySnapshot};
 use crate::plugin::ElementsUnits;
 use crate::terrain::{TerrainLeaves, TerrainSnapshot};
+use crate::trails::TrailSnapshot;
 use crate::wind::{WindSnapshot, WindState};
 
 /// CPU copies of GPU simulation state, filled by the throttled readback
@@ -34,6 +35,8 @@ pub struct EnvironmentSnapshot {
     pub(crate) water_velocity: Option<WaterVelocitySnapshot>,
     /// The snow depth and wetness at the last readback, if a terrain with ground cover exists.
     pub(crate) cover: Option<CoverSnapshot>,
+    /// The trail field's deepest points at the last readback, if trails run.
+    pub(crate) trails: Option<TrailSnapshot>,
     /// Real time of the last completed readback.
     pub(crate) updated_at: Option<Duration>,
 }
@@ -177,6 +180,20 @@ impl Environment<'_> {
             .cover
             .as_ref()
             .and_then(|c| c.wetness_at(self.xz_to_metres(position)))
+    }
+
+    /// How far the ground at `position` (world XZ) is pressed below its undisturbed surface by
+    /// [`Imprint`](crate::Imprint)s, m: the deepest point within a readback cell around it (two
+    /// texels, 10 cm at High), `Some(0.0)` on untouched ground or a rim, `None` outside the
+    /// trail window (the [`ElementsFocus`](crate::ElementsFocus)'s, else the camera's
+    /// surroundings: 51 m across at High) and before the first readback. Up to one readback
+    /// interval old. A footprint in snow reads its depth until new snow fills it, so a game can
+    /// tell where something walked and how long ago it snowed.
+    pub fn trail_depth(&self, position: Vec2) -> Option<f32> {
+        self.snapshot
+            .trails
+            .as_ref()
+            .and_then(|t| t.depth_at(self.xz_to_metres(position)))
     }
 
     /// Direct transmittance of the clouds toward the sun (the moon once the sun is 4° below the

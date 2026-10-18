@@ -58,7 +58,7 @@ pub struct TerrainMaterialParams {
     /// w the parallax march's bound on |h| (m).
     pub(crate) trail: Vec4,
     /// x: the share of the light on a horizontal surface carried by the sun or moon's beam, which
-    /// a trail's self-shadow removes.
+    /// a trail's self-shadow removes. yz: the window's centre (`TrailState::centre`).
     pub(crate) trail_light: Vec4,
     /// World units to the metre ([`ElementsUnits`](crate::ElementsUnits)): the vertex and
     /// fragment stages divide the positions Bevy gives them by it and multiply the ones they
@@ -306,12 +306,13 @@ fn cover_inputs(
 }
 
 /// The trail part of both uniforms: the window (texel edge, texels a side, 1 when bound, the
-/// march's bound on |h|), the light's direct share, and the field.
+/// march's bound on |h|), the light's direct share and the window's centre (metre-frame XZ),
+/// and the field.
 fn trail_inputs(trails: Option<&TrailState>, live: bool) -> (Vec4, Vec4, Option<Handle<Image>>) {
     match trails {
         Some(t) if live => (
             Vec4::new(t.texel_m, t.texels as f32, 1.0, MARCH_BOUND_M),
-            Vec4::new(t.direct_share, 0.0, 0.0, 0.0),
+            Vec4::new(t.direct_share, t.centre.x, t.centre.y, 0.0),
             Some(t.field.clone()),
         ),
         _ => (Vec4::ZERO, Vec4::ZERO, None),
