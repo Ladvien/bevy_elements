@@ -247,7 +247,10 @@ fn the_shadow_map_and_the_sun_factor_follow_the_clouds() {
         "Clear: dark {clear_dark:.3}, factor {clear_factor:.3}, mean T {:.3}",
         mean(&clear)
     );
-    assert!((0.01..=0.12).contains(&clear_dark), "{clear_dark}");
+    // The 8 km window holds only a few cumulus blobs at cover 0.05, so the fraction here only
+    // says that the clear sky has some cloud; the fraction over the whole field is the CPU
+    // mirror's `the_cumulus_shadow_covers_what_the_weather_says`.
+    assert!((0.001..=0.12).contains(&clear_dark), "{clear_dark}");
     assert!((0.93..=1.0).contains(&clear_factor), "{clear_factor}");
 
     let (overcast, overcast_camera, overcast_sun) =
@@ -320,7 +323,8 @@ fn the_shadow_map_and_the_sun_factor_follow_the_clouds() {
 /// `broken-cloud-light.md` Validation 1: a cloud's shadow over the camera leaves the lights (and
 /// so Bevy's sky, aerial perspective and environment map, which they light) as they are under a
 /// partly cloudy sky; only the surfaces in the shadow darken. The camera is moved between the
-/// darkest and the brightest 70 m of the same field, at most 300 m apart.
+/// darkest and the brightest 164 m of the same field, at most 150 m apart (the 8 km window the
+/// lights average moves with the camera, so a farther move compares different clouds).
 #[test]
 #[ignore = "needs a GPU"]
 fn a_cloud_over_the_camera_leaves_the_lights_alone() {
@@ -332,24 +336,26 @@ fn a_cloud_over_the_camera_leaves_the_lights_alone() {
     let t = shadow_transmittance(&mut app);
     let shadows = app.world().resource::<CloudShadows>().clone();
     let texel = shadows.extent / 1024.0;
+    // 21 × 21 texels (164 m): the cumulus drift a few tens of metres while the test waits, so
+    // both spots must sit well inside their shade or sun.
     let block = |x: usize, y: usize| -> f32 {
         let mut sum = 0.0;
-        for yy in y - 4..=y + 4 {
-            for xx in x - 4..=x + 4 {
+        for yy in y - 10..=y + 10 {
+            for xx in x - 10..=x + 10 {
                 sum += t[yy * 1024 + xx];
             }
         }
-        sum / 81.0
+        sum / 441.0
     };
     let mut pair = None;
-    'search: for y in (400..624).step_by(2) {
-        for x in (400..624).step_by(2) {
-            if block(x, y) > 0.03 {
+    'search: for y in (360..664).step_by(4) {
+        for x in (360..664).step_by(4) {
+            if block(x, y) > 0.05 {
                 continue;
             }
-            for by in (y - 38..=y + 38).step_by(2) {
-                for bx in (x - 38..=x + 38).step_by(2) {
-                    if block(bx, by) > 0.97 {
+            for by in (y - 19..=y + 19).step_by(1) {
+                for bx in (x - 19..=x + 19).step_by(1) {
+                    if block(bx, by) > 0.95 {
                         pair = Some(((x, y), (bx, by)));
                         break 'search;
                     }
@@ -357,7 +363,7 @@ fn a_cloud_over_the_camera_leaves_the_lights_alone() {
             }
         }
     }
-    let ((dx, dy), (bx, by)) = pair.expect("a dark and a sunlit spot within 300 m");
+    let ((dx, dy), (bx, by)) = pair.expect("a dark and a sunlit spot within 150 m");
     let world = |x: usize, y: usize| {
         let at = shadows.origin + (Vec2::new(x as f32, y as f32) + 0.5) * texel;
         Vec3::new(at.x, 6.0, at.y)
@@ -369,8 +375,8 @@ fn a_cloud_over_the_camera_leaves_the_lights_alone() {
         for mut transform in cameras.iter_mut(app.world_mut()) {
             transform.translation = position;
         }
-        // Past the 1 s smoothing.
-        run(app, 240);
+        // Past twice the 1 s smoothing; the shade drifts about 12 m meanwhile.
+        run(app, 120);
         let local = app
             .world_mut()
             .run_system_once(move |env: Environment| env.cloud_shadow_at(position))
@@ -392,8 +398,11 @@ fn a_cloud_over_the_camera_leaves_the_lights_alone() {
         dark_local < 0.2 && lit_local > 0.8,
         "{dark_local} / {lit_local}"
     );
+    // The 8 km window moves with the camera: a 150 m move swaps up to 3.75 % of its area, so the
+    // mean may differ by that much. The camera's own shadow (0 against 1 here) would move the
+    // beam by 40 times as much: before the regional mean, 0.022 in the shade against 0.859.
     assert!(
-        (dark_direct - lit_direct).abs() <= 0.02 * lit_direct,
+        (dark_direct - lit_direct).abs() <= 0.05 * lit_direct,
         "beam {dark_direct} in the shade, {lit_direct} in the sun"
     );
     assert!(

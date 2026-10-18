@@ -5,7 +5,7 @@
 import bevy_render::view::View;
 import bevy_elements::noise::hash31;
 import bevy_elements::clouds::common::{
-    CloudParams, Medium, MAX_MARCH_M, PI, altitude, cloud_medium, coarse_shape,
+    CloudParams, Medium, MAX_MARCH_M, PI, altitude, cloud_medium, coarse_shape, detail_weight,
     ground_before_layer, light_at, phase_octave, ray_dir, sample_transmittance, scene_distance,
     shell_range, slot_offset,
 };
@@ -83,7 +83,7 @@ const MIN_LIGHT_SINE: f32 = 0.1;
 /// Ray elevation (sine) below the horizon over which the far veil fades out.
 const HORIZON_BAND: f32 = 0.03;
 
-fn medium_at(h: f32, xz: vec2<f32>, detail: bool) -> Medium {
+fn medium_at(h: f32, xz: vec2<f32>, detail: f32) -> Medium {
     return cloud_medium(h, xz, detail, params, base_tex, detail_tex, weather_tex, smp_repeat);
 }
 
@@ -104,7 +104,7 @@ fn light_optical_depth(off: vec3<f32>, l: vec3<f32>, cam: vec3<f32>) -> f32 {
         let perp = cos(phi) * e1 + sin(phi) * e2;
         let o = off + l * dist[j] + perp * (CONE_TAN * dist[j]);
         let h = altitude(o.xz, cam.y + o.y, params.camera.w);
-        let m = medium_at(h, cam.xz + o.xz, false);
+        let m = medium_at(h, cam.xz + o.xz, 0.0);
         tau += (1.0 + m.g) * m.sigma * len[j];
     }
     return tau;
@@ -264,6 +264,7 @@ fn cloud_march(@builtin(global_invocation_id) id: vec3<u32>) {
     let dt = max(clamp((t1 - t0) / steps, 25.0, 400.0), (t1 - t0) / (1.5 * steps));
     let jitter = hash31(vec3<i32>(i32(px.x), i32(px.y), i32(frame)));
     let cos_t = dot(dir, l);
+    let detail = detail_weight(dt);
     let powder_weight = clamp(0.5 - 0.5 * cos_t, 0.0, 1.0);
     let sky_e = sky_irradiance();
 
@@ -294,7 +295,7 @@ fn cloud_march(@builtin(global_invocation_id) id: vec3<u32>) {
             }
             continue;
         }
-        var m = medium_at(h, xz, true);
+        var m = medium_at(h, xz, detail);
         // Distant cloud thins out with distance instead of ending in a hard wall at the march
         // limit (Deviation 11 of the research note).
         m.sigma *= 1.0 - smoothstep(FADE_START_M, MAX_MARCH_M, t);

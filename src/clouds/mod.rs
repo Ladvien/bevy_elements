@@ -222,10 +222,11 @@ pub(crate) const SHADOW_COARSE_CELLS: u32 = SHADOW_TEXELS / SHADOW_COARSE_STRIDE
 /// Texels per side of the base and detail noise volumes.
 pub(crate) const NOISE_BASE_TEXELS: u32 = 128;
 pub(crate) const NOISE_DETAIL_TEXELS: u32 = 32;
-/// World size of the noise tiles, m; the cloud drift is wrapped to each so f32 keeps its
-/// precision. The weather field is periodic in its 32 km extent.
-const BASE_TILE_M: f64 = 8192.0;
-const DETAIL_TILE_M: f64 = 1024.0;
+/// World size of the noise tiles, m (`common.wesl`; cumulus-shape.md); the cloud drift is
+/// wrapped to each so f32 keeps its precision. The weather field is periodic in its 32 km
+/// extent.
+const BASE_TILE_M: f64 = 4096.0;
+const DETAIL_TILE_M: f64 = 640.0;
 /// The drift accumulates in f64 modulo a common multiple of the three periods (2²² · 5³).
 const DRIFT_WRAP_M: f64 = 524_288_000.0;
 /// Cloud drift is this multiple of the 10 m wind: the wind at cloud height (log-law 1.86 at

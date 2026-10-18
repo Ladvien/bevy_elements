@@ -1133,3 +1133,53 @@ Hillaire 2016 §4.1.2, §5.9, §5.9.2 (local text); Wenzel 2006 (`s2006-advances
 3. **Buoyancy readback**: publish the wave height under each `WaterContact` so a float can ride the waves (carried).
 4. **Save/restore of the GPU layers** (carried).
 5. **A view-dependent exposure cap**, **flat terrain shading**, and **wave cost** (carried).
+
+## Iteration 17 — 2026-10-18 — cumulus that billow
+
+**Commits:** `6930852` (research note `docs/research/cumulus-shape.md`), the implementation with the mirror and tests, the README / CHANGELOG / still / tour GIF, this log. Merged through a pull request. **Sibling repos:** none. **Not released.**
+
+### What changed, and why it ranked first
+
+The review of `terrain_tour` under `PartlyCloudy` from several angles (`/tmp/i17/before/cu_sheet.png`) showed every fair-weather cumulus as a kilometre-wide smooth pancake with stacked shelves on its flank — iteration 16's "ribbed cumulus faces" turned out to be a symptom of a bigger beauty gap visible in every outdoor frame under `Clear` and `PartlyCloudy`. Experiment A (no dome scaling, `/tmp/i17/expA`) proved the shelves are the dome terraces; the slab and the weak, coarse detail erosion made the pancakes. It beats the runner-up (the dark anti-solar sky at sunset, one hour of the day) because it is in every daytime frame.
+
+Cumuliform clouds are now carved by Nubis Evolved's envelope model: a flat base as a factor on the density, a C¹ rounded top following the blob, convective cells from the base noise (closing as the cover reaches 1), and a value erosion `√saturate((N − (1 − D)) / D)` of a billowy Worley composite on retuned tiles (4096 m base, 640 m detail). The detail octaves fade to their mean as the march's step outgrows them. The CPU mirror carries the same model; stratus is unchanged.
+
+Eleven capture rounds. Found and fixed in order: a blob stayed one mass (cell mask, core profile), clouds translucent grey-blue (full density in cores), billows hanging under the base at sunset (base as a density factor), rim grain at 3× (edge exponent ½, detail tile 640 m, a detail band-limit), a Blizzard deck opened into holes (gaps close with `cover⁴`), the coarse march's `pow` cost (a linear sign test).
+
+### Candidates ranked
+
+| # | Candidate | Category | Note |
+|---|---|---|---|
+| 1 | **Cumulus as pancakes with shelves** | 2 (+1: terraces) | picked |
+| 2 | Anti-solar sky at sunset dark grey | 1 | carried |
+| 3 | Buoyancy readback | 3 | carried |
+| 4 | Save/restore of the GPU layers | 3 | carried |
+| 5 | View-dependent exposure cap; flat terrain shading; wave cost | 2/5 | carried |
+
+### Sources
+
+Schneider & Vos 2015 (`s2015-advances-ppt-944-mb-pdf-5-mb-2`); Schneider & Vos 2017 (`s2017-advances-pdf-slides-13mb`); Schneider 2022 *Nubis, Evolved* and 2023 *Nubis³* (Advances PDFs, downloaded); Bauer 2019 *RDR2* (Advances PPTX, downloaded); Webanck et al. 2018 *Procedural Cloudscapes* (`10.1111/cgf.13373`, HAL); Goswami 2021 cloud survey (`10.1007_s00371-020-01953-y`, downloaded); Toft et al. 2016 (`10.48550_arxiv.1609.05344`, downloaded); Mol et al. 2023. Not obtained: Plank 1969, Neggers et al. 2003, Wood & Field 2011.
+
+### Critique and verdicts (`/tmp/i17/critique.md`; rounds `/tmp/i17/r1`–`r11`, `b2_r7`–`r10`; final `/tmp/i17/final`, `final_b2`)
+
+| Feature | Evidence | Verdict |
+|---|---|---|
+| Cumulus shape (9 h toward the sun, 15.5 h away, overhead, horizon, aerial) | `final/strip.png`, `final_b2/sheet.png`, `docs/cumulus.png`, `r7/zgc.png` | GREAT: cauliflower turrets, separate thermals, crisp silhouettes, no shelves |
+| Sunset undersides | `final_b2/sunset.png`, `b2_r9/zh3c.png` | GREAT; rim sparkle on the horizon row at 4× (half-resolution march), cosmetic |
+| Stratus, Overcast, Thunderstorm, Blizzard | `final_b2/sheet.png`, `the_weather_air_makes_the_sky_the_fog_colour` | unchanged |
+| Motion | `seq_sheet.png`, frame differences 0.35–0.37 with no spikes over 6 s | GREAT |
+
+### Verification
+
+- `clouds::model`: `the_cumulus_envelope_is_smooth_and_the_erosion_bounded` (C¹ envelope, plane base, monotone bounded erosion), `the_coarse_test_never_misses_a_cloud` (four types, three detail weights), `detail_noise_only_removes_stratus_density`, `the_cumulus_shadow_covers_what_the_weather_says` (shade 0.048 / 0.377 / 0.818 against the map's 0.052 / 0.399 / 0.799); the stratus column still τ 6.04. `tests/gpu_clouds.rs`: the Clear shade fraction in the 8 km window is 0.006 (floor now 0.001, Deviation 9); the camera test picks 164 m blocks ≤ 150 m apart and allows 5 % (measured 3.4 %).
+- Gates: `cargo build --release`, `cargo test` (0 failures), `cargo build --examples --all-features`, clippy `-D warnings`, `cargo doc` `-D warnings`, wasm32, rustfmt on the changed files, `tests/save.rs` with `--features serde` (2). GPU, one process per file/module: every `tests/gpu_*.rs` file (clouds 6, hydrology 9, precipitation 6, trails 4, weathered 4, twilight 3, waves 3, water 2, wind 2, cloud ambient, imports, plugins, readback) and lib `clouds` (10), `terrain` (8), `cover` (7), `dust` (6), `voxel` (1), `the_horizon_sky` — all pass. `a_flash_lights_the_cloud_at_dusk_and_not_at_noon` now allows 5 % at noon (measured 3.4 %: the cumulonimbus's flat base sits where the flash fires; `cumulus-shape.md` Deviation 10).
+- Performance (`bench_elements`, High, hills, `PartlyCloudy`, 1080p, alternating runs against `2791780`, P2 at 1725–1800 MHz logged in the same shell, the GPU otherwise idle): `elements_clouds_march` 0.437–0.474 ms (seven runs) → 0.489–0.492 ms (three runs of the final shader): +6 %, within the note's 10 %; `elements_clouds_shadow` 0.058–0.079 → 0.069–0.072 ms. An `EMPTY_LIMIT` of 6 gained nothing; `pow` → `sqrt` in the erosion and a linear coarse test took the march from 0.521–0.527 to 0.489–0.492.
+- Stills `docs/cumulus.png` (new), `docs/tour.gif` regenerated.
+
+### Top 5 remaining items, ranked
+
+1. **Cumulus lighting**: from above (`final_b2/aerial.png`) the tops are tan in the haze, and backlit or front-lit bodies are low-contrast cream-grey rather than brilliant white with darker bases; the multiple-scattering and ambient balance of the march, now that the shapes are right.
+2. **The anti-solar sky at sunset reads dark grey** (carried).
+3. **Rim sparkle** on distant lit cloud edges at sunset (half-resolution march; a full-resolution edge pass or a bilateral upsample).
+4. **Buoyancy readback** and **save/restore of the GPU layers** (carried).
+5. **A view-dependent exposure cap**, **flat terrain shading**, **wave cost** (carried).
