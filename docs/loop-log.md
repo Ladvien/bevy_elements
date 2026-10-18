@@ -985,3 +985,53 @@ Asked to review the crate for the single feature most useful to game developers:
 3. **Flat terrain shading** (carried).
 4. **Night thunderstorm rain** reads as white static (carried).
 5. **Save/restore of the GPU layers** and the cosmetic set (the aerial's 2-px line at y ≈ 298, the composite's pillar edge step, `STRIKE_LEAD`, sparse roof splashes).
+
+## Iteration 14 — 2026-10-17 — trails: footprints and ruts in snow, sand and mud
+
+**Commits:** `9033ff1` (research note `docs/research/trails.md`), the implementation with `tests/gpu_trails.rs` (the note's Deviations 1–10 and measured validations), the README / CHANGELOG / stills / GIF, this log. Merged through a pull request. **Sibling repos:** none (`bevy_flora` owns no ground marks). **Not released.**
+
+### What changed, and why it ranked first
+
+Every interaction the crate offered ran from the environment to the game; nothing a character did marked the world, and the terrain's 4 m cells cannot hold a footprint. `TrailsPlugin` adds the missing direction: an `Imprint` presses a camera-following window of centimetre texels (High 1024² × 5 cm) to its Bekker–Wong sinkage (Wong's constants; CRREL's 500 kg/m³ compaction limit in snow; Alvarado's 0.30 m loose layer), with a rim of `2ν` of the displaced volume, sweeping the path between frames. The cover map's new snow fills a trench by what it gained, melt clamps it, the snow drift and sand flux diffuse it, sand and mud slump (Sumner's angles). The terrain material and `GroundExtension` draw it per pixel: parallax occlusion mapping with per-texel steps and a B-spline bisection, a soft self-shadow, an occlusion term, compacted-snow tint, soil under grass and water on wet rut floors.
+
+Eighteen capture rounds. The defects found and fixed, in order: rims stacking into fins (a plastic rim target), ruts refilled by their own rims, a 14 cm parallax step against 5 cm texels, stair-stepped bilinear walls (B-spline refinement), on/off shadow blocks across sand ruts, mirror-white mud ruts (water only on floors), fluted wet walls (the normal from the B-spline, not a stored gradient), regular dark ticks on a rut's far wall (shadow samples spaced by each pixel's own reach), and grid-aligned slump steps (eight neighbours).
+
+### Candidates ranked
+
+| # | Candidate | Category | Note |
+|---|---|---|---|
+| 1 | **Interactive ground trails** | 3 (missing game ↔ world interaction) | picked (user direction, iteration 13) |
+| 2 | View-dependent exposure cap | 2 | carried |
+| 3 | Flat terrain shading | 2 | carried |
+| 4 | Night thunderstorm rain as white static | 1 | carried |
+| 5 | Save/restore of the GPU layers | 3 | carried |
+
+### Sources
+
+Sumner, O'Brien & Hodgins 1999; Alvarado et al. 2022; Su et al. 2023; Goswami 2024 (survey); Hanák 2021 (AC III, Batman, Rise of the Tomb Raider, HZD, TLOU II); Svensson 2019; Barré-Brisebois 2014; CRREL 90-9; NASA TM-20250006958 (Wong's Bekker constants); Tatarchuk 2006 (POM, `s2006-advances-materials-10`); Sigg & Hadwiger 2005 (B-spline filtering). Paywalled and not obtained: Onoue 2005, Zeng 2007, Dagenais 2016, Michels (GPU Pro 7), Festenberg 2011.
+
+### Critique and verdicts (`/tmp/trails/critique.md`; rounds `/tmp/trails/r1`–`r18`, final `/tmp/trails/final/`)
+
+| Feature | Evidence | Verdict |
+|---|---|---|
+| Snow prints and ruts, 10.5 h and 15.6 h | `final/snow.png`, `final/snow_low.png`, `r16/snow_top_crop.png` | GREAT: crisp pockets, blue-shadowed walls, sunlit lips |
+| Dry sand at 18.3 h | `final/sand.png` | GREAT: slumped troughs with low rims; the shaded wall's silhouette steps per pixel (no AA, `r17/comb*.png` proves it is not the field) |
+| Mud after rain | `final/mud.png`, `final/mud_wall.png` | GREAT: soil floors, wide low rims, no fluting or ticks |
+| Dry sand at noon (62°) | `r16/sand_walk_zoom.png` | faint, as real 3.4 cm dishes are; recorded in Validation 7 |
+| Snowfall (×120) | `r18/fill.png` | softens at the cover's 1.5 cm/h; a day to fill, not the plan's hour |
+| Motion | `docs/trails.gif` (frames 1080–1500) | no swimming, no window seam |
+
+### Verification
+
+- `tests/gpu_trails.rs` (4): the press depth 23.65 cm for the model's 24.0 and a rim of 9.9 % for `2ν` = 10 %; a 20 m/s rut with no texel shallower than 24 cm; 5 cm of new snow shallows a trench 23.65 → 18.64 cm and leaves the flat at 0; a trail stays put as the camera moves 10 m and is gone after it leaves the window. Five unit tests in `trails::model` (sinkage, soil monotone in wetness, rock, window centre, oversized sweep).
+- Gates: `cargo build --release`, `cargo test` (0 failures), `cargo build --examples --all-features`, clippy `-D warnings`, `cargo doc` `-D warnings`, wasm32, rustfmt on this iteration's files, `tests/save.rs` with `--features serde` (2). GPU, one process per file/module: every `tests/gpu_*.rs` file (trails 4, hydrology 9, precipitation 6, clouds 5, weathered 4, twilight 3, water 2, wind 2, cloud ambient, imports, plugins, readback) and lib `clouds` (10), `terrain` (8), `cover` (7), `dust` (6), `voxel` (1), `the_horizon_sky` — all pass.
+- Performance (`bench_elements`, High, hills, `PartlyCloudy`, 1080p, P2 at 1.5–1.9 GHz logged in the same shell, two rounds each): `elements_trails` 0.119 ms with 16 wheels (0.187 ms before untouched texels skipped their ground lookups); `main_opaque_pass_3d` 0.054–0.058 ms off, 0.057–0.058 ms on.
+- Stills `docs/trails_snow.png`, `trails_sand.png`, `trails_mud.png` and `docs/trails.gif` (new); `tour.gif` unchanged by this iteration.
+
+### Top 5 remaining items, ranked
+
+1. **A view-dependent exposure cap** (carried): meter the brightest sky in the frame.
+2. **Flat terrain shading** (carried).
+3. **Night thunderstorm rain** reads as white static (carried).
+4. **Trails on `VoxelGround` and the wind's solid mask**: an imprint does not yet change the wind or the hydrology (the field is visual and erodes, it does not drain).
+5. **Save/restore of the GPU layers** and the cosmetic set (the aerial's 2-px line, the composite's pillar edge step, `STRIKE_LEAD`, sparse roof splashes, POM silhouettes without AA).
