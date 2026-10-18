@@ -1233,3 +1233,52 @@ Hillaire 2016 *Physically based sky, atmosphere and cloud rendering in Frostbite
 3. **Rim sparkle** on distant lit cloud edges at sunset (carried).
 4. **The aerial haze floor** seen from 3.8 km is a flat featureless grey (`r3/aerial.png`).
 5. **Buoyancy readback**, **save/restore of the GPU layers**, **a view-dependent exposure cap**, **flat terrain shading**, **wave cost** (carried).
+
+## Iteration 19 — 2026-10-18 — a focus for the camera-relative domains, and orthographic cameras (issue #7)
+
+**Commits:** `4de4ed2` (research note `docs/research/view-anchor.md`), the implementation with tests, the `isometric` example, the README / CHANGELOG / still / GIF, this log. Merged through a pull request; closes #7. **Sibling repos:** none. **Not released.**
+
+### What changed, and why it ranked first
+
+The user asked to start from the open issues. Nine were filed today by a consumer (Sanctuary) integrating the crate; #7 ranked first because it blocks the adoption of five domains at once under the camera every isometric and strategy game uses, and #8 (units) touches the same boundaries after it. Under an orthographic camera 1500 m back from what it shows, every camera-relative domain centred 1500 m away and the cloud march built its rays from one eye point.
+
+`ElementsFocus::Entity` / `Point` on the camera now centres the domains (the view carries the focus and the eye separately; the terrain's level of detail stays on the eye, which its vertex shader morphs by). The cloud passes build rays from the view matrices for both projections. The capture review of a new `isometric` example then found five things Bevy measures from the camera's translation that an isometric camera breaks (Deviations 1–5 of the note): the distance fog, the shadow cascades, precipitation drawn at a telephoto's pixel coverage and a box smaller than the view, the ground-fog volume crossed at one slant, and ray origins inside a low deck. Each is adapted only for an orthographic followed camera; a perspective camera is unchanged.
+
+### Candidates ranked
+
+| # | Candidate | Category | Note |
+|---|---|---|---|
+| 1 | **#7 orthographic cameras and a focus** | 3 (adoption) | picked |
+| 2 | #8 world-units scale | 3 | next |
+| 3 | #9 opt-outs on `ElementsCamera`, #10 `CelestialPlugin` without lights | 3 | queued |
+| 4 | #14 serialize `SurfaceWeathering`, #15 a snow season | 3 | queued |
+| 5 | #11 public globals handle, #12 bevy_flora 0.46, #13 isomesh volumes | 3 | queued |
+
+### Sources
+
+Marschner & Shirley, *Fundamentals of Computer Graphics* §4.3.1 (corpus); *Real-Time Rendering* 4th ed. §4.7.1 (corpus); Puig-Centelles, Ripollés & Chover 2009 (`10.1007/s00371-009-0366-9`) and Puig-Centelles et al. 2011 (`10.4018/jcicg.2011070102`), both fetched from SciDB and uploaded to the home-still inbox; Tatarchuk 2006 (corpus `s2006-advances-materials-6`); Losasso & Hoppe 2004 (corpus `10.1145_1015706.1015799`); Bevy 0.20's own orthographic test, cascade split and atmosphere rays.
+
+### Critique and verdicts (`/tmp/i19/critique.md`; rounds `/tmp/i19/r1`–`r10`, sequences `seq`, `seq2`)
+
+| Feature | Evidence | Verdict |
+|---|---|---|
+| Clear / PartlyCloudy / Overcast under the isometric camera | `r10/sheet.png` | GREAT: crisp town, sun shadows, soft overcast |
+| Rain, Thunderstorm, Snow | `r10/z_rain.png`, `r10/sheet.png` | GREAT: streaks and flakes over the whole view, no box edge; the pale wet ground is pre-existing (same in the perspective town) |
+| Fog | `r10/Fog.png` (was white `r7`, a hard line `r8`) | GREAT: a depth fade from the bottom edge |
+| Motion | `seq2`, frame differences 0.032–0.051 | GREAT: the box follows the walker, no respawn bursts |
+| Perspective unchanged | `fogcheck/cmp.png`, the GPU suite | unchanged |
+
+### Verification
+
+- New tests: `plugin::the_view_centres_on_the_focus` (point, entity, entity without a transform, removed), `clouds::model::orthographic_rays_are_parallel_and_perspective_rays_share_the_eye` (the ray mirror: parallel rays on the focus plane, the camera's plane without a focus), `lightning::visual::an_orthographic_ribbon_keeps_two_pixels_at_every_distance`, `fog::an_orthographic_view_fogs_from_the_bottom_of_its_ground`, `tests/lightning.rs` `strikes_and_thunder_centre_on_the_focus`, `tests/gpu_precipitation.rs` `the_domains_centre_on_the_focus_of_an_orthographic_camera` (rain box, wind window, fog volume centred on a focus 1500 m from the camera; the box follows a 20 m pan with its count), `tests/gpu_cloud_ambient.rs` `an_orthographic_camera_sees_the_deck_a_perspective_one_does` (luminance 1.04×).
+- Gates: `cargo build --release`, `cargo test`, `cargo build --examples --all-features`, clippy `-D warnings`, `cargo doc` `-D warnings`, wasm32, rustfmt on the changed files, `tests/save.rs` with `--features serde`, every GPU file and lib module.
+- Performance (`bench_elements`, High, hills, `PartlyCloudy`, alternating against `8670d02`, P2 at 1530–1740 MHz with the GPU shared by a vLLM job): `elements_clouds_march` 0.524–0.530 → 0.468–0.529 ms, resolve and composite unchanged; no regression.
+- Stills `docs/isometric.png`, GIF `docs/isometric.gif` (new).
+
+### Top 5 remaining items, ranked
+
+1. **Open issues #8–#15**, #8 (a world-units scale) first.
+2. **Wet surfaces reflect a clear sky under overcast**: `WeatheredMaterial` and the ground reflect Bevy's environment map, which has no clouds, so wet ground under Rain reads as a pale sheen (`r10/town_rain.png`, perspective and orthographic alike).
+3. **The anti-solar sky at sunset reads dark grey** (carried).
+4. **Rim sparkle** on lit cloud edges at sunset (carried).
+5. **Bevy's own sky and aerial perspective are perspective-only** (`uv_to_ray_direction`): under an orthographic camera looking at the horizon the sky is a perspective fan; the crate's clouds are right, Bevy's atmosphere is not.
