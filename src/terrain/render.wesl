@@ -9,7 +9,7 @@
 import bevy_elements::grid::{GridParams, grid_taps};
 import bevy_elements::noise::{perlin3_d, fbm3};
 import bevy_elements::terrain::common::TerrainParams;
-import bevy_elements::surface_cover::{weather_surface, ripple_weights, ripple_offset};
+import bevy_elements::surface_cover::{weather_surface, ripple_weights, ripple_offset, overcast_relief};
 import bevy_elements::trails::surface::{TrailHit, trail_fade, trail_march, trail_none};
 import bevy_pbr::render::{
     mesh_functions,
@@ -356,23 +356,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 }
 @if(!PREPASS_PIPELINE) {
     var out: FragmentOutput;
+    // The overcast dome shades the surface through the environment map (the clouds' sky probe,
+    // `docs/research/sky-light.md`); the relief cue adds what the dome lacks, ramped by the deck
+    // over this ground (`cloud_deck`, 1 in clear air — exactly no change there).
     out.color = apply_pbr_lighting(pbr_input);
-    // The Moon & Spencer 1942 overcast dome as a shade factor (top 1, side 0.68, bottom 0.5;
-    // `docs/research/snow-cover.md` Deviation 15): the sky is brightest at the zenith, so a
-    // surface sees less light from below its horizon. It ramps with the deck over this ground
-    // (`cloud_deck`, 0 under cloud, 1 in clear air — exactly no change there). Under a deck the
-    // beam inside `out` is ~0 (the cloud dims the DirectionalLights), so scaling the lit colour
-    // scales the sky's fill alone; the beam share this also dims at partial cover is in
-    // Deviation 15.
     out.color = vec4<f32>(
-        out.color.rgb * mix(
-            1.0,
-            (1.0 - 0.35 * pow(max(1.0 - pbr_input.N.y, 0.0), 0.3)),
-            1.0 - cloud_deck(p),
-        ),
+        out.color.rgb * overcast_relief(pbr_input.N.y, 1.0 - cloud_deck(p)) * ratio * trail_shade,
         out.color.a,
     );
-    out.color = vec4<f32>(out.color.rgb * ratio * trail_shade, out.color.a);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;
 }

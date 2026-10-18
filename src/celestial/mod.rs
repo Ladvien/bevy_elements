@@ -15,7 +15,7 @@ pub(crate) use clock::plugin as clock_plugin;
 pub use clock::{CivilDate, GeoLocation, WorldClock};
 
 use crate::climate::Weather;
-use crate::clouds::CloudShadows;
+use crate::clouds::{CloudShadows, SkyProbe};
 use crate::plugin::{
     ElementsCamera, ElementsSystems, ElementsUnits, ElementsView, SkyBackground, ensure_gpu_core,
 };
@@ -684,22 +684,28 @@ pub(crate) const BEVY_AMBIENT_DIFFUSE_SCALE: f32 = 0.452;
 
 /// Give every [`ElementsCamera`] the cloud-scattered light as its `AmbientLight`: Bevy's
 /// per-camera ambient is a uniform sky radiance in cd/m² that casts no shadow, which is what
-/// the diffuse remainder under cloud is.
+/// the diffuse remainder under cloud is. A camera whose environment map the clouds' sky probe
+/// has taken over gets that light from the cube, graded over the dome and reflected as the sky
+/// shows it, and no ambient (`docs/research/sky-light.md`, Deviation 1).
 fn update_ambient(
     weather: Res<Weather>,
     state: Res<SunState>,
     frame: Res<CelestialFrame>,
     shadows: Option<Res<CloudShadows>>,
-    mut cameras: Query<(&ElementsCamera, &mut AmbientLight)>,
+    mut cameras: Query<(&ElementsCamera, &mut AmbientLight, Option<&SkyProbe>)>,
 ) {
     let cloud = cloud_light(weather.cloud_cover, shadows.as_deref());
     let (colour, radiance) = cloud_ambient(&state, frame.moon_lux, cloud);
-    let brightness = radiance / BEVY_AMBIENT_DIFFUSE_SCALE;
     let colour = Color::linear_rgb(colour.x, colour.y, colour.z);
-    for (dressing, mut ambient) in &mut cameras {
+    for (dressing, mut ambient, probe) in &mut cameras {
         if !dressing.ambient {
             continue;
         }
+        let brightness = if probe.is_some_and(|p| p.lit) {
+            0.0
+        } else {
+            radiance / BEVY_AMBIENT_DIFFUSE_SCALE
+        };
         if ambient.brightness != brightness || ambient.color != colour {
             ambient.brightness = brightness;
             ambient.color = colour;

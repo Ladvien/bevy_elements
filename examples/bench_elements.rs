@@ -47,7 +47,7 @@ const WARMUP_FRAMES: u32 = 240;
 const AEOLIAN_FRAME_SHARE: f64 = 20.0 / 60.0;
 
 /// The crate's GPU passes, by diagnostic span name.
-const PASSES: [&str; 24] = [
+const PASSES: [&str; 25] = [
     "elements_wind",
     "elements_fog",
     "elements_clouds_noise",
@@ -55,6 +55,7 @@ const PASSES: [&str; 24] = [
     "elements_clouds_shadow",
     "elements_clouds_march",
     "elements_clouds_resolve",
+    "elements_clouds_sky_probe",
     "elements_clouds_composite",
     "elements_precip_sim",
     "elements_precip_draw",

@@ -1,13 +1,20 @@
 // The cloud ray march, one texel per k×k block of pixels (k = 4 or 2), one pixel of each block
 // per frame. Output: premultiplied, exposed radiance (rgb) and transmittance (a). See
 // docs/research/clouds.md ("Ray march", "Lighting at a fine sample", "Aerial perspective").
+//
+// A second entry point, `cloud_sky_probe`, marches the same clouds into a cube around the camera
+// and composes it with Bevy's atmosphere cube: the environment map the scene's reflections and
+// diffuse sky light come from (docs/research/sky-light.md). It binds no view, depth or aerial
+// LUT; the functions it shares with the screen march take no screen position and return
+// luminance (unexposed).
 
 import bevy_render::view::View;
+import bevy_pbr::render::utils::sample_cube_dir;
 import bevy_elements::noise::hash31;
 import bevy_elements::clouds::common::{
     CloudParams, Medium, MAX_MARCH_M, PI, altitude, cloud_medium, coarse_shape, detail_weight,
     ground_before_layer, is_orthographic, light_at, phase, sample_transmittance, scene_distance,
-    shell_range, slot_offset, view_ray,
+    shell_range, sky_through_clouds, slot_offset, view_ray,
 };
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -22,6 +29,11 @@ import bevy_elements::clouds::common::{
 @group(0) @binding(9) var smp_clamp: sampler;
 @group(0) @binding(10) var march_out: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(11) var sky_probe: texture_cube<f32>;
+// The sky probe's own: its cloud state of the last frame and of this one (premultiplied
+// luminance and transmittance per cube texel), and the composed cube.
+@group(0) @binding(12) var probe_prev: texture_2d_array<f32>;
+@group(0) @binding(13) var probe_next: texture_storage_2d_array<rgba16float, write>;
+@group(0) @binding(14) var probe_out: texture_storage_2d_array<rgba16float, write>;
 
 /// Directions over the upper hemisphere the sky's light is averaged from.
 const SKY_SAMPLES: u32 = 16u;
@@ -149,40 +161,60 @@ fn below_optical_depth(off: vec3<f32>, l: vec3<f32>, cam: vec3<f32>) -> f32 {
     return (1.0 + m.g) * m.sigma * 2.0 * BELOW_M;
 }
 
-/// Aerial perspective from the camera to `depth` along `dir` (through the screen position `uv`):
-/// the transmittance of the air (rgb) and its in-scatter (rgb of the second return). In-scatter
-/// is Bevy's aerial-view LUT, lit by the sun light that carries the beam only, plus the air lit
-/// by the cloud-scattered diffuse light, `(1 − T) · L` for the uniform sky radiance `L`
-/// (Deviation 25 of the research note).
+/// Aerial perspective from the camera to `depth` along `dir`: the transmittance of the air
+/// (rgb) and its in-scatter (rgb of the second return), luminance.
 struct Aerial {
     transmittance: vec3<f32>,
     in_scatter: vec3<f32>,
 }
 
+/// Transmittance of the air from the camera at radius `o_r` to `depth` along `dir`. The LUT holds
+/// the transmittance to the top of the atmosphere, which a descending ray never reaches (it meets
+/// the ground): the air between two points is then taken along the reversed ray, which leaves
+/// the atmosphere through the camera (Bruneton's `GetTransmittance`). A camera above the clouds
+/// looking down sees them through that much air, not through the ground's (cloud-lighting.md
+/// Deviation 1).
+fn air_transmittance(dir: vec3<f32>, depth: f32, o_r: f32) -> vec3<f32> {
+    let r_d = sqrt(max(o_r * o_r + 2.0 * o_r * depth * dir.y + depth * depth, 1.0));
+    let mu_d = (o_r * dir.y + depth) / r_d;
+    if dir.y < 0.0 {
+        let t_from_far = sample_transmittance(transmittance_lut, smp_clamp, r_d, -mu_d, params);
+        let t_from_cam = sample_transmittance(transmittance_lut, smp_clamp, o_r, -dir.y, params);
+        return min(t_from_far / max(t_from_cam, vec3<f32>(1e-6)), vec3<f32>(1.0));
+    }
+    let t_cam = sample_transmittance(transmittance_lut, smp_clamp, o_r, dir.y, params);
+    let t_far = sample_transmittance(transmittance_lut, smp_clamp, r_d, mu_d, params);
+    return min(t_cam / max(t_far, vec3<f32>(1e-6)), vec3<f32>(1.0));
+}
+
+/// Aerial perspective through the screen position `uv`. In-scatter is Bevy's aerial-view LUT,
+/// lit by the sun light that carries the beam only, plus the air lit by the cloud-scattered
+/// diffuse light, `(1 − T) · L` for the uniform sky radiance `L` (Deviation 25 of the research
+/// note).
 fn aerial_perspective(uv: vec2<f32>, dir: vec3<f32>, depth: f32, o_r: f32) -> Aerial {
     let slices = params.atmo.z;
     let range = params.atmo.y;
     let slice = clamp(depth / range - 0.5 / slices, 0.0, 1.0);
     let lut = textureSampleLevel(aerial_lut, smp_clamp, vec3<f32>(uv, slice), 0.0);
-    let r_d = sqrt(max(o_r * o_r + 2.0 * o_r * depth * dir.y + depth * depth, 1.0));
-    let mu_d = (o_r * dir.y + depth) / r_d;
-    // The LUT holds the transmittance to the top of the atmosphere, which a descending ray never
-    // reaches (it meets the ground): the air between two points is then taken along the reversed
-    // ray, which leaves the atmosphere through the camera (Bruneton's `GetTransmittance`). A
-    // camera above the clouds looking down sees them through that much air, not through the
-    // ground's (cloud-lighting.md Deviation 1).
-    var t_ap: vec3<f32>;
-    if dir.y < 0.0 {
-        let t_from_far = sample_transmittance(transmittance_lut, smp_clamp, r_d, -mu_d, params);
-        let t_from_cam = sample_transmittance(transmittance_lut, smp_clamp, o_r, -dir.y, params);
-        t_ap = min(t_from_far / max(t_from_cam, vec3<f32>(1e-6)), vec3<f32>(1.0));
-    } else {
-        let t_cam = sample_transmittance(transmittance_lut, smp_clamp, o_r, dir.y, params);
-        let t_far = sample_transmittance(transmittance_lut, smp_clamp, r_d, mu_d, params);
-        t_ap = min(t_cam / max(t_far, vec3<f32>(1e-6)), vec3<f32>(1.0));
-    }
+    let t_ap = air_transmittance(dir, depth, o_r);
     let beam = exp(lut.rgb) * clamp(depth / (range / slices), 0.0, 1.0);
     return Aerial(t_ap, beam + (vec3<f32>(1.0) - t_ap) * params.sky.yzw);
+}
+
+/// Aerial perspective along a sky-probe direction, where there is no screen to index Bevy's
+/// aerial-view LUT by (sky-light.md Model 2): the in-scatter is the clear sky's radiance `sky`
+/// along `dir` (the in-scatter of the whole path to the top of the atmosphere, lit as the LUT
+/// is) times the share of the path's extinction that lies in front of the cloud, plus the air
+/// lit by the cloud-scattered diffuse light as on the screen.
+fn aerial_along(dir: vec3<f32>, depth: f32, o_r: f32, sky: vec3<f32>) -> Aerial {
+    let t_ap = air_transmittance(dir, depth, o_r);
+    let t_top = sample_transmittance(transmittance_lut, smp_clamp, o_r, dir.y, params);
+    let share = clamp(
+        (vec3<f32>(1.0) - t_ap) / max(vec3<f32>(1.0) - t_top, vec3<f32>(1e-4)),
+        vec3<f32>(0.0),
+        vec3<f32>(1.0),
+    );
+    return Aerial(t_ap, sky * share + (vec3<f32>(1.0) - t_ap) * params.sky.yzw);
 }
 
 /// A ray that meets the planet before the layer (past the edge of a finite ground): no cloud, and
@@ -194,20 +226,26 @@ fn aerial_perspective(uv: vec2<f32>, dir: vec3<f32>, depth: f32, o_r: f32) -> Ae
 /// floored at the march range: a below-horizon pixel with no mesh shows ground the fog has fully
 /// carried — nothing nearer than the far field is visible beyond a finite terrain, and the bare
 /// planet within the march range would otherwise show through as a dark band at the horizon
-/// (measured 68 DN on `ground_cover` at 6 m eye).
+/// (measured 68 DN on `ground_cover` at 6 m eye). Luminance: the fog colour is display-referred,
+/// so it is divided by the camera's exposure.
 fn ground_haze(ground_m: f32) -> vec4<f32> {
     let t = exp(-params.haze.w * max(ground_m, MAX_MARCH_M));
-    return vec4<f32>(params.haze.xyz * (1.0 - t), t);
+    return vec4<f32>(params.haze.xyz / max(params.probe.x, 1e-30) * (1.0 - t), t);
+}
+
+/// Where along a ray the far veil's cloud lies: about one build-up length past where it starts.
+fn veil_depth(shell: vec2<f32>) -> f32 {
+    return max(shell.x, FADE_START_M) + FAR_LENGTH_M;
 }
 
 /// The cloud beyond the march and its fade: a uniform veil of the layer's mean cover over the
 /// path through the layer past `FADE_START_M`, lit as the marched base is lit where the march
-/// fades and seen through the air to the cloud's own distance. Premultiplied exposed radiance
-/// (rgb) and transmittance (a). Under full cover the horizon keeps the cloud; at cover 0.05 it
-/// stays clear sky. Smooth in the ray, so it cannot alias (Deviations 26 and 27 of the research
-/// note). A ray that meets the planet first sees no cloud, only the air to the ground
-/// (`ground_haze`).
-fn far_veil(uv: vec2<f32>, dir: vec3<f32>, shell: vec2<f32>, o_r: f32) -> vec4<f32> {
+/// fades and seen through the air `air` to the cloud's own distance (`veil_depth`).
+/// Premultiplied luminance (rgb) and transmittance (a). Under full cover the horizon keeps the
+/// cloud; at cover 0.05 it stays clear sky. Smooth in the ray, so it cannot alias (Deviations 26
+/// and 27 of the research note). A ray that meets the planet first sees no cloud, only the air
+/// to the ground (`ground_haze`).
+fn far_veil(dir: vec3<f32>, shell: vec2<f32>, o_r: f32, air: Aerial, sky_e: vec3<f32>) -> vec4<f32> {
     let ground = ground_before_layer(o_r, dir.y, shell.x, params.camera.w);
     if ground > 0.0 {
         return ground_haze(ground);
@@ -240,80 +278,41 @@ fn far_veil(uv: vec2<f32>, dir: vec3<f32>, shell: vec2<f32>, o_r: f32) -> vec4<f
         mu_s,
         cos_t,
         clamp(0.5 - 0.5 * cos_t, 0.0, 1.0),
-        ambient_light(sky_irradiance(), params.light_e.w * AMBIENT_BOTTOM),
+        ambient_light(sky_e, params.light_e.w * AMBIENT_BOTTOM),
     );
-    // The visible cloud of the veil lies about one build-up length past where it starts.
-    let air = aerial_perspective(uv, dir, t_start + FAR_LENGTH_M, o_r);
-    return vec4<f32>(a * (radiance * air.transmittance + air.in_scatter) * view.exposure, 1.0 - a);
+    return vec4<f32>(a * (radiance * air.transmittance + air.in_scatter), 1.0 - a);
 }
 
-@compute @workgroup_size(8, 8, 1)
-fn cloud_march(@builtin(global_invocation_id) id: vec3<u32>) {
-    let low = params.sizes.zw;
-    if any(id.xy >= low) {
-        return;
-    }
-    let k = params.counts.z;
-    let size = params.sizes.xy;
-    let frame = params.counts.x;
-    let px = min(id.xy * k + slot_offset(frame, k), size - vec2<u32>(1u));
-    let uv = (vec2<f32>(px) + 0.5) / vec2<f32>(size);
-    let orthographic = is_orthographic(view.clip_from_view);
-    let ray = view_ray(uv, view.world_from_clip, view.world_position, orthographic, params.camera.xyz, params.units.x);
-    // The planet's centre lies straight below the ray's origin: the eye of a perspective view,
-    // the pixel's point on the focus plane of an orthographic one.
-    let cam = ray.origin;
-    let dir = ray.dir;
+/// What a march along a ray gathered: premultiplied scattered luminance and transmittance, and
+/// the transmittance-weighted sum of its sample depths.
+struct Integrated {
+    radiance: vec3<f32>,
+    transmittance: f32,
+    depth_sum: f32,
+    depth_weight: f32,
+}
+
+/// March the cloud layer from `cam` along `dir` between `t0` and `t1` (metres) in about `steps`
+/// primary steps, the samples offset by `jitter` (0–1) of a step, the ambient in the colour of
+/// the sky irradiance `sky_e`.
+fn integrate(
+    cam: vec3<f32>,
+    dir: vec3<f32>,
+    t0: f32,
+    t1: f32,
+    jitter: f32,
+    sky_e: vec3<f32>,
+    steps: u32,
+) -> Integrated {
     let big_r = params.camera.w;
-    let o_r = big_r + cam.y;
     let h_b = params.layer.x;
     let h_t = params.layer.y;
-
-    let shell = shell_range(o_r, dir.y, h_b, h_t, big_r);
-    let t0 = shell.x;
-    let t1 = min(shell.y, MAX_MARCH_M);
-    if t1 <= t0 {
-        textureStore(march_out, vec2<i32>(id.xy), far_veil(uv, dir, shell, o_r));
-        return;
-    }
-
-    // A block whose pixels all show surfaces nearer than the cloud entry shows no cloud.
-    var hidden = true;
-    for (var j = 0u; j < k && hidden; j += 1u) {
-        for (var i = 0u; i < k && hidden; i += 1u) {
-            let q = min(id.xy * k + vec2<u32>(i, j), size - vec2<u32>(1u));
-            let quv = (vec2<f32>(q) + 0.5) / vec2<f32>(size);
-            let d = textureLoad(depth_tex, vec2<i32>(q), 0);
-            let q_ray = view_ray(quv, view.world_from_clip, view.world_position, orthographic, params.camera.xyz, params.units.x);
-            let q_shell = shell_range(big_r + q_ray.origin.y, q_ray.dir.y, h_b, h_t, big_r);
-            if scene_distance(quv, d, view.world_from_clip, q_ray, params.units.x) >= q_shell.x {
-                hidden = false;
-            }
-        }
-    }
-    if hidden && params.misc.y < 0.5 {
-        textureStore(march_out, vec2<i32>(id.xy), vec4<f32>(0.0, 0.0, 0.0, 1.0));
-        return;
-    }
-
     let l = params.light.xyz;
-    if params.misc.y > 1.5 {
-        // Debug: the light at the entry point, for the sun-colour test.
-        let o = dir * t0;
-        let h = altitude(o.xz, cam.y + o.y, big_r);
-        let mu = (dot(o.xz, l.xz) + (big_r + cam.y + o.y) * l.y) / (big_r + h);
-        let e = light_at(transmittance_lut, smp_clamp, h, mu, params) / max(params.light_e.xyz, vec3<f32>(1e-6));
-        textureStore(march_out, vec2<i32>(id.xy), vec4<f32>(e, 1.0));
-        return;
-    }
-
-    let steps = f32(params.counts.y);
-    let dt = max(clamp((t1 - t0) / steps, 25.0, 400.0), (t1 - t0) / (1.5 * steps));
-    let jitter = hash31(vec3<i32>(i32(px.x), i32(px.y), i32(frame)));
+    let n = f32(steps);
+    let dt = max(clamp((t1 - t0) / n, 25.0, 400.0), (t1 - t0) / (1.5 * n));
     let cos_t = dot(dir, l);
     let detail = detail_weight(dt);
     let powder_weight = clamp(0.5 - 0.5 * cos_t, 0.0, 1.0);
-    let sky_e = sky_irradiance();
 
     var radiance = vec3<f32>(0.0);
     var transmittance = 1.0;
@@ -323,7 +322,7 @@ fn cloud_march(@builtin(global_invocation_id) id: vec3<u32>) {
     var coarse = true;
     var empty = 0u;
     var resume = t;
-    let max_iterations = params.counts.y * 3u;
+    let max_iterations = steps * 3u;
     for (var it = 0u; it < max_iterations; it += 1u) {
         if t >= t1 || transmittance < MIN_TRANSMITTANCE {
             break;
@@ -395,20 +394,169 @@ fn cloud_march(@builtin(global_invocation_id) id: vec3<u32>) {
         radiance /= 1.0 - transmittance;
         transmittance = 0.0;
     }
+    return Integrated(radiance, transmittance, depth_sum, depth_weight);
+}
 
-    if depth_weight <= 0.0 {
-        textureStore(march_out, vec2<i32>(id.xy), far_veil(uv, dir, shell, o_r));
+/// The marched cloud seen through the air `air` to its mean depth, fading into the haze toward
+/// the march range, over the far field `veil` behind it: premultiplied luminance and
+/// transmittance. `r` met cloud (`depth_weight > 0`).
+fn finish_ray(r: Integrated, air: Aerial, veil: vec4<f32>) -> vec4<f32> {
+    let depth = r.depth_sum / r.depth_weight;
+    let fade = smoothstep(20000.0, 32000.0, depth);
+    let rgb = (1.0 - fade) * (r.radiance * air.transmittance + air.in_scatter * (1.0 - r.transmittance));
+    let alpha = 1.0 - (1.0 - fade) * (1.0 - r.transmittance);
+    // The far field behind it: the cloud in front covers it by `1 − alpha`.
+    return vec4<f32>(rgb + alpha * veil.rgb, alpha * veil.a);
+}
+
+/// Luminance to the view's display-referred value.
+fn exposed(c: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(c.rgb * view.exposure, c.a);
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn cloud_march(@builtin(global_invocation_id) id: vec3<u32>) {
+    let low = params.sizes.zw;
+    if any(id.xy >= low) {
+        return;
+    }
+    let k = params.counts.z;
+    let size = params.sizes.xy;
+    let frame = params.counts.x;
+    let px = min(id.xy * k + slot_offset(frame, k), size - vec2<u32>(1u));
+    let uv = (vec2<f32>(px) + 0.5) / vec2<f32>(size);
+    let orthographic = is_orthographic(view.clip_from_view);
+    let ray = view_ray(uv, view.world_from_clip, view.world_position, orthographic, params.camera.xyz, params.units.x);
+    // The planet's centre lies straight below the ray's origin: the eye of a perspective view,
+    // the pixel's point on the focus plane of an orthographic one.
+    let cam = ray.origin;
+    let dir = ray.dir;
+    let big_r = params.camera.w;
+    let o_r = big_r + cam.y;
+    let h_b = params.layer.x;
+    let h_t = params.layer.y;
+
+    let shell = shell_range(o_r, dir.y, h_b, h_t, big_r);
+    let t0 = shell.x;
+    let t1 = min(shell.y, MAX_MARCH_M);
+    if t1 <= t0 {
+        let air = aerial_perspective(uv, dir, veil_depth(shell), o_r);
+        textureStore(march_out, vec2<i32>(id.xy), exposed(far_veil(dir, shell, o_r, air, sky_irradiance())));
         return;
     }
 
-    // Aerial perspective at the mean cloud depth, then the fade into haze.
-    let depth = depth_sum / depth_weight;
-    let fade = smoothstep(20000.0, 32000.0, depth);
-    let air = aerial_perspective(uv, dir, depth, o_r);
+    // A block whose pixels all show surfaces nearer than the cloud entry shows no cloud.
+    var hidden = true;
+    for (var j = 0u; j < k && hidden; j += 1u) {
+        for (var i = 0u; i < k && hidden; i += 1u) {
+            let q = min(id.xy * k + vec2<u32>(i, j), size - vec2<u32>(1u));
+            let quv = (vec2<f32>(q) + 0.5) / vec2<f32>(size);
+            let d = textureLoad(depth_tex, vec2<i32>(q), 0);
+            let q_ray = view_ray(quv, view.world_from_clip, view.world_position, orthographic, params.camera.xyz, params.units.x);
+            let q_shell = shell_range(big_r + q_ray.origin.y, q_ray.dir.y, h_b, h_t, big_r);
+            if scene_distance(quv, d, view.world_from_clip, q_ray, params.units.x) >= q_shell.x {
+                hidden = false;
+            }
+        }
+    }
+    if hidden && params.misc.y < 0.5 {
+        textureStore(march_out, vec2<i32>(id.xy), vec4<f32>(0.0, 0.0, 0.0, 1.0));
+        return;
+    }
 
-    let rgb = (1.0 - fade) * (radiance * air.transmittance + air.in_scatter * (1.0 - transmittance));
-    let alpha = 1.0 - (1.0 - fade) * (1.0 - transmittance);
-    // The far field behind it: the cloud in front covers it by `1 − alpha`.
-    let veil = far_veil(uv, dir, shell, o_r);
-    textureStore(march_out, vec2<i32>(id.xy), vec4<f32>(rgb * view.exposure + alpha * veil.rgb, alpha * veil.a));
+    let l = params.light.xyz;
+    if params.misc.y > 1.5 {
+        // Debug: the light at the entry point, for the sun-colour test.
+        let o = dir * t0;
+        let h = altitude(o.xz, cam.y + o.y, big_r);
+        let mu = (dot(o.xz, l.xz) + (big_r + cam.y + o.y) * l.y) / (big_r + h);
+        let e = light_at(transmittance_lut, smp_clamp, h, mu, params) / max(params.light_e.xyz, vec3<f32>(1e-6));
+        textureStore(march_out, vec2<i32>(id.xy), vec4<f32>(e, 1.0));
+        return;
+    }
+
+    let jitter = hash31(vec3<i32>(i32(px.x), i32(px.y), i32(frame)));
+    let sky_e = sky_irradiance();
+    let r = integrate(cam, dir, t0, t1, jitter, sky_e, params.counts.y);
+    let veil = far_veil(dir, shell, o_r, aerial_perspective(uv, dir, veil_depth(shell), o_r), sky_e);
+    if r.depth_weight <= 0.0 {
+        textureStore(march_out, vec2<i32>(id.xy), exposed(veil));
+        return;
+    }
+    // Aerial perspective at the mean cloud depth, then the fade into haze.
+    let air = aerial_perspective(uv, dir, r.depth_sum / r.depth_weight, o_r);
+    textureStore(march_out, vec2<i32>(id.xy), exposed(finish_ray(r, air, veil)));
+}
+
+/// Primary steps of a sky-probe ray against a screen ray: the probe is prefiltered into a cube
+/// for reflections and sky light, so its rays take half the steps (Unreal's reflection sample
+/// count scale on volumetric clouds; Hillaire 2016 marches the reflection view at a quarter of
+/// the resolution), never fewer than this floor.
+const PROBE_STEP_DIVISOR: u32 = 2u;
+const PROBE_MIN_STEPS: u32 = 16u;
+
+/// The clouds along a sky-probe direction that reaches the layer: premultiplied luminance and
+/// transmittance, as `cloud_march` gives a sky pixel before exposure.
+fn probe_ray(
+    cam: vec3<f32>,
+    dir: vec3<f32>,
+    shell: vec2<f32>,
+    o_r: f32,
+    sky: vec3<f32>,
+    jitter: f32,
+) -> vec4<f32> {
+    let sky_e = sky_irradiance();
+    let veil = far_veil(dir, shell, o_r, aerial_along(dir, veil_depth(shell), o_r, sky), sky_e);
+    let t0 = shell.x;
+    let t1 = min(shell.y, MAX_MARCH_M);
+    if t1 <= t0 {
+        return veil;
+    }
+    let steps = max(params.counts.y / PROBE_STEP_DIVISOR, PROBE_MIN_STEPS);
+    let r = integrate(cam, dir, t0, t1, jitter, sky_e, steps);
+    if r.depth_weight <= 0.0 {
+        return veil;
+    }
+    return finish_ray(r, aerial_along(dir, r.depth_sum / r.depth_weight, o_r, sky), veil);
+}
+
+/// The sky probe: one thread per texel of the cube (`z` the face). A texel in this frame's slot
+/// of its k×k block marches its direction and blends the result into its history; every texel
+/// is composed with Bevy's atmosphere cube as the screen composite composes a sky pixel
+/// (`sky_through_clouds`), or, toward the ground, is that cube's ground restored to the dome's
+/// total light by the sky gain (sky-light.md, Model 1–4 and 6). Luminance throughout.
+@compute @workgroup_size(8, 8, 1)
+fn cloud_sky_probe(@builtin(global_invocation_id) id: vec3<u32>) {
+    let n = u32(params.probe.z);
+    if id.x >= n || id.y >= n || id.z >= 6u {
+        return;
+    }
+    let texel = vec2<i32>(id.xy);
+    let face = i32(id.z);
+    let uv = (vec2<f32>(id.xy) + 0.5) / f32(n);
+    // Cubemaps are left-handed: the world direction of a texel is its cube direction with z
+    // negated (Bevy's `atmosphere/environment.wesl`), and the cube is sampled at the cube one.
+    let c = sample_cube_dir(uv, id.z);
+    let dir = vec3<f32>(c.x, c.y, -c.z);
+    let sky = textureSampleLevel(sky_probe, smp_clamp, c, 0.0).rgb;
+    let cam = params.camera.xyz;
+    let big_r = params.camera.w;
+    let o_r = big_r + cam.y;
+    let shell = shell_range(o_r, dir.y, params.layer.x, params.layer.y, big_r);
+    if ground_before_layer(o_r, dir.y, shell.x, big_r) > 0.0 {
+        textureStore(probe_next, texel, face, vec4<f32>(0.0, 0.0, 0.0, 1.0));
+        textureStore(probe_out, texel, face, vec4<f32>(sky * params.sky.x, 1.0));
+        return;
+    }
+    var cloud = textureLoad(probe_prev, texel, face, 0);
+    let k = u32(params.probe.y);
+    let frame = params.counts.x;
+    if all(id.xy % k == slot_offset(frame, k)) {
+        let jitter = hash31(vec3<i32>(i32(id.x + id.z * n), i32(id.y), i32(frame)));
+        cloud = mix(cloud, probe_ray(cam, dir, shell, o_r, sky, jitter), params.probe.w);
+    }
+    textureStore(probe_next, texel, face, cloud);
+    let haze = params.haze.xyz / max(params.probe.x, 1e-30);
+    let s = sky_through_clouds(cloud, shell, params, haze);
+    textureStore(probe_out, texel, face, vec4<f32>(s.rgb + sky * s.a, 1.0));
 }

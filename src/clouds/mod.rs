@@ -9,7 +9,7 @@ mod gpu_tests;
 mod model;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use bevy::asset::{RenderAssetUsages, embedded_asset};
 use bevy::camera::Exposure;
@@ -195,23 +195,36 @@ pub struct CloudQuality {
     pub light_samples: u32,
     /// Frames until every pixel has been marched once (`block²`).
     pub window: u32,
+    /// Texels per face edge of the sky probe (`docs/research/sky-light.md`) marched each frame:
+    /// one texel of every `k × k` block, `k = cube edge / probe_edge` clamped to 1–4. 32 on Low,
+    /// Medium and High, 64 on Ultra (`k` = 4, 4, 4, 2 for Bevy's default 128² cube).
+    pub probe_edge: u32,
 }
 
 impl CloudQuality {
     /// The settings of a quality level.
     pub fn of(quality: ElementsQuality) -> Self {
-        let (block, steps) = match quality {
-            ElementsQuality::Low => (4, 32),
-            ElementsQuality::Medium => (4, 48),
-            ElementsQuality::High => (2, 64),
-            ElementsQuality::Ultra => (2, 96),
+        let (block, steps, probe_edge) = match quality {
+            ElementsQuality::Low => (4, 32, 32),
+            ElementsQuality::Medium => (4, 48, 32),
+            ElementsQuality::High => (2, 64, 32),
+            ElementsQuality::Ultra => (2, 96, 64),
         };
         Self {
             block,
             steps,
             light_samples: 6,
             window: block * block,
+            probe_edge,
         }
+    }
+
+    /// The sky probe's slot block edge `k` for a cube of `size` texels per face edge.
+    pub(crate) fn probe_block(&self, size: u32) -> u32 {
+        (size / self.probe_edge.max(1))
+            .clamp(1, 4)
+            .next_power_of_two()
+            .min(4)
     }
 }
 
@@ -297,6 +310,11 @@ pub(crate) struct CloudParams {
     /// x: world units per metre ([`crate::ElementsUnits`]). Every other field is in metres;
     /// Bevy's view matrices and depth are in world units, which the shaders convert with it.
     pub units: Vec4,
+    /// The sky probe (`docs/research/sky-light.md`): x the followed camera's exposure (the
+    /// display-referred `haze.xyz` over it is the fog's luminance), y the slot block edge `k`,
+    /// z texels per face edge, w the weight a marched texel takes in its history (1 while the
+    /// history is invalid).
+    pub probe: Vec4,
 }
 
 /// The per-view images: this frame's march result and the two history textures.
@@ -318,17 +336,54 @@ pub(crate) struct CloudGpu {
     pub threshold: Handle<ShaderBuffer>,
     /// Every fourth shadow-map texel's transmittance, `SHADOW_COARSE_CELLS²` row-major.
     pub shadow_coarse: Handle<ShaderBuffer>,
-    /// The cube the ambient takes its colour from: the followed camera's atmosphere environment
-    /// map (`GeneratedEnvironmentMapLight::environment_map`), or `neutral_sky`.
+    /// The cube the clouds' skylight is read from: the followed camera's atmosphere environment
+    /// map (Bevy's clear sky, [`SkyProbe::atmosphere`] once the probe has taken the environment
+    /// map over), or `neutral_sky`.
     pub sky_probe: Handle<Image>,
     /// A 1×1 white cube: the neutral ambient of a camera with no environment map.
     pub neutral_sky: Handle<Image>,
     pub view: Option<CloudViewImages>,
+    /// The sky probe's images, while the followed camera has an atmosphere environment map.
+    pub probe: Option<SkyProbeImages>,
+    /// Frames the render world has composed the current probe images on: the probe is handed to
+    /// the environment map once every texel has been marched (`k²` frames).
+    pub probe_frames: Arc<AtomicU32>,
     pub params: CloudParams,
     /// Followed camera present: the weather and shadow kernels run.
     pub active: bool,
     /// Set by the render world after the weather and shadow kernels first ran.
     pub live: Arc<AtomicBool>,
+}
+
+/// The sky probe's textures (`docs/research/sky-light.md`): two cloud states the kernel
+/// ping-pongs between and the composed cube, all of the atmosphere cube's size.
+#[derive(Clone, Debug)]
+pub(crate) struct SkyProbeImages {
+    /// Texels per face edge.
+    pub size: u32,
+    /// Slot block edge `k`: one texel of every `k × k` block is marched each frame.
+    pub block: u32,
+    /// Bevy's atmosphere cube, which the probe composes the clouds over.
+    pub atmosphere: Handle<Image>,
+    /// Premultiplied cloud luminance and transmittance per texel, `[even frame, odd frame]`.
+    pub state: [Handle<Image>; 2],
+    /// The composed sky the environment map is filtered from.
+    pub composed: Handle<Image>,
+}
+
+/// On the followed camera: the clouds composed into its environment map
+/// (`docs/research/sky-light.md`). Its `GeneratedEnvironmentMapLight` is filtered from
+/// `composed` once `lit`, and the camera's `AmbientLight` then no longer carries the
+/// cloud-scattered light, which the cube does.
+#[derive(Component, Clone, Debug)]
+pub(crate) struct SkyProbe {
+    /// Bevy's atmosphere cube (the clear sky): the clouds' own skylight source, and what the
+    /// environment map is given back when the probe ends.
+    pub atmosphere: Handle<Image>,
+    /// The composed cube.
+    pub composed: Handle<Image>,
+    /// The environment map is filtered from `composed`.
+    pub lit: bool,
 }
 
 /// Marks the camera the clouds are drawn for; extracted to the render world.
@@ -407,6 +462,7 @@ impl Plugin for CloudPlugin {
                         update_layer,
                         advance_drift,
                         update_views,
+                        update_sky_probe,
                         // The march reads this frame's `LightningFlash`.
                         update_gpu
                             .after(crate::lightning::write_flash)
@@ -563,6 +619,8 @@ fn create_resources(
         sky_probe: neutral_sky.clone(),
         neutral_sky,
         view: None,
+        probe: None,
+        probe_frames: Arc::new(AtomicU32::new(0)),
         params: CloudParams::default(),
         active: false,
         live: Arc::new(AtomicBool::new(false)),
@@ -658,6 +716,130 @@ fn update_views(
     });
     runtime.quality = Some(*quality);
     runtime.reset_frames = 2;
+}
+
+/// Weight a re-marched sky-probe texel takes in its history (`docs/research/sky-light.md`,
+/// Parameters): the march's per-texel jitter averaged over about seven marches.
+const PROBE_HISTORY_WEIGHT: f32 = 0.25;
+
+/// The followed camera's sky probe (`docs/research/sky-light.md`, Model 5–7): images of the size
+/// of its atmosphere cube, and the environment map handed over to the composed cube once every
+/// texel has been marched. A camera that stops being followed, or whose atmosphere cube is
+/// replaced, gets the atmosphere cube back until a new probe is composed.
+fn update_sky_probe(
+    mut commands: Commands,
+    view: Res<ElementsView>,
+    quality: Res<ElementsQuality>,
+    mut images: ResMut<Assets<Image>>,
+    mut gpu: ResMut<CloudGpu>,
+    mut cameras: Query<(
+        Entity,
+        &mut GeneratedEnvironmentMapLight,
+        Option<&mut SkyProbe>,
+    )>,
+    orphans: Query<Entity, (With<SkyProbe>, Without<GeneratedEnvironmentMapLight>)>,
+) {
+    for entity in &orphans {
+        commands.entity(entity).remove::<SkyProbe>();
+    }
+    for (entity, mut light, probe) in &mut cameras {
+        if Some(entity) == view.entity {
+            continue;
+        }
+        if let Some(probe) = probe {
+            if light.environment_map == probe.composed {
+                light.environment_map = probe.atmosphere.clone();
+            }
+            commands.entity(entity).remove::<SkyProbe>();
+        }
+    }
+    let Some((entity, mut light, probe)) = view.entity.and_then(|e| cameras.get_mut(e).ok()) else {
+        gpu.probe = None;
+        return;
+    };
+    // The environment map's source is Bevy's atmosphere cube unless it is the composed one.
+    let atmosphere = match probe.as_deref() {
+        Some(p) if light.environment_map == p.composed => p.atmosphere.clone(),
+        _ => light.environment_map.clone(),
+    };
+    let Some(size) = images
+        .get(&atmosphere)
+        .map(|image| image.texture_descriptor.size.width)
+    else {
+        gpu.probe = None;
+        return;
+    };
+    let block = CloudQuality::of(*quality).probe_block(size);
+    let current = gpu
+        .probe
+        .as_ref()
+        .is_some_and(|p| p.atmosphere == atmosphere && p.size == size && p.block == block);
+    if !current {
+        let fresh = sky_probe_images(&mut images, atmosphere.clone(), size, block);
+        gpu.probe_frames.store(0, Ordering::Relaxed);
+        if light.environment_map != atmosphere {
+            light.environment_map = atmosphere.clone();
+        }
+        commands.entity(entity).insert(SkyProbe {
+            atmosphere,
+            composed: fresh.composed.clone(),
+            lit: false,
+        });
+        gpu.probe = Some(fresh);
+        return;
+    }
+    if let Some(mut probe) = probe
+        && !probe.lit
+        && gpu.probe_frames.load(Ordering::Relaxed) >= block * block
+    {
+        light.environment_map = probe.composed.clone();
+        probe.lit = true;
+    }
+}
+
+/// The sky probe's two cloud states (no cloud: no luminance, full transmittance) and its composed
+/// cube, `size²` per face, written by the render world only.
+fn sky_probe_images(
+    images: &mut Assets<Image>,
+    atmosphere: Handle<Image>,
+    size: u32,
+    block: u32,
+) -> SkyProbeImages {
+    let mut cube = |pixel: &[u8], dimension: TextureViewDimension| {
+        let mut image = Image::new_fill(
+            Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 6,
+            },
+            TextureDimension::D2,
+            pixel,
+            TextureFormat::Rgba16Float,
+            RenderAssetUsages::RENDER_WORLD,
+        );
+        // COPY_SRC lets the tests read them back.
+        image.texture_descriptor.usage = TextureUsages::STORAGE_BINDING
+            | TextureUsages::TEXTURE_BINDING
+            | TextureUsages::COPY_SRC;
+        image.texture_view_descriptor = Some(TextureViewDescriptor {
+            dimension: Some(dimension),
+            ..default()
+        });
+        images.add(image)
+    };
+    let clear = [0, 0, 0, 0, 0, 0, HALF_ONE[0], HALF_ONE[1]];
+    let state = [
+        cube(&clear, TextureViewDimension::D2Array),
+        cube(&clear, TextureViewDimension::D2Array),
+    ];
+    let composed = cube(&[0; 8], TextureViewDimension::Cube);
+    SkyProbeImages {
+        size,
+        block,
+        atmosphere,
+        state,
+        composed,
+    }
 }
 
 /// The light the clouds are lit by: the sun, fading out over the degree above the handover
@@ -764,11 +946,25 @@ fn update_gpu(
     let wind = weather.wind_direction.normalize_or(Vec2::X);
 
     gpu.active = true;
-    // The ambient's colour is the sky's: the atmosphere's environment cube of the followed
-    // camera, or the neutral cube without one (Deviation 30).
-    gpu.sky_probe = probes
-        .get(entity)
-        .map_or_else(|_| gpu.neutral_sky.clone(), |p| p.environment_map.clone());
+    // The clouds' skylight is the clear sky's: the atmosphere cube of the followed camera (the
+    // one the sky probe composes over, which the environment map no longer shows once the probe
+    // is lit), or the neutral cube without one (Deviation 30).
+    gpu.sky_probe = match &gpu.probe {
+        Some(probe) => probe.atmosphere.clone(),
+        None => probes
+            .get(entity)
+            .map_or_else(|_| gpu.neutral_sky.clone(), |p| p.environment_map.clone()),
+    };
+    // A marched probe texel replaces its history until every texel has been marched once.
+    let probe = gpu.probe.as_ref().map_or(Vec4::ZERO, |p| {
+        let fresh = gpu.probe_frames.load(Ordering::Relaxed) < p.block * p.block;
+        Vec4::new(
+            exposure,
+            p.block as f32,
+            p.size as f32,
+            if fresh { 1.0 } else { PROBE_HISTORY_WEIGHT },
+        )
+    });
     let cloud = CloudLight::from_beam(shadows.mean_transmittance);
     let (diffuse_colour, diffuse_brightness) = cloud_ambient(&sun, frame.moon_lux, cloud);
     let airlight = diffuse_colour * (diffuse_brightness * AIRLIGHT_PER_SKY_RADIANCE);
@@ -814,6 +1010,7 @@ fn update_gpu(
             0.0,
         ),
         units: Vec4::new(units.per_metre(), 0.0, 0.0, 0.0),
+        probe,
     };
 }
 
