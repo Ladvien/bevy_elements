@@ -290,7 +290,19 @@ pub(crate) fn sun_cloud_factor(state: &SunState, cloud: CloudLight) -> f32 {
 /// sky and the stars are never rescaled.
 pub(crate) fn sky_gain(state: &SunState, cloud: CloudLight) -> f32 {
     if state.altitude_deg > SUN_OFF_DEG {
-        cloud.total() / sun_cloud_factor(state, cloud).max(MIN_SKY_BEAM)
+        cloud.total() * sky_clear_gain(state, cloud)
+    } else {
+        1.0
+    }
+}
+
+/// The factor that undoes the cloud dimming of Bevy's sky: the sun's `DirectionalLight` carries
+/// [`sun_cloud_factor`] of the clear sun, so the atmosphere (and its environment map) shows that
+/// fraction of the clear sky; `1 / factor` gives the clear sky, the sky above a cloud layer,
+/// which the layer does not dim. 1 when the sun's light is off.
+pub(crate) fn sky_clear_gain(state: &SunState, cloud: CloudLight) -> f32 {
+    if state.altitude_deg > SUN_OFF_DEG {
+        1.0 / sun_cloud_factor(state, cloud).max(MIN_SKY_BEAM)
     } else {
         1.0
     }
@@ -631,7 +643,7 @@ fn auto_exposure(
 /// Luminance of the moonless night sky behind the atmosphere (airglow, zodiacal light,
 /// starlight; Jensen et al. 2001), cd/m²: the uniform sky that gives the metered illuminance
 /// floor, `E / π`.
-const NIGHT_SKY_LUMINANCE: f32 = ILLUMINANCE_FLOOR_LUX / std::f32::consts::PI;
+pub(crate) const NIGHT_SKY_LUMINANCE: f32 = ILLUMINANCE_FLOOR_LUX / std::f32::consts::PI;
 
 /// Clear every [`SkyBackground`] camera to the night sky's background radiance at its exposure.
 /// The clear colour is written to the target before the sky and is never exposed, so it is

@@ -14,22 +14,23 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use bevy::asset::{RenderAssetUsages, embedded_asset};
 use bevy::camera::Exposure;
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
-use bevy::light::Atmosphere;
 use bevy::light::light_consts::lux;
+use bevy::light::{Atmosphere, GeneratedEnvironmentMapLight};
 use bevy::math::DVec2;
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
 use bevy::render::RenderApp;
 use bevy::render::extract_component::ExtractComponent;
 use bevy::render::render_resource::{
-    Extent3d, ShaderType, TextureDimension, TextureFormat, TextureUsages,
+    Extent3d, ShaderType, TextureDimension, TextureFormat, TextureUsages, TextureViewDescriptor,
+    TextureViewDimension,
 };
 use bevy::render::storage::ShaderBuffer;
 use bevy::shader::load_shader_library;
 
 use crate::celestial::{
-    CelestialFrame, CloudLight, MOON_TINT, SunState, beam_transmittance, cloud_ambient,
-    scene_illuminance, sky_gain,
+    CelestialFrame, CloudLight, MOON_TINT, NIGHT_SKY_LUMINANCE, SunState, beam_transmittance,
+    cloud_ambient, scene_illuminance, sky_clear_gain, sky_gain,
 };
 use crate::climate::Weather;
 use crate::flash::LightningFlash;
@@ -243,7 +244,8 @@ const CAMERA_TRANSMITTANCE_TAU_S: f32 = 1.0;
 pub(crate) struct CloudParams {
     /// xyz: camera, m. w: planet radius, m.
     pub camera: Vec4,
-    /// x: atmosphere outer radius, m. y: aerial LUT range, m. z: aerial LUT slices.
+    /// x: atmosphere outer radius, m. y: aerial LUT range, m. z: aerial LUT slices. w: the night
+    /// sky's background radiance behind the atmosphere (`celestial::NIGHT_SKY_LUMINANCE`), cd/m².
     pub atmo: Vec4,
     /// x: gain on the sky pixels of the composite (`celestial::sky_gain`). yzw: radiance of the
     /// air lit by the cloud-scattered diffuse light (`celestial::cloud_ambient`), cd/m².
@@ -277,7 +279,9 @@ pub(crate) struct CloudParams {
     pub haze: Vec4,
     /// x: extinction of the weather's air above clear air, m⁻¹ (`fog::sky_air_extinction`).
     /// The composite fogs sky pixels with it, so the sky converges on `haze.xyz` as distant
-    /// ground does; 0 leaves the sky to the atmosphere alone. `clouds.md` Deviation 29.
+    /// ground does; 0 leaves the sky to the atmosphere alone. `clouds.md` Deviation 29. y: the
+    /// gain that undoes the cloud dimming of the environment map the ambient reads
+    /// (`celestial::sky_clear_gain`), so it holds the clear sky above the layer.
     pub air: Vec4,
 }
 
@@ -301,6 +305,11 @@ pub(crate) struct CloudGpu {
     pub camera_t: Handle<ShaderBuffer>,
     /// Every fourth shadow-map texel's transmittance, `SHADOW_COARSE_CELLS²` row-major.
     pub shadow_coarse: Handle<ShaderBuffer>,
+    /// The cube the ambient takes its colour from: the followed camera's atmosphere environment
+    /// map (`GeneratedEnvironmentMapLight::environment_map`), or `neutral_sky`.
+    pub sky_probe: Handle<Image>,
+    /// A 1×1 white cube: the neutral ambient of a camera with no environment map.
+    pub neutral_sky: Handle<Image>,
     pub view: Option<CloudViewImages>,
     pub params: CloudParams,
     /// Followed camera present: the weather and shadow kernels run.
@@ -440,6 +449,28 @@ fn texture(
 /// Half-precision 1.0, little-endian.
 const HALF_ONE: [u8; 2] = [0x00, 0x3C];
 
+/// A 1×1 white cube: what the ambient's colour is read from when the camera has no atmosphere
+/// environment map.
+fn neutral_sky_cube(images: &mut Assets<Image>) -> Handle<Image> {
+    let texel = [HALF_ONE[0], HALF_ONE[1]].repeat(4);
+    let mut image = Image::new_fill(
+        Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 6,
+        },
+        TextureDimension::D2,
+        &texel,
+        TextureFormat::Rgba16Float,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.texture_view_descriptor = Some(TextureViewDescriptor {
+        dimension: Some(TextureViewDimension::Cube),
+        ..default()
+    });
+    images.add(image)
+}
+
 fn create_resources(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
@@ -488,6 +519,7 @@ fn create_resources(
         &[HALF_ONE[0], HALF_ONE[1], 0, 0, 0, 0, 0, 0],
         ImageAddressMode::ClampToEdge,
     );
+    let neutral_sky = neutral_sky_cube(&mut images);
     commands.insert_resource(CloudWeatherMap {
         map: weather.clone(),
         origin: Vec2::ZERO,
@@ -514,6 +546,8 @@ fn create_resources(
             "elements_clouds_shadow_coarse",
             vec![1f32; (SHADOW_COARSE_CELLS * SHADOW_COARSE_CELLS) as usize],
         ),
+        sky_probe: neutral_sky.clone(),
+        neutral_sky,
         view: None,
         params: CloudParams::default(),
         active: false,
@@ -640,6 +674,7 @@ fn update_gpu(
     atmospheres: Query<&Atmosphere>,
     exposures: Query<&Exposure>,
     fogs: Query<&DistanceFog>,
+    probes: Query<&GeneratedEnvironmentMapLight>,
     mut runtime: ResMut<CloudRuntime>,
     mut gpu: ResMut<CloudGpu>,
     mut map: ResMut<CloudWeatherMap>,
@@ -702,12 +737,17 @@ fn update_gpu(
     let wind = weather.wind_direction.normalize_or(Vec2::X);
 
     gpu.active = true;
+    // The ambient's colour is the sky's: the atmosphere's environment cube of the followed
+    // camera, or the neutral cube without one (Deviation 30).
+    gpu.sky_probe = probes
+        .get(entity)
+        .map_or_else(|_| gpu.neutral_sky.clone(), |p| p.environment_map.clone());
     let cloud = CloudLight::from_beam(shadows.camera_transmittance);
     let (diffuse_colour, diffuse_brightness) = cloud_ambient(&sun, frame.moon_lux, cloud);
     let airlight = diffuse_colour * (diffuse_brightness * AIRLIGHT_PER_SKY_RADIANCE);
     gpu.params = CloudParams {
         camera: camera.extend(inner),
-        atmo: Vec4::new(outer, 32_000.0, 32.0, 0.0),
+        atmo: Vec4::new(outer, 32_000.0, 32.0, NIGHT_SKY_LUMINANCE),
         sky: Vec4::new(sky_gain(&sun, cloud), airlight.x, airlight.y, airlight.z),
         layer: Vec4::new(
             layer.base_m,
@@ -738,7 +778,7 @@ fn update_gpu(
             fogs.get(entity).map_or(0.0, |fog| {
                 crate::fog::sky_air_extinction(fog_extinction(fog))
             }),
-            0.0,
+            sky_clear_gain(&sun, cloud),
             0.0,
             0.0,
         ),
