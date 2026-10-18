@@ -169,6 +169,50 @@ fn a_scripted_strike_at_343_m_is_heard_one_second_later() {
     assert_eq!(seen.thunder[0].1.distance_m, 343.0);
 }
 
+/// A world in feet (issue #8): a strike 3280.8 units away is 1000 m away, so its thunder reads
+/// 1000 m and is heard 1000 / 343 s later; the messages and the flash carry world units.
+#[test]
+fn a_strike_in_a_world_of_feet_is_a_thousand_metres_off() {
+    let feet = 3.2808_f32;
+    let mut app = storm(5, 0.0);
+    app.insert_resource(ElementsUnits {
+        units_per_metre: feet,
+    });
+    let at = Vec3::new(3280.8, 0.0, 0.0);
+    app.world_mut().write_message(StrikeLightning { at });
+    run(&mut app, 240);
+    let seen = app.world().resource::<Seen>();
+    assert_eq!(seen.strikes.len(), 1);
+    // World units in, world units out (a metre-frame round trip, to f32 precision).
+    assert!(seen.strikes[0].1.position.distance(at) < 1e-2);
+    assert_eq!(seen.thunder.len(), 1);
+    let thunder = seen.thunder[0].1;
+    assert!(
+        (thunder.distance_m - 1000.0).abs() < 1e-2,
+        "{}",
+        thunder.distance_m
+    );
+    assert!(thunder.position.distance(at) < 1e-2);
+    assert!((thunder.loudness - 0.5).abs() < 1e-4);
+    let delay = seen.thunder[0].0 - seen.strikes[0].0;
+    let want = 1000.0 / 343.0;
+    assert!(
+        (want - 1e-6..want + FRAME.as_secs_f64() + 1e-6).contains(&delay),
+        "{delay} against {want}"
+    );
+    // The flash light is at the cloud base, 1500 m up: 4921 units in this world.
+    let flash = seen
+        .flash
+        .iter()
+        .find(|f| f.intensity_cd > 0.0)
+        .expect("a flash");
+    assert!(
+        (1500.0 * feet..1520.0 * feet).contains(&flash.position.y),
+        "{:?}",
+        flash.position
+    );
+}
+
 #[test]
 fn the_same_seed_gives_the_same_storm() {
     let record = |seed| {

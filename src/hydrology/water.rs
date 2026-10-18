@@ -34,7 +34,7 @@ use bevy::transform::TransformSystems;
 
 use super::water_gpu;
 use crate::clouds::CloudShadows;
-use crate::plugin::{ElementsView, ensure_gpu_core, needs_depth_prepass};
+use crate::plugin::{ElementsUnits, ElementsView, ensure_gpu_core, needs_depth_prepass};
 use crate::terrain::lod::MAX_LEVELS;
 use crate::terrain::{
     NO_TERRAIN, TerrainParamsGpu, TerrainRuntime, TerrainState, assign_slots, lod_uniform,
@@ -138,7 +138,7 @@ pub(crate) fn ripple_slope(u10: f32) -> f32 {
 }
 
 /// Uniform of the water materials. Mirrors `WaterParams` of `water.wesl`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, ShaderType, Reflect)]
+#[derive(Clone, Copy, Debug, PartialEq, ShaderType, Reflect)]
 #[reflect(opaque)]
 pub struct WaterParams {
     pub(crate) terrain: TerrainParamsGpu,
@@ -146,7 +146,7 @@ pub struct WaterParams {
     pub(crate) lod: [Vec4; MAX_LEVELS],
     /// x: coarsest level.
     pub(crate) top: Vec4,
-    /// Cloud shadow map origin xy, extent, the lights' mean transmittance.
+    /// Cloud shadow map origin xy (metre frame), extent, the lights' mean transmittance.
     pub(crate) shadow: Vec4,
     /// Unit direction toward the light; w = 1 with a map.
     pub(crate) light: Vec4,
@@ -162,6 +162,29 @@ pub struct WaterParams {
     pub(crate) foam: Vec4,
     /// x: the finest wave cascade's texel (m). y: texels a side. z: 1 when a field is bound.
     pub(crate) waves: Vec4,
+    /// World units to the metre ([`ElementsUnits`](crate::ElementsUnits)): the vertex and
+    /// fragment stages divide the positions Bevy gives them by it and multiply the ones they
+    /// hand back.
+    pub(crate) units: f32,
+}
+
+impl Default for WaterParams {
+    fn default() -> Self {
+        Self {
+            terrain: TerrainParamsGpu::default(),
+            lod: [Vec4::ZERO; MAX_LEVELS],
+            top: Vec4::ZERO,
+            shadow: Vec4::ZERO,
+            light: Vec4::ZERO,
+            absorption: Vec4::ZERO,
+            silt: Vec4::ZERO,
+            deep: Vec4::ZERO,
+            flow: Vec4::ZERO,
+            foam: Vec4::ZERO,
+            waves: Vec4::ZERO,
+            units: 1.0,
+        }
+    }
 }
 
 /// The extension that makes a `StandardMaterial` one pass of the water: the vertex shader
@@ -434,6 +457,7 @@ fn update_water_patches(
     view: Res<ElementsView>,
     mut runtime: ResMut<WaterRuntime>,
     mut patches: Query<(&mut Transform, &mut Visibility, &mut MeshTag, &mut Aabb)>,
+    units: Res<ElementsUnits>,
 ) {
     let (Some(state), Some(lod)) = (state, terrain.lod) else {
         return;
@@ -476,11 +500,16 @@ fn update_water_patches(
     for (patch, i) in assigned {
         let slot = &mut runtime.slots[i];
         slot.patch = Some(patch);
+        // The patch is placed in the world: its metre-frame corner and edge × units.
         let (translation, scale) = patch_transform(&lod, extent, patch);
+        let (translation, scale) = (
+            units.point_to_world(translation),
+            Vec3::new(units.world(scale.x), scale.y, units.world(scale.z)),
+        );
         let (low, high) = boxes.get(patch.level, patch.ix, patch.iz);
         let bounds = Aabb::from_min_max(
-            Vec3::new(0.0, low - WATER_AABB_PAD_M, 0.0),
-            Vec3::new(1.0, high + WATER_AABB_PAD_M, 1.0),
+            Vec3::new(0.0, units.world(low - WATER_AABB_PAD_M), 0.0),
+            Vec3::new(1.0, units.world(high + WATER_AABB_PAD_M), 1.0),
         );
         for entity in [slot.absorb, slot.surface] {
             let Ok((mut transform, mut visibility, mut tag, mut aabb)) = patches.get_mut(entity)
@@ -512,6 +541,7 @@ pub(crate) fn water_params(
     top: Vec4,
     shadows: (Vec4, Vec4),
     wind_ms: f32,
+    units: f32,
 ) -> WaterParams {
     let u10 = settings.wind_speed_ms.unwrap_or(wind_ms);
     let silt = Color::srgb(
@@ -542,6 +572,7 @@ pub(crate) fn water_params(
             settings.foam_roughness,
         ),
         waves: Vec4::ZERO,
+        units,
     }
 }
 
@@ -556,6 +587,7 @@ fn update_water_materials(
     wind: Option<Res<WindState>>,
     waves: Option<Res<WaveState>>,
     runtime: Res<WaterRuntime>,
+    units: Res<ElementsUnits>,
     mut materials: ResMut<Assets<WaterMaterial>>,
 ) {
     let (Some(state), Some(lod)) = (state, terrain.lod.as_ref()) else {
@@ -573,6 +605,7 @@ fn update_water_materials(
         top,
         (shadow, light),
         wind_ms,
+        units.per_metre(),
     );
     let field = waves.as_deref().map(|w| w.field.clone());
     if let Some(w) = waves.as_deref() {

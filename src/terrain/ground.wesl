@@ -16,7 +16,7 @@ import bevy_pbr::render::{
 
 struct GroundParams {
     terrain: TerrainParams,
-    // xy: cloud shadow map origin (world XZ), z: its extent, w: the lights' mean transmittance.
+    // xy: cloud shadow map origin (metre-frame XZ), z: its extent, w: the lights' mean transmittance.
     shadow: vec4<f32>,
     // xyz: unit direction toward the light the map was made for. w: 1 when a map is bound.
     light: vec4<f32>,
@@ -33,6 +33,9 @@ struct GroundParams {
     // As the terrain material's `trail` and `trail_light`.
     trail: vec4<f32>,
     trail_light: vec4<f32>,
+    // World units to the metre (`ElementsUnits`): the fragment's world position and the camera
+    // come in divided by this, the position handed back to Bevy's lighting goes out multiplied.
+    units: f32,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> ground: GroundParams;
@@ -151,7 +154,8 @@ fn brightest_light() -> vec3<f32> {
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
     var pbr_input = pbr_input_from_standard_material(in, is_front);
-    let p = in.world_position.xyz;
+    let p = in.world_position.xyz / ground.units;
+    let eye = view.world_position / ground.units;
     // A fragment deeper than the gate below the column top (a tunnel under the hill) is not
     // under the maps' snow, wetness or water, nor the trails.
     let gated = column_open(p);
@@ -159,9 +163,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let n0 = pbr_input.world_normal;
     let slope = -n0.xz / max(n0.y, 0.2);
     var trail = trail_none(p.xz);
-    let fade = trail_fade(p.xz, view.world_position.xz, ground.trail) * gated;
+    let fade = trail_fade(p.xz, eye.xz, ground.trail) * gated;
     if fade > 0.0 {
-        trail = trail_march(trail_field, trail_sampler, ground.trail, p, view.world_position, slope, brightest_light(), fade);
+        trail = trail_march(trail_field, trail_sampler, ground.trail, p, eye, slope, brightest_light(), fade);
     }
     let pv = vec3<f32>(trail.xz.x, p.y + trail.h + dot(slope, trail.xz - p.xz), trail.xz.y);
     let pressed = max(-trail.h, 0.0);
@@ -193,12 +197,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     pbr_input.material.reflectance = surface.reflectance;
     pbr_input.N = surface.normal;
     pbr_input.world_normal = surface.normal;
-    pbr_input.world_position = vec4<f32>(pv, 1.0);
+    pbr_input.world_position = vec4<f32>(pv * ground.units, 1.0);
     pbr_input.diffuse_occlusion = pbr_input.diffuse_occlusion * trail.open;
     var out: FragmentOutput;
     out.color = apply_pbr_lighting(pbr_input);
     let trail_shade = 1.0 - ground.trail_light.x * (1.0 - trail.lit);
-    out.color = vec4<f32>(out.color.rgb * cloud_shadow_ratio(in.world_position.xyz) * bed_transmittance(depth) * trail_shade, out.color.a);
+    out.color = vec4<f32>(out.color.rgb * cloud_shadow_ratio(p) * bed_transmittance(depth) * trail_shade, out.color.a);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;
 }

@@ -22,7 +22,7 @@ use bevy::shader::ShaderRef;
 
 use crate::climate::{SurfaceWeathering, Weather};
 use crate::clouds::CloudShadows;
-use crate::plugin::{ElementsSystems, ensure_gpu_core};
+use crate::plugin::{ElementsSystems, ElementsUnits, ensure_gpu_core};
 
 /// Linear albedo of snow, bit-equal to `bevy_flora`'s `SNOW_ALBEDO` so trees and buildings match.
 pub const SNOW_ALBEDO: LinearRgba = LinearRgba::new(0.80, 0.83, 0.88, 1.0);
@@ -31,11 +31,12 @@ pub const SNOW_ALBEDO: LinearRgba = LinearRgba::new(0.80, 0.83, 0.88, 1.0);
 /// `docs/research/snow-cover.md`).
 pub const SNOW_ROUGHNESS: f32 = 0.9;
 
-/// The crate's globals as a GPU storage buffer, for a material or pass of your own: the 80-byte
+/// The crate's globals as a GPU storage buffer, for a material or pass of your own: the 96-byte
 /// [`ElementsGlobals`] (wetness and snow cover of exposed ground, the rain intensity, the mean
-/// cloud transmittance, the cloud shadow map's placement, the ripple and streak phases, the wind
-/// and the light direction), laid out as the WGSL `bevy_elements::surface_cover::ElementsGlobals`
-/// (five `vec4<f32>`; the field comments there give each component).
+/// cloud transmittance, the cloud shadow map's placement, the ripple and streak phases, the wind,
+/// the light direction and the world units per metre), laid out as the WGSL
+/// `bevy_elements::surface_cover::ElementsGlobals` (six `vec4<f32>`; the field comments there
+/// give each component).
 ///
 /// [`WeatheredPlugin`] (in `ElementsPlugins`) creates the asset and rewrites it whenever a value
 /// changes, after [`ElementsSystems::Simulation`]; the handle is a fixed id, so a material can
@@ -47,11 +48,11 @@ pub const ELEMENTS_GLOBALS_BUFFER: Handle<ShaderBuffer> =
     uuid_handle!("6b0e2d51-7c1f-4f0d-8a53-2e9a41c7d0b8");
 
 /// `vec4<f32>`s of the GPU buffer (`ElementsGlobals` of `surface_cover.wesl`).
-const GLOBALS_VEC4S: usize = 5;
+const GLOBALS_VEC4S: usize = 6;
 
 /// What the crate tells every weathered material, rewritten each frame after
 /// [`ElementsSystems::Simulation`] by [`WeatheredPlugin`] and uploaded to one shared GPU
-/// storage buffer (`surface_cover::ElementsGlobals`, five `vec4<f32>`, 80 B).
+/// storage buffer (`surface_cover::ElementsGlobals`, six `vec4<f32>`, 96 B).
 ///
 /// Wetness and snow cover are those of exposed flat ground, [`SurfaceWeathering`]'s. The
 /// shader scales them by each material's [`WeatheredExtension::exposure`] and, for snow, by the
@@ -67,7 +68,7 @@ pub struct ElementsGlobals {
     /// Mean direct cloud transmittance over the cloud shadow map, 0–1 (1 without clouds): the
     /// share of the clear beam the lights carry (`CloudShadows::mean_transmittance`).
     pub mean_transmittance: f32,
-    /// World XZ of the cloud shadow map's minimum corner, m.
+    /// Metre-frame XZ of the cloud shadow map's minimum corner, m (world ÷ `units_per_metre`).
     pub shadow_origin: Vec2,
     /// Side of the cloud shadow map, m.
     pub shadow_extent: f32,
@@ -82,6 +83,9 @@ pub struct ElementsGlobals {
     pub streak_phase: f32,
     /// Unit direction toward the light the cloud shadow map was made for.
     pub light_direction: Vec3,
+    /// World units per metre ([`crate::ElementsUnits::units_per_metre`]), as the shader divides
+    /// a world position by it to reach the metre frame the fields above are in.
+    pub units_per_metre: f32,
 }
 
 impl Default for ElementsGlobals {
@@ -98,18 +102,21 @@ impl Default for ElementsGlobals {
             wind: Vec2::ZERO,
             streak_phase: 0.0,
             light_direction: Vec3::Y,
+            units_per_metre: 1.0,
         }
     }
 }
 
 impl ElementsGlobals {
     /// The globals for this frame. `seconds` is the virtual clock in f64 (the ripple phases are
-    /// not representable as a wrapped f32 clock, `docs/research/wetness.md`).
+    /// not representable as a wrapped f32 clock, `docs/research/wetness.md`); `units` is
+    /// [`crate::ElementsUnits::per_metre`].
     pub(crate) fn gather(
         weathering: Option<&SurfaceWeathering>,
         weather: &Weather,
         shadows: Option<&CloudShadows>,
         seconds: f64,
+        units: f32,
     ) -> Self {
         let (shadow_origin, shadow_extent, shadow_enabled, mean_transmittance, light) =
             match shadows {
@@ -134,6 +141,7 @@ impl ElementsGlobals {
             wind: weather.wind_direction * weather.wind_speed_ms,
             streak_phase: model::streak_phase(seconds),
             light_direction: light,
+            units_per_metre: units,
         }
     }
 
@@ -160,6 +168,7 @@ impl ElementsGlobals {
                 self.light_direction.z,
                 0.0,
             ],
+            [self.units_per_metre, 0.0, 0.0, 0.0],
         ]
     }
 }
@@ -270,6 +279,7 @@ fn update_globals(
     weather: Res<Weather>,
     shadows: Option<Res<CloudShadows>>,
     time: Res<Time<Virtual>>,
+    units: Res<ElementsUnits>,
     mut globals: ResMut<ElementsGlobals>,
     buffers: Option<ResMut<Assets<ShaderBuffer>>>,
 ) {
@@ -278,6 +288,7 @@ fn update_globals(
         &weather,
         shadows.as_deref(),
         time.elapsed_secs_f64(),
+        units.per_metre(),
     );
     let Some(mut buffers) = buffers else {
         // Headless: no renderer, nothing to upload.

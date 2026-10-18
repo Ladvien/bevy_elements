@@ -664,26 +664,29 @@ pub(crate) struct Marched {
     pub(crate) transmittance: f64,
 }
 
-/// Mirror of `view_ray` of `common.wesl`: the origin and unit direction of the ray through
-/// screen position `uv` (0–1, top-left origin). A perspective view's starts at the eye `cam`;
+/// Mirror of `view_ray` of `common.wesl`: the origin and unit direction, in metres, of the ray
+/// through screen position `uv` (0–1, top-left origin) of a view whose matrices are in world
+/// units, `units` of them to the metre. A perspective view's starts at the eye `cam` (world);
 /// an orthographic view's runs along the view direction from the pixel's point on the plane
-/// through `focus` across it.
+/// through `focus` (metres) across it.
 pub(crate) fn view_ray(
     uv: Vec2,
     world_from_clip: Mat4,
     cam: Vec3,
     orthographic: bool,
     focus: Vec3,
+    units: f32,
 ) -> (Vec3, Vec3) {
     let ndc = Vec2::new(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
     let n = world_from_clip * Vec4::new(ndc.x, ndc.y, 1.0, 1.0);
-    let on_near = n.truncate() / n.w;
+    let on_near = n.truncate() / n.w / units;
     if orthographic {
         let m = world_from_clip * Vec4::new(ndc.x, ndc.y, 0.5, 1.0);
-        let dir = (m.truncate() / m.w - on_near).normalize();
+        let dir = (m.truncate() / m.w / units - on_near).normalize();
         return (on_near + dir * (focus - on_near).dot(dir), dir);
     }
-    (cam, (on_near - cam).normalize())
+    let eye = cam / units;
+    (eye, (on_near - eye).normalize())
 }
 
 /// Where a ray from altitude `y` with vertical component `dy` is between two altitudes (the
@@ -973,8 +976,8 @@ mod tests {
             focus,
         );
         let (a, b) = (Vec2::new(0.1, 0.2), Vec2::new(0.9, 0.7));
-        let (oa, da) = view_ray(a, ortho, eye, true, focus);
-        let (ob, db) = view_ray(b, ortho, eye, true, focus);
+        let (oa, da) = view_ray(a, ortho, eye, true, focus, 1.0);
+        let (ob, db) = view_ray(b, ortho, eye, true, focus, 1.0);
         assert!(oa.distance(ob) > 10.0, "{oa} {ob}");
         assert!(
             da.distance(db) < 1e-5 && da.distance(forward) < 1e-5,
@@ -983,7 +986,7 @@ mod tests {
         // The origins lie on the plane through the focus across the view direction.
         assert!((oa - focus).dot(forward).abs() < 1e-2 && (ob - focus).dot(forward).abs() < 1e-2);
         // Without a focus (it is the camera) they lie on the camera's own plane.
-        let (own, _) = view_ray(a, ortho, eye, true, eye);
+        let (own, _) = view_ray(a, ortho, eye, true, eye, 1.0);
         assert!((own - eye).dot(forward).abs() < 1e-2 && own.distance(oa) > 1000.0);
 
         let persp = world_from_clip(
@@ -991,8 +994,8 @@ mod tests {
             eye,
             focus,
         );
-        let (pa, ea) = view_ray(a, persp, eye, false, focus);
-        let (pb, eb) = view_ray(b, persp, eye, false, focus);
+        let (pa, ea) = view_ray(a, persp, eye, false, focus, 1.0);
+        let (pb, eb) = view_ray(b, persp, eye, false, focus, 1.0);
         assert_eq!((pa, pb), (eye, eye));
         assert!(ea.distance(eb) > 0.1 && (ea.length() - 1.0).abs() < 1e-5);
         // The centre of the screen looks along the view direction in both (a perspective ray is
@@ -1000,12 +1003,74 @@ mod tests {
         // orthographic one starts at the focus.
         let centre = Vec2::splat(0.5);
         assert!(
-            view_ray(centre, persp, eye, false, focus)
+            view_ray(centre, persp, eye, false, focus, 1.0)
                 .1
                 .distance(forward)
                 < 1e-3
         );
-        assert!(view_ray(centre, ortho, eye, true, focus).0.distance(focus) < 1e-2);
+        assert!(
+            view_ray(centre, ortho, eye, true, focus, 1.0)
+                .0
+                .distance(focus)
+                < 1e-2
+        );
+    }
+
+    /// The same scene built in feet (the camera, and so every matrix, ×3.2808) gives the same
+    /// rays in metres: the same origin and direction under both projections.
+    #[test]
+    fn a_view_in_feet_gives_the_metre_rays_of_the_same_scene() {
+        use bevy::camera::{
+            OrthographicProjection, PerspectiveProjection, Projection, ScalingMode,
+        };
+        let u = 3.2808_f32;
+        let (eye, focus) = (Vec3::new(0.0, 860.4, 1228.7), Vec3::ZERO);
+        let uv = Vec2::new(0.3, 0.6);
+        for (projection, orthographic) in [
+            (
+                Projection::from(OrthographicProjection {
+                    scaling_mode: ScalingMode::FixedVertical {
+                        viewport_height: 80.0,
+                    },
+                    far: 4000.0,
+                    ..OrthographicProjection::default_3d()
+                }),
+                true,
+            ),
+            (Projection::from(PerspectiveProjection::default()), false),
+        ] {
+            let metres = view_ray(
+                uv,
+                world_from_clip(projection.clone(), eye, focus),
+                eye,
+                orthographic,
+                focus,
+                1.0,
+            );
+            // The world in feet: the camera at `eye · u`, and a projection whose extents are
+            // in feet too.
+            let mut feet_projection = projection;
+            if let Projection::Orthographic(o) = &mut feet_projection {
+                o.scaling_mode = ScalingMode::FixedVertical {
+                    viewport_height: 80.0 * u,
+                };
+                o.far *= u;
+            }
+            let feet = view_ray(
+                uv,
+                world_from_clip(feet_projection, eye * u, focus * u),
+                eye * u,
+                orthographic,
+                focus,
+                u,
+            );
+            assert!(
+                // (A perspective direction is the difference of the eye and a point 0.1 from it,
+                // in f32 thousands out: ~1e-2.)
+                metres.0.distance(feet.0) < 0.5 && metres.1.distance(feet.1) < 2e-2,
+                "{metres:?} {feet:?}"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------------------------

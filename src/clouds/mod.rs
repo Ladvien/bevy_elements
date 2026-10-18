@@ -37,7 +37,8 @@ use crate::flash::LightningFlash;
 use crate::gpu::grid::storage_buffer;
 use crate::gpu::readback::{Readbacks, decode};
 use crate::plugin::{
-    ElementsQuality, ElementsSystems, ElementsView, ensure_gpu_core, needs_depth_prepass,
+    ElementsQuality, ElementsSystems, ElementsUnits, ElementsView, ensure_gpu_core,
+    needs_depth_prepass,
 };
 use crate::query::EnvironmentSnapshot;
 use crate::terrain::TerrainGrid;
@@ -113,12 +114,13 @@ impl CloudLayer {
 /// The 512² `rgba8unorm` weather map the clouds are built from, covering 32 km around the
 /// camera: R coverage, G precipitation (never above `precipitation_mm_h / 25`, zero where there
 /// is no cloud), B cloud type. Sample it with a bilinear, repeating sampler at
-/// `uv = (world_xz − origin) / extent`.
+/// `uv = (p.xz − origin) / extent`, `p` a world position in the metre frame (world ÷
+/// [`crate::ElementsUnits::units_per_metre`]; the same as world for the default 1.0).
 #[derive(Resource, Clone, Debug)]
 pub struct CloudWeatherMap {
     /// The map texture; written by a compute kernel every frame.
     pub map: Handle<Image>,
-    /// World XZ of the map's minimum corner, m (snapped to a whole texel).
+    /// Metre-frame XZ of the map's minimum corner, m (snapped to a whole texel).
     pub origin: Vec2,
     /// Side length of the map, m.
     pub extent: f32,
@@ -128,13 +130,14 @@ pub struct CloudWeatherMap {
 /// 1024² `rgba16float` over an 8 km square centred on the camera. R is the direct transmittance
 /// `T`, G the optical depth (clamped to 60), B the precipitation darkening of the weather map.
 ///
-/// A consumer at world position `P` samples with `uv = (P.xz − light_direction.xz · P.y /
-/// light_direction.y − origin) / extent` and `Clamp` addressing; outside the map `T = 1`.
+/// A consumer at metre-frame position `P` (world ÷ `ElementsUnits::units_per_metre`) samples with
+/// `uv = (P.xz − light_direction.xz · P.y / light_direction.y − origin) / extent` and `Clamp`
+/// addressing; outside the map `T = 1`.
 #[derive(Resource, Clone, Debug)]
 pub struct CloudShadows {
     /// The map texture.
     pub map: Handle<Image>,
-    /// World XZ of the map's minimum corner, m (snapped to a whole texel).
+    /// Metre-frame XZ of the map's minimum corner, m (snapped to a whole texel).
     pub origin: Vec2,
     /// Side length of the map, m.
     pub extent: f32,
@@ -169,7 +172,8 @@ impl CloudShadows {
         Vec3::new(flat.x * c, SHADOW_MIN_LIGHT_SINE, flat.y * c)
     }
 
-    /// Texture coordinate (0–1 over the map) of the shadow cast on world position `position`:
+    /// Texture coordinate (0–1 over the map) of the shadow cast on metre-frame position `position`
+    /// (world ÷ `ElementsUnits::units_per_metre`; `Environment::cloud_shadow_at` converts):
     /// `(P.xz − l.xz · P.y / l.y − origin) / extent`, the point where the ray from `P` toward
     /// the light would cross the plane `y = 0` the map is generated for. Sample with `Clamp`
     /// addressing; a coordinate outside 0–1 is outside the map and unshadowed (`T = 1`).
@@ -290,6 +294,9 @@ pub(crate) struct CloudParams {
     /// gain that undoes the cloud dimming of the environment map the ambient reads
     /// (`celestial::sky_clear_gain`), so it holds the clear sky above the layer.
     pub air: Vec4,
+    /// x: world units per metre ([`crate::ElementsUnits`]). Every other field is in metres;
+    /// Bevy's view matrices and depth are in world units, which the shaders convert with it.
+    pub units: Vec4,
 }
 
 /// The per-view images: this frame's march result and the two history textures.
@@ -675,7 +682,7 @@ fn update_gpu(
     weather: Res<Weather>,
     sun: Res<SunState>,
     frame: Res<CelestialFrame>,
-    flash: Res<LightningFlash>,
+    (flash, units): (Res<LightningFlash>, Res<ElementsUnits>),
     quality: Res<ElementsQuality>,
     layer: Res<CloudLayer>,
     atmospheres: Query<&Atmosphere>,
@@ -786,40 +793,47 @@ fn update_gpu(
             CloudLayer::precipitation_from_weather(&weather),
         ),
         shadow: Vec4::new(shadows.origin.x, shadows.origin.y, SHADOW_EXTENT_M, 0.0),
-        flash: flash.position.extend(flash.intensity_cd.max(0.0)),
+        flash: units
+            .point_to_metres(flash.position)
+            .extend(flash.intensity_cd.max(0.0)),
         counts: UVec4::new(runtime.frame, q.steps, q.block, q.light_samples),
         sizes: UVec4::new(size.x, size.y, low.x, low.y),
         misc: Vec4::new(exposure_ratio, 0.0, 0.0, if reset { 1.0 } else { 0.0 }),
         tail: UVec4::ZERO,
-        haze: fogs.get(entity).map_or(Vec4::ZERO, haze),
+        haze: fogs
+            .get(entity)
+            .map_or(Vec4::ZERO, |fog| haze(fog, units.per_metre())),
         // The sky's air comes from the camera's own `DistanceFog`, so the sky and the meshes
         // cannot disagree about the fog even if a game replaces it.
         air: Vec4::new(
             fogs.get(entity).map_or(0.0, |fog| {
-                crate::fog::sky_air_extinction(fog_extinction(fog))
+                crate::fog::sky_air_extinction(fog_extinction(fog, units.per_metre()))
             }),
             sky_clear_gain(&sun, cloud),
             0.0,
             0.0,
         ),
+        units: Vec4::new(units.per_metre(), 0.0, 0.0, 0.0),
     };
 }
 
-/// The distance fog as the clouds' ground haze: its linear colour and its grey extinction
-/// (`fog::distance_fog_falloff` sets extinction and in-scattering equal).
-fn haze(fog: &DistanceFog) -> Vec4 {
+/// The distance fog as the clouds' ground haze: its linear colour and its grey extinction in
+/// m⁻¹ (`fog::distance_fog_falloff` sets extinction and in-scattering equal).
+fn haze(fog: &DistanceFog, units: f32) -> Vec4 {
     let c = fog.color.to_linear();
-    Vec4::new(c.red, c.green, c.blue, fog_extinction(fog))
+    Vec4::new(c.red, c.green, c.blue, fog_extinction(fog, units))
 }
 
-/// Extinction of a camera's distance fog, m⁻¹; 0 for a falloff this crate never writes
-/// (`FogFalloff::Linear` or `ExponentialSquared`, which a game that replaces the component may).
-fn fog_extinction(fog: &DistanceFog) -> f32 {
-    match fog.falloff {
+/// Extinction of a camera's distance fog, m⁻¹ (Bevy's is per world unit, `units` of them to the
+/// metre); 0 for a falloff this crate never writes (`FogFalloff::Linear` or
+/// `ExponentialSquared`, which a game that replaces the component may).
+fn fog_extinction(fog: &DistanceFog, units: f32) -> f32 {
+    let per_world_unit = match fog.falloff {
         FogFalloff::Atmospheric { extinction, .. } => extinction.x,
         FogFalloff::Exponential { density } => density,
         FogFalloff::ExponentialSquared { .. } | FogFalloff::Linear { .. } => 0.0,
-    }
+    };
+    per_world_unit * units
 }
 
 #[cfg(test)]

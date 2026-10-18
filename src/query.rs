@@ -12,6 +12,7 @@ use crate::climate::Weather;
 use crate::clouds::CloudShadowSnapshot;
 use crate::cover::CoverSnapshot;
 use crate::hydrology::{WaterDepthSnapshot, WaterVelocitySnapshot};
+use crate::plugin::ElementsUnits;
 use crate::terrain::{TerrainLeaves, TerrainSnapshot};
 use crate::wind::{WindSnapshot, WindState};
 
@@ -38,9 +39,9 @@ pub struct EnvironmentSnapshot {
 }
 
 impl EnvironmentSnapshot {
-    /// World height of the ground at `xz`: the terrain surface at the last readback where there
-    /// is terrain, the plane y = 0 elsewhere (outside it, without one, or before the first
-    /// readback).
+    /// Height of the ground at `xz` (metre frame: world ÷ `ElementsUnits::units_per_metre`), m:
+    /// the terrain surface at the last readback where there is terrain, the plane y = 0 elsewhere
+    /// (outside it, without one, or before the first readback).
     pub(crate) fn ground_height(&self, xz: Vec2) -> f32 {
         self.terrain
             .as_ref()
@@ -51,6 +52,10 @@ impl EnvironmentSnapshot {
 
 /// Ask about the environment from gameplay systems. Order such systems
 /// `.after(ElementsSystems::Readback)`.
+///
+/// Positions are world units ([`ElementsUnits`]: the queries convert them to the crate's metre
+/// frame), and so is [`terrain_height`](Self::terrain_height)'s answer; every other answer is SI
+/// (depths in m, speeds in m/s).
 ///
 /// Spatial answers come from a CPU snapshot of GPU state taken every
 /// [`ElementsReadback::interval`](crate::ElementsReadback) (4 Hz by default), so they are up to
@@ -65,6 +70,7 @@ pub struct Environment<'w> {
     frame: Option<Res<'w, CelestialFrame>>,
     wind: Res<'w, WindState>,
     time: Res<'w, Time<Real>>,
+    units: Res<'w, ElementsUnits>,
 }
 
 impl Environment<'_> {
@@ -100,18 +106,29 @@ impl Environment<'_> {
         self.snapshot
             .wind
             .as_ref()
-            .and_then(|w| w.sample(position))
+            .and_then(|w| w.sample(self.units.point_to_metres(position)))
             .unwrap_or_else(|| self.wind.prevailing_velocity())
     }
 
-    /// World height of the terrain surface (bedrock + sediment) at `position` (world XZ), m.
-    /// `None` outside the terrain, when there is none, and before the first readback; the
-    /// value is the surface at the last readback, up to one readback interval old.
+    /// World height of the terrain surface (bedrock + sediment) at `position` (world XZ), in
+    /// world units. `None` outside the terrain, when there is none, and before the first
+    /// readback; the value is the surface at the last readback, up to one readback interval old.
     pub fn terrain_height(&self, position: Vec2) -> Option<f32> {
+        self.terrain_height_metres(self.xz_to_metres(position))
+            .map(|h| self.units.world(h))
+    }
+
+    /// [`terrain_height`](Self::terrain_height) in the metre frame: at a metre-frame XZ, in m.
+    pub(crate) fn terrain_height_metres(&self, position: Vec2) -> Option<f32> {
         self.snapshot
             .terrain
             .as_ref()
             .and_then(|t| t.height(position))
+    }
+
+    /// A world XZ in the metre frame.
+    fn xz_to_metres(&self, position: Vec2) -> Vec2 {
+        position / self.units.per_metre()
     }
 
     /// Depth of the water above the ground at `position` (world XZ), m: `Some(0.0)` on dry
@@ -119,6 +136,11 @@ impl Environment<'_> {
     /// (the simulation has to have run). A bilinear sample of the last readback, up to one
     /// readback interval old.
     pub fn water_depth(&self, position: Vec2) -> Option<f32> {
+        self.water_depth_metres(self.xz_to_metres(position))
+    }
+
+    /// [`water_depth`](Self::water_depth) at a metre-frame XZ.
+    pub(crate) fn water_depth_metres(&self, position: Vec2) -> Option<f32> {
         self.snapshot
             .water_depth
             .as_ref()
@@ -132,7 +154,7 @@ impl Environment<'_> {
         self.snapshot
             .water_velocity
             .as_ref()
-            .and_then(|w| w.velocity_at(position))
+            .and_then(|w| w.velocity_at(self.xz_to_metres(position)))
     }
 
     /// Depth of the snow on the ground at `position` (world XZ), m: `Some(0.0)` on bare ground,
@@ -143,7 +165,7 @@ impl Environment<'_> {
         self.snapshot
             .cover
             .as_ref()
-            .and_then(|c| c.depth_at(position))
+            .and_then(|c| c.depth_at(self.xz_to_metres(position)))
     }
 
     /// How wet the ground is at `position` (world XZ), 0 dry to 1 soaked (a full film; puddles
@@ -154,7 +176,7 @@ impl Environment<'_> {
         self.snapshot
             .cover
             .as_ref()
-            .and_then(|c| c.wetness_at(position))
+            .and_then(|c| c.wetness_at(self.xz_to_metres(position)))
     }
 
     /// Direct transmittance of the clouds toward the sun (the moon once the sun is 4° below the
@@ -167,7 +189,7 @@ impl Environment<'_> {
         self.snapshot
             .cloud_shadow
             .as_ref()
-            .map(|s| s.transmittance_at(position))
+            .map(|s| s.transmittance_at(self.units.point_to_metres(position)))
     }
 
     /// Horizontal illuminance at a world position, lx: the sun's and the moon's clear-sky
@@ -224,6 +246,7 @@ mod tests {
         world.insert_resource(CelestialFrame::default());
         world.insert_resource(WindState::default());
         world.insert_resource(Time::<Real>::default());
+        world.insert_resource(ElementsUnits::default());
         world
     }
 
@@ -300,4 +323,49 @@ mod tests {
 
     #[derive(Resource)]
     struct Shadowed(Vec2, f32);
+
+    /// A flat terrain 2 m above the origin: 32 cells of 1 m from (0, 0) in the metre frame.
+    fn flat_terrain() -> TerrainSnapshot {
+        TerrainSnapshot {
+            grid: crate::terrain::TerrainGrid {
+                origin: Vec2::ZERO,
+                cell_m: 1.0,
+                size: UVec2::splat(32),
+                y0: 2.0,
+            },
+            surface: Arc::from(vec![0.0; 32 * 32]),
+            version: 1,
+        }
+    }
+
+    #[test]
+    fn in_feet_the_terrain_height_is_in_world_units_and_the_position_is_read_in_world_units() {
+        let mut w = world(None);
+        w.resource_mut::<EnvironmentSnapshot>().terrain = Some(flat_terrain());
+        w.insert_resource(ElementsUnits {
+            units_per_metre: 3.2808,
+        });
+        // (10 m, 10 m) is (32.808, 32.808) feet; 2 m is 6.5616 feet.
+        let height = ask(&mut w, |e| e.terrain_height(Vec2::splat(32.808)));
+        assert!(
+            height.is_some_and(|h| (h - 6.5616).abs() < 1e-4),
+            "{height:?}"
+        );
+        // 40 m is outside the 32 m grid, though 40 feet is not.
+        assert_eq!(
+            ask(&mut w, |e| e.terrain_height(Vec2::splat(40.0 * 3.2808))),
+            None
+        );
+        assert!(ask(&mut w, |e| e.terrain_height(Vec2::splat(40.0))).is_some());
+    }
+
+    #[test]
+    fn in_metres_the_terrain_height_is_unchanged() {
+        let mut w = world(None);
+        w.resource_mut::<EnvironmentSnapshot>().terrain = Some(flat_terrain());
+        assert_eq!(
+            ask(&mut w, |e| e.terrain_height(Vec2::splat(10.0))),
+            Some(2.0)
+        );
+    }
 }

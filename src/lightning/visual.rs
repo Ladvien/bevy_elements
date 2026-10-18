@@ -14,7 +14,7 @@ use super::strikes::ActiveBolt;
 use super::{FLASH_HEIGHT_M, FLASH_LUMENS, FLASH_RANGE_M};
 use crate::climate::Weather;
 use crate::fog::extinction_for_visibility;
-use crate::plugin::{ElementsSystems, ElementsView};
+use crate::plugin::{ElementsSystems, ElementsUnits, ElementsView};
 
 /// Scene luminance of the channel core at a first stroke's peak, cd/m² (plan 2.3).
 const BOLT_LUMINANCE: f32 = 50_000.0;
@@ -283,11 +283,12 @@ fn warm_up(
 #[derive(SystemParam)]
 struct ViewPixels<'w, 's> {
     view: Res<'w, ElementsView>,
+    units: Res<'w, ElementsUnits>,
     cameras: Query<'w, 's, (&'static Camera, &'static Projection)>,
 }
 
 impl ViewPixels<'_, '_> {
-    /// The world size of one pixel of the followed camera: the angle a perspective camera's
+    /// The size in metres of one pixel of the followed camera: the angle a perspective camera's
     /// pixel subtends, or an orthographic camera's pixel height; a 1080p, 60° view's if there is
     /// no followed camera with a target yet.
     fn size(&self) -> PixelSize {
@@ -300,9 +301,9 @@ impl ViewPixels<'_, '_> {
                     Projection::Perspective(p) => {
                         Some(PixelSize::Angle(pixel_angle(p.fov, height_px)))
                     }
-                    Projection::Orthographic(o) => {
-                        Some(PixelSize::Fixed(o.area.height() / height_px))
-                    }
+                    Projection::Orthographic(o) => Some(PixelSize::Fixed(
+                        self.units.metres(o.area.height()) / height_px,
+                    )),
                     Projection::Custom(_) => None,
                 }
             })
@@ -314,6 +315,7 @@ impl ViewPixels<'_, '_> {
 }
 
 /// Build the ribbons and the light for every bolt that just struck.
+#[allow(clippy::too_many_arguments)]
 fn attach(
     mut commands: Commands,
     new: Query<(Entity, &ActiveBolt), Added<ActiveBolt>>,
@@ -322,6 +324,7 @@ fn attach(
     mut materials: ResMut<Assets<StandardMaterial>>,
     ramp: Res<Ramp>,
     weather: Res<Weather>,
+    units: Res<ElementsUnits>,
 ) {
     if new.is_empty() {
         return;
@@ -354,9 +357,14 @@ fn attach(
         });
         let mut light = Entity::PLACEHOLDER;
         let branch_material = branches.as_ref().map(|(_, m)| m.clone());
+        // The bolt is built in metres about its attachment point: its entity stands at that
+        // point in the world and is scaled by the units, so the ribbons and the light's height
+        // follow. A light's range and intensity are not transformed: they are written in world
+        // units (range × u, intensity × u², `E = I / d²`).
+        let u = units.per_metre();
         commands.entity(entity).insert((
             Name::new("Lightning bolt"),
-            Transform::from_translation(ground),
+            Transform::from_translation(units.point_to_world(ground)).with_scale(Vec3::splat(u)),
             Visibility::default(),
         ));
         commands.entity(entity).with_children(|parent| {
@@ -369,7 +377,7 @@ fn attach(
                     PointLight {
                         color: Color::linear_rgb(TINT.x, TINT.y, TINT.z),
                         intensity: 0.0,
-                        range: FLASH_RANGE_M,
+                        range: FLASH_RANGE_M * u,
                         shadow_maps_enabled: false,
                         ..default()
                     },
@@ -389,6 +397,7 @@ fn attach(
 fn animate(
     bolts: Query<(&ActiveBolt, &BoltVisual)>,
     view: Res<ElementsView>,
+    units: Res<ElementsUnits>,
     exposures: Query<&Exposure>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut lights: Query<&mut PointLight>,
@@ -409,7 +418,8 @@ fn animate(
             material.base_color = layer_color(active.mean_first, exposure).into();
         }
         if let Ok(mut light) = lights.get_mut(visual.light) {
-            light.intensity = FLASH_LUMENS * active.mean;
+            let u = units.per_metre();
+            light.intensity = FLASH_LUMENS * active.mean * u * u;
         }
     }
 }

@@ -13,7 +13,7 @@
 
 import bevy_elements::grid::grid_taps;
 import bevy_elements::terrain::common::{TerrainParams, terrain_live};
-import bevy_elements::wind::{WindFieldParams, elements_wind};
+import bevy_elements::wind::{WindFieldParams, elements_wind_metres};
 import bevy_elements::precipitation::common::{particle_rand, drop_diameter_mm, drop_fall_speed, dust_height};
 
 struct Particle {
@@ -201,7 +201,7 @@ fn elements_precip_sim(
                 }
                 life = 0.0;
             }
-            let wind = elements_wind(wind_field, wind_sampler, params.wind, pos);
+            let wind = elements_wind_metres(wind_field, wind_sampler, params.wind, pos);
             if kind == KIND_RAIN {
                 let d = drop_diameter_mm(particle_rand(index, epoch, 0u), params.rain.x);
                 vel = wind + vec3<f32>(0.0, -drop_fall_speed(d), 0.0);

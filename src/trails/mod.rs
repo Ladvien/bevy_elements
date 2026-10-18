@@ -30,7 +30,9 @@ use crate::clouds::CloudShadows;
 use crate::cover::{CoverState, SnowSettings};
 use crate::dust::DustSettings;
 use crate::gpu::grid::zeroed_buffer;
-use crate::plugin::{ElementsQuality, ElementsSystems, ElementsView, ensure_gpu_core};
+use crate::plugin::{
+    ElementsQuality, ElementsSystems, ElementsUnits, ElementsView, ensure_gpu_core,
+};
 use crate::terrain::{TerrainGpu, TerrainParamsGpu, TerrainState};
 use model::{ImprintGpu, MAX_IMPRINTS, MAX_SWEEP_M, window_origin};
 
@@ -289,6 +291,7 @@ fn run_trails(
     state: Option<ResMut<TrailState>>,
     mut runtime: ResMut<TrailRuntime>,
     imprints: Query<(Entity, &Imprint, Ref<GlobalTransform>)>,
+    units: Res<ElementsUnits>,
 ) {
     let (Some(terrain), Some(terrain_gpu), Some(mut gpu), Some(mut state)) =
         (terrain, terrain_gpu, gpu, state)
@@ -311,7 +314,9 @@ fn run_trails(
         if transform.is_added() {
             continue;
         }
-        let p = transform.translation();
+        // The sole in the metre frame: the sweep limit and the sinkage test are metres.
+        let transform_m = units.to_metres(&transform);
+        let p = transform_m.translation();
         let xz = Vec2::new(p.x, p.z);
         let from = runtime
             .last
@@ -322,7 +327,7 @@ fn run_trails(
         seen.insert(entity, xz);
         if let Some(upload) = ImprintGpu::new(
             imprint.half_extents,
-            yaw_of(&transform),
+            yaw_of(&transform_m),
             imprint.load_n,
             from,
             xz,

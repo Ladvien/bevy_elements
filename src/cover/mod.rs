@@ -36,7 +36,7 @@ use crate::climate::weathering::update_weathering;
 use crate::climate::{Climate, LAPSE_RATE_C_PER_M, SurfaceWeathering, Weather};
 use crate::gpu::grid::zeroed_buffer;
 use crate::gpu::readback::{ReadbackTick, Readbacks, decode};
-use crate::plugin::{ElementsSystems, ElementsView, ensure_gpu_core};
+use crate::plugin::{ElementsSystems, ElementsUnits, ElementsView, ensure_gpu_core};
 use crate::precipitation::model::{marshall_palmer_lambda, water_weighted_fall_speed};
 use crate::precipitation::{BlockerGpu, PrecipitationBlocker, nearest_blockers};
 use crate::query::EnvironmentSnapshot;
@@ -474,6 +474,7 @@ fn run_cover(
     mut runtime: ResMut<CoverRuntime>,
     mut stats: ResMut<CoverStats>,
     blockers: Query<(Entity, &PrecipitationBlocker, &GlobalTransform)>,
+    units: Res<ElementsUnits>,
 ) {
     let (Some(terrain), Some(mut terrain_gpu), Some(mut gpu)) = (terrain, terrain_gpu, gpu) else {
         return;
@@ -510,7 +511,7 @@ fn run_cover(
     let selected = nearest_blockers(
         view.position,
         blockers.iter().filter_map(|(entity, blocker, transform)| {
-            BlockerGpu::new(blocker.half_extents, transform).map(|b| (entity, b))
+            BlockerGpu::new(blocker.half_extents, &units.to_metres(transform)).map(|b| (entity, b))
         }),
     );
     if runtime.blockers != selected {

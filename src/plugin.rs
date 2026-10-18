@@ -166,7 +166,7 @@ impl ElementsCamera {
 pub enum ElementsFocus {
     /// That entity's `GlobalTransform` translation, read every frame.
     Entity(Entity),
-    /// A world point, m.
+    /// A world point, in world units.
     Point(Vec3),
 }
 
@@ -276,14 +276,103 @@ impl ElementsQuality {
     }
 }
 
-/// The camera the camera-relative simulations follow this frame.
+/// How many world units make a metre: 1.0 (the default) for a world in metres, 3.2808 for one in
+/// feet, 100.0 in centimetres (`docs/research/units.md`).
+///
+/// The crate simulates in metres. Positions it reads or writes in the world (every `Transform`,
+/// [`ElementsFocus::Point`], the [`Environment`](crate::Environment) query positions,
+/// [`Environment::terrain_height`](crate::Environment::terrain_height), the strike, thunder,
+/// flash and gust positions) are world units; everything else stays SI: lengths and depths in
+/// metres ([`Thunder::distance_m`](crate::Thunder), [`Terrain`](crate::Terrain) extents and
+/// heights, the half extents of blockers, contacts and imprints, which their transforms scale),
+/// speeds in m/s. The grids the crate publishes (the wind window, the terrain grid, the cloud
+/// shadow map's placement) are in the metre frame, world ÷ `units_per_metre`. The crate scales
+/// what it puts in Bevy's world to match: the atmosphere it spawns, its fog, shadow cascades and
+/// lightning light.
+///
+/// Changing it at runtime moves the camera-relative domains on the next frame; a terrain keeps
+/// the metre frame it was built in until it is rebuilt. A value that is not positive and finite
+/// reads as 1.0 (one warning).
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Reflect)]
+pub struct ElementsUnits {
+    /// World units to the metre.
+    pub units_per_metre: f32,
+}
+
+impl Default for ElementsUnits {
+    fn default() -> Self {
+        Self {
+            units_per_metre: 1.0,
+        }
+    }
+}
+
+impl ElementsUnits {
+    /// World units to the metre, 1.0 for a value that is not positive and finite.
+    pub fn per_metre(&self) -> f32 {
+        let u = self.units_per_metre;
+        if u.is_finite() && u > 0.0 { u } else { 1.0 }
+    }
+
+    /// `metres` in world units.
+    pub fn world(&self, metres: f32) -> f32 {
+        metres * self.per_metre()
+    }
+
+    /// `world` units in metres.
+    pub fn metres(&self, world: f32) -> f32 {
+        world / self.per_metre()
+    }
+
+    /// A world point in the metre frame.
+    pub fn point_to_metres(&self, world: Vec3) -> Vec3 {
+        world / self.per_metre()
+    }
+
+    /// A metre-frame point in the world.
+    pub fn point_to_world(&self, metres: Vec3) -> Vec3 {
+        metres * self.per_metre()
+    }
+
+    /// A world transform in the metre frame: the same rotation, its translation and scale
+    /// divided by the units (a box of local half extents `h` under it measures `h · scale` m).
+    pub fn to_metres(&self, transform: &GlobalTransform) -> GlobalTransform {
+        GlobalTransform::from_scale(Vec3::splat(1.0 / self.per_metre())) * *transform
+    }
+}
+
+/// Says once that the units are not usable, and keeps the crate's atmosphere in metres.
+fn apply_units(
+    units: Res<ElementsUnits>,
+    mut atmospheres: Query<&mut Transform, With<ElementsAtmosphere>>,
+    mut warned: Local<bool>,
+) {
+    if !units.is_changed() {
+        return;
+    }
+    let u = units.units_per_metre;
+    if !(u.is_finite() && u > 0.0) && !*warned {
+        warn!("ElementsUnits::units_per_metre is {u}: reading it as 1.0");
+        *warned = true;
+    }
+    for mut transform in &mut atmospheres {
+        transform.scale = Vec3::splat(units.per_metre());
+    }
+}
+
+/// The `Atmosphere` the crate spawned: scaled by [`ElementsUnits`] so Bevy's sky is in metres.
+#[derive(Component, Clone, Copy, Debug)]
+pub(crate) struct ElementsAtmosphere;
+
+/// The camera the camera-relative simulations follow this frame, in the metre frame (world ÷
+/// [`ElementsUnits::units_per_metre`]).
 #[derive(Resource, Default, Clone, Copy, Debug)]
 pub(crate) struct ElementsView {
     /// The followed `ElementsCamera`, if any.
     pub entity: Option<Entity>,
     /// What the camera-relative domains centre on, m: its [`ElementsFocus`], else the camera.
     pub position: Vec3,
-    /// The camera's world position, m.
+    /// The camera's position, m.
     pub eye: Vec3,
     /// The camera's velocity, m/s: the finite difference of `eye` over the last frame, zero on
     /// the frame the camera is first followed.
@@ -310,12 +399,18 @@ impl Plugin for ElementsCorePlugin {
                 .chain(),
         )
         .init_resource::<ElementsQuality>()
+        .init_resource::<ElementsUnits>()
         .init_resource::<ElementsView>()
         .init_resource::<EnvironmentSnapshot>()
         .init_resource::<Weather>()
         .init_resource::<SunState>()
         .init_resource::<WindState>()
-        .add_systems(Update, follow_camera.in_set(ElementsSystems::Clock));
+        .add_systems(
+            Update,
+            (apply_units, follow_camera)
+                .chain()
+                .in_set(ElementsSystems::Clock),
+        );
     }
 }
 
@@ -411,6 +506,7 @@ type DressParts = (
 struct Dresser<'w, 's> {
     commands: Commands<'w, 's>,
     quality: Res<'w, ElementsQuality>,
+    units: Res<'w, ElementsUnits>,
     needs: ResMut<'w, CameraNeeds>,
     atmospheres: Query<'w, 's, (), With<Atmosphere>>,
     media: ResMut<'w, Assets<ScatteringMedium>>,
@@ -527,8 +623,12 @@ impl Dresser<'_, '_> {
         }
         if want.atmosphere && self.atmospheres.is_empty() && !self.needs.atmosphere_spawned {
             let medium = self.media.add(ScatteringMedium::default());
-            self.commands
-                .spawn((Name::new("Elements atmosphere"), Atmosphere::earth(medium)));
+            self.commands.spawn((
+                Name::new("Elements atmosphere"),
+                Atmosphere::earth(medium),
+                ElementsAtmosphere,
+                Transform::from_scale(Vec3::splat(self.units.per_metre())),
+            ));
             self.needs.atmosphere_spawned = true;
         }
     }
@@ -557,6 +657,7 @@ fn follow_camera(
         With<ElementsCamera>,
     >,
     transforms: Query<&GlobalTransform>,
+    units: Res<ElementsUnits>,
     mut view: ResMut<ElementsView>,
     mut warned: Local<bool>,
 ) {
@@ -571,7 +672,7 @@ fn follow_camera(
             best = Some((
                 entity,
                 camera.order,
-                transform.translation(),
+                units.point_to_metres(transform.translation()),
                 focus.copied(),
             ));
         }
@@ -593,10 +694,10 @@ fn follow_camera(
             view.entity = Some(entity);
             view.eye = eye;
             view.position = match focus {
-                Some(ElementsFocus::Point(p)) => p,
-                Some(ElementsFocus::Entity(e)) => {
-                    transforms.get(e).map_or(eye, GlobalTransform::translation)
-                }
+                Some(ElementsFocus::Point(p)) => units.point_to_metres(p),
+                Some(ElementsFocus::Entity(e)) => transforms
+                    .get(e)
+                    .map_or(eye, |t| units.point_to_metres(t.translation())),
                 None => eye,
             };
         }

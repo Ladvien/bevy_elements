@@ -63,6 +63,7 @@ fn ground_app(meshing: bool) -> App {
         .init_asset::<Image>()
         .init_asset::<ShaderBuffer>()
         .init_resource::<ElementsQuality>()
+        .init_resource::<crate::ElementsUnits>()
         .init_resource::<EnvironmentSnapshot>()
         .init_resource::<ErosionSettings>();
     if meshing {
@@ -217,6 +218,51 @@ fn the_first_scan_spawns_the_terrain_and_wraps_the_field() {
     // The resolved grid is the one the terrain will build.
     let (size, cell, adjusted) = resolve_resolution(Vec2::splat(16.0), UVec2::splat(32), 512);
     assert_eq!((size, cell, adjusted), (UVec2::splat(32), 0.5, false));
+}
+
+/// With two world units to the metre the same volume (16 world units wide, tops at 6) is 8 m
+/// wide with tops at 3 m: the columns stay in field units, the terrain under them is in metres.
+#[test]
+fn the_terrain_under_a_ground_in_other_units_is_in_metres() {
+    let mut app = ground_app(false);
+    app.insert_resource(crate::ElementsUnits {
+        units_per_metre: 2.0,
+    });
+    let volume = spawn_volume(&mut app, Plane);
+    app.update();
+
+    let state = state(&app, volume);
+    assert!(
+        (state.columns.grid.cell_m - 0.5).abs() < 1e-6,
+        "world units"
+    );
+    assert!(state.top.iter().all(|t| (t - 6.0).abs() <= 2e-3));
+    assert_eq!(state.extent_m, Vec2::splat(8.0));
+    let terrain_entity = state.terrain.expect("a voxel ground owns a terrain");
+    let terrain = app
+        .world()
+        .get::<Terrain>(terrain_entity)
+        .expect("the terrain entity");
+    assert_eq!(terrain.extent_m, Vec2::splat(8.0));
+    let transform = app
+        .world()
+        .get::<Transform>(terrain_entity)
+        .expect("transform");
+    assert_eq!(
+        transform.translation,
+        Vec3::new(8.0, 0.0, 8.0),
+        "world units"
+    );
+    let TerrainSource::Heightmap { image, .. } = &terrain.source else {
+        panic!("the terrain imports a heightmap");
+    };
+    let image = app
+        .world()
+        .resource::<Assets<Image>>()
+        .get(image)
+        .expect("the image");
+    let heights: &[f32] = bytemuck::cast_slice(image.data.as_ref().expect("the pixels"));
+    assert!(heights.iter().all(|h| (h - 3.0).abs() <= 1e-3), "metres");
 }
 
 /// Validation 6: the hold rule at the system level.

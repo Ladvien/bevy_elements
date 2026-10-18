@@ -33,7 +33,7 @@ use crate::clouds::CloudShadows;
 use crate::fog::extinction_for_visibility;
 use crate::gpu::grid::storage_buffer;
 use crate::plugin::{
-    ElementsCamera, ElementsQuality, ElementsSystems, ElementsView, ensure_gpu_core,
+    ElementsCamera, ElementsQuality, ElementsSystems, ElementsUnits, ElementsView, ensure_gpu_core,
     needs_depth_prepass,
 };
 use crate::terrain::{NO_TERRAIN, TerrainParamsGpu, TerrainState};
@@ -148,7 +148,7 @@ pub(crate) struct DrawParams {
     moon: Vec4,
     /// x: sky illuminance, lx. y: extinction σ_V, m⁻¹. z: soft fade, m. w: splash soft fade, m.
     ambient: Vec4,
-    /// xyz: lightning flash position, m. w: its intensity, cd; 0 when none.
+    /// xyz: lightning flash position, m (metre frame). w: its intensity, cd; 0 when none.
     flash: Vec4,
     /// x: Marshall–Palmer Λ, mm⁻¹. y: streak alpha. z: exposure, s. w: edge fade, m.
     rain: Vec4,
@@ -161,6 +161,10 @@ pub(crate) struct DrawParams {
     /// xyz: the box centre (the view's focus), m. w: under an orthographic view, the depth at
     /// which its distance fog starts (`fog::orthographic_near_depth`), m.
     centre: Vec4,
+    /// x: world units per metre ([`crate::ElementsUnits`]). The particles are simulated in the
+    /// metre frame; the shader draws them at world position × this, and takes the view's world
+    /// distances and depths back to metres. yzw: unused.
+    units: Vec4,
 }
 
 /// One blocker as the kernel reads it (80 bytes): the rows of the inverse of the box's affine
@@ -324,14 +328,20 @@ const MAX_ORTHOGRAPHIC_HALF_EDGE_M: f32 = 120.0;
 /// width by its height over the sine of the look-down angle), up to
 /// [`MAX_ORTHOGRAPHIC_HALF_EDGE_M`]. A perspective view sees the rain near the eye; an
 /// orthographic one sees all of it at one size, so the container covers what the view shows
-/// (Puig-Centelles et al. 2009, §4.3; `docs/research/view-anchor.md` Deviation 4).
-pub(crate) fn box_half_edge(view: Option<(&Projection, &GlobalTransform)>) -> f32 {
+/// (Puig-Centelles et al. 2009, §4.3; `docs/research/view-anchor.md` Deviation 4). The view's
+/// `area` is in world units, `units` converts it to metres.
+pub(crate) fn box_half_edge(
+    view: Option<(&Projection, &GlobalTransform)>,
+    units: &ElementsUnits,
+) -> f32 {
     let base = PRECIPITATION_BOX_M * 0.5;
     let Some((Projection::Orthographic(o), transform)) = view else {
         return base;
     };
     let down = (-transform.forward().y).clamp(0.2, 1.0);
-    let footprint = o.area.width().hypot(o.area.height() / down);
+    let footprint = units
+        .metres(o.area.width())
+        .hypot(units.metres(o.area.height()) / down);
     (0.5 * footprint).clamp(base, MAX_ORTHOGRAPHIC_HALF_EDGE_M)
 }
 
@@ -433,6 +443,7 @@ impl ParticleLight<'_, '_> {
 fn update_precipitation(
     time: Res<Time<Virtual>>,
     view: Res<ElementsView>,
+    units: Res<ElementsUnits>,
     cameras: Query<(&Projection, &GlobalTransform)>,
     weather: Res<Weather>,
     wind: Res<WindState>,
@@ -475,13 +486,13 @@ fn update_precipitation(
     }
     let camera = view.position;
     let followed = view.entity.and_then(|e| cameras.get(e).ok());
-    let half_edge = box_half_edge(followed);
+    let half_edge = box_half_edge(followed, &units);
     let fog_start = match followed {
         Some((Projection::Orthographic(o), t)) => crate::fog::orthographic_near_depth(
-            t.translation(),
+            units.point_to_metres(t.translation()),
             *t.forward(),
             view.position,
-            o.area.height(),
+            units.metres(o.area.height()),
         )
         .max(0.0),
         _ => 0.0,
@@ -491,7 +502,7 @@ fn update_precipitation(
     let selected = nearest_blockers(
         camera,
         blockers.iter().filter_map(|(entity, blocker, transform)| {
-            BlockerGpu::new(blocker.half_extents, transform).map(|b| (entity, b))
+            BlockerGpu::new(blocker.half_extents, &units.to_metres(transform)).map(|b| (entity, b))
         }),
     );
     gpu.params = PrecipParams {
@@ -540,7 +551,9 @@ fn update_precipitation(
             SOFT_FADE_M,
             SPLASH_SOFT_FADE_M,
         ),
-        flash: flash.position.extend(flash.intensity_cd),
+        flash: units
+            .point_to_metres(flash.position)
+            .extend(flash.intensity_cd),
         rain: Vec4::new(
             marshall_palmer_lambda(weather.precipitation_mm_h * (1.0 - snow_fraction)),
             STREAK_ALPHA,
@@ -556,6 +569,7 @@ fn update_precipitation(
         dust: crate::fog::DUST_ALBEDO.extend(DUST_SPRITE_DRAW_M),
         camera: view.velocity.extend(half_edge),
         centre: view.position.extend(fog_start),
+        units: Vec4::new(units.per_metre(), 0.0, 0.0, 0.0),
     };
 }
 
@@ -641,5 +655,25 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    /// Issue #8: the rain box keeps its 60 m in a world of feet, 196.8 units wide, and a
+    /// blocker placed in feet is the same box in metres.
+    #[test]
+    fn the_rain_box_is_sixty_metres_in_a_world_of_feet() {
+        let feet = ElementsUnits {
+            units_per_metre: 3.2808,
+        };
+        let width = feet.world(2.0 * box_half_edge(None, &feet));
+        assert!((width - 196.848).abs() < 1e-3, "{width}");
+        let roof = GlobalTransform::from(
+            Transform::from_xyz(32.808, 16.404, 0.0).with_scale(Vec3::splat(3.2808)),
+        );
+        let b = BlockerGpu::new(Vec3::ONE, &feet.to_metres(&roof)).expect("a valid box");
+        assert!(contains(&b, Vec3::new(10.0, 5.0, 0.0) + Vec3::splat(0.9)));
+        assert!(!contains(
+            &b,
+            Vec3::new(10.0, 5.0, 0.0) + Vec3::new(1.1, 0.0, 0.0)
+        ));
     }
 }

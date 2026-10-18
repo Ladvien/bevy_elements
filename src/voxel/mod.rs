@@ -49,7 +49,10 @@ use crate::terrain::TerrainPlugin;
 /// (one terrain exists at a time) and no second `VoxelGround`. Its grid covers the volume's
 /// chunk entities as they are at the first scan; chunks that appear later outside that box get
 /// no snow. The chunk entities need identity transforms and no parent offset (field space is
-/// world space), and the voxel cell size must be a power of two, as isomesh requires.
+/// world space), and the voxel cell size must be a power of two, as isomesh requires. The field is
+/// in world units ([`ElementsUnits`](crate::ElementsUnits)): the terrain the crate spawns under
+/// it has its extent and heights in metres (the field's divided by the units), and the snow is
+/// laid on the slab in world units.
 ///
 /// [`ErosionSettings::enabled`](crate::ErosionSettings) is ignored for voxel ground (one
 /// warning is logged when it is on): the volume's field is the truth and erosion would rewrite

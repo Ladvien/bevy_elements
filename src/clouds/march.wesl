@@ -259,7 +259,7 @@ fn cloud_march(@builtin(global_invocation_id) id: vec3<u32>) {
     let px = min(id.xy * k + slot_offset(frame, k), size - vec2<u32>(1u));
     let uv = (vec2<f32>(px) + 0.5) / vec2<f32>(size);
     let orthographic = is_orthographic(view.clip_from_view);
-    let ray = view_ray(uv, view.world_from_clip, view.world_position, orthographic, params.camera.xyz);
+    let ray = view_ray(uv, view.world_from_clip, view.world_position, orthographic, params.camera.xyz, params.units.x);
     // The planet's centre lies straight below the ray's origin: the eye of a perspective view,
     // the pixel's point on the focus plane of an orthographic one.
     let cam = ray.origin;
@@ -284,9 +284,9 @@ fn cloud_march(@builtin(global_invocation_id) id: vec3<u32>) {
             let q = min(id.xy * k + vec2<u32>(i, j), size - vec2<u32>(1u));
             let quv = (vec2<f32>(q) + 0.5) / vec2<f32>(size);
             let d = textureLoad(depth_tex, vec2<i32>(q), 0);
-            let q_ray = view_ray(quv, view.world_from_clip, view.world_position, orthographic, params.camera.xyz);
+            let q_ray = view_ray(quv, view.world_from_clip, view.world_position, orthographic, params.camera.xyz, params.units.x);
             let q_shell = shell_range(big_r + q_ray.origin.y, q_ray.dir.y, h_b, h_t, big_r);
-            if scene_distance(quv, d, view.world_from_clip, q_ray) >= q_shell.x {
+            if scene_distance(quv, d, view.world_from_clip, q_ray, params.units.x) >= q_shell.x {
                 hidden = false;
             }
         }
