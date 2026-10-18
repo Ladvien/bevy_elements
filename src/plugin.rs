@@ -110,6 +110,23 @@ impl Default for ElementsCamera {
     }
 }
 
+/// What the camera-relative domains centre on, on the followed [`ElementsCamera`]: the rain and
+/// snow box, the wind window and its gusts, the ground fog volume, the strike disc and the
+/// thunder distance, the cloud weather and shadow maps, the trails and waves windows, and the
+/// mean the surface weathering takes around the view. Without it they centre on the camera.
+///
+/// An isometric or top-down game whose orthographic camera stands far back from what it shows
+/// puts the focus on the player, or on the point the camera looks at
+/// (`docs/research/view-anchor.md`). An `Entity` focus without a `GlobalTransform` falls back
+/// to the camera.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Reflect)]
+pub enum ElementsFocus {
+    /// That entity's `GlobalTransform` translation, read every frame.
+    Entity(Entity),
+    /// A world point, m.
+    Point(Vec3),
+}
+
 /// Resolution and step counts for every domain. Read once per frame; changing it at runtime
 /// re-creates the affected GPU resources.
 #[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq, Hash, Reflect)]
@@ -221,10 +238,12 @@ impl ElementsQuality {
 pub(crate) struct ElementsView {
     /// The followed `ElementsCamera`, if any.
     pub entity: Option<Entity>,
-    /// Its world position, m.
+    /// What the camera-relative domains centre on, m: its [`ElementsFocus`], else the camera.
     pub position: Vec3,
-    /// Its velocity, m/s: the finite difference of `position` over the last frame, zero on the
-    /// frame the camera is first followed.
+    /// The camera's world position, m.
+    pub eye: Vec3,
+    /// The camera's velocity, m/s: the finite difference of `eye` over the last frame, zero on
+    /// the frame the camera is first followed.
     pub velocity: Vec3,
 }
 
@@ -356,19 +375,28 @@ fn dress_camera(
 
 fn follow_camera(
     time: Res<Time<Virtual>>,
-    cameras: Query<(Entity, &Camera, &GlobalTransform), With<ElementsCamera>>,
+    cameras: Query<
+        (Entity, &Camera, &GlobalTransform, Option<&ElementsFocus>),
+        With<ElementsCamera>,
+    >,
+    transforms: Query<&GlobalTransform>,
     mut view: ResMut<ElementsView>,
     mut warned: Local<bool>,
 ) {
     let mut count = 0usize;
-    let mut best: Option<(Entity, isize, Vec3)> = None;
-    for (entity, camera, transform) in &cameras {
+    let mut best: Option<(Entity, isize, Vec3, Option<ElementsFocus>)> = None;
+    for (entity, camera, transform, focus) in &cameras {
         if !camera.is_active {
             continue;
         }
         count += 1;
-        if best.is_none_or(|(_, order, _)| camera.order < order) {
-            best = Some((entity, camera.order, transform.translation()));
+        if best.is_none_or(|(_, order, _, _)| camera.order < order) {
+            best = Some((
+                entity,
+                camera.order,
+                transform.translation(),
+                focus.copied(),
+            ));
         }
     }
     if count > 1 && !*warned {
@@ -378,15 +406,22 @@ fn follow_camera(
         *warned = true;
     }
     match best {
-        Some((entity, _, position)) => {
+        Some((entity, _, eye, focus)) => {
             let dt = time.delta_secs();
             view.velocity = if view.entity == Some(entity) && dt > 0.0 {
-                (position - view.position) / dt
+                (eye - view.eye) / dt
             } else {
                 Vec3::ZERO
             };
             view.entity = Some(entity);
-            view.position = position;
+            view.eye = eye;
+            view.position = match focus {
+                Some(ElementsFocus::Point(p)) => p,
+                Some(ElementsFocus::Entity(e)) => {
+                    transforms.get(e).map_or(eye, GlobalTransform::translation)
+                }
+                None => eye,
+            };
         }
         None => {
             view.entity = None;
@@ -423,5 +458,45 @@ mod tests {
             app.world().resource::<ElementsView>().position,
             Vec3::new(5.0, 2.0, 0.0)
         );
+    }
+
+    /// The followed view centres on the camera's `ElementsFocus`: a point, an entity's
+    /// transform, or the camera itself when that entity has no transform; the eye stays the
+    /// camera's.
+    #[test]
+    fn the_view_centres_on_the_focus() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, ElementsCorePlugin));
+        let eye = Vec3::new(0.0, 860.0, 1229.0);
+        let player = app
+            .world_mut()
+            .spawn(GlobalTransform::from_xyz(3.0, 0.5, -4.0))
+            .id();
+        let bare = app.world_mut().spawn_empty().id();
+        let camera = app
+            .world_mut()
+            .spawn((
+                Camera::default(),
+                ElementsCamera::default(),
+                GlobalTransform::from_translation(eye),
+                ElementsFocus::Point(Vec3::new(1.0, 0.0, 2.0)),
+            ))
+            .id();
+        for (focus, expected) in [
+            (
+                ElementsFocus::Point(Vec3::new(1.0, 0.0, 2.0)),
+                Vec3::new(1.0, 0.0, 2.0),
+            ),
+            (ElementsFocus::Entity(player), Vec3::new(3.0, 0.5, -4.0)),
+            (ElementsFocus::Entity(bare), eye),
+        ] {
+            app.world_mut().entity_mut(camera).insert(focus);
+            app.update();
+            let view = app.world().resource::<ElementsView>();
+            assert_eq!((view.position, view.eye), (expected, eye), "{focus:?}");
+        }
+        app.world_mut().entity_mut(camera).remove::<ElementsFocus>();
+        app.update();
+        assert_eq!(app.world().resource::<ElementsView>().position, eye);
     }
 }

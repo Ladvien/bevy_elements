@@ -77,8 +77,9 @@ pub struct WindState {
     pub speed_10m: f32,
     /// Peak 3-s gust over the mean: `1 + 0.5·gustiness`.
     pub gust_factor: f32,
-    /// Wind at the followed camera, m/s.
-    pub at_camera: Vec3,
+    /// Wind at the view's focus ([`ElementsFocus`](crate::ElementsFocus), else the followed
+    /// camera), m/s.
+    pub at_focus: Vec3,
     /// The simulated field: a 3D `rgba16float` texture, xyz = velocity m/s, w = turbulence
     /// intensity, toroidally addressed (see `bevy_elements::wind`).
     pub field: Handle<Image>,
@@ -96,7 +97,7 @@ impl Default for WindState {
             prevailing: Vec2::X,
             speed_10m: 0.0,
             gust_factor: 1.0,
-            at_camera: Vec3::ZERO,
+            at_focus: Vec3::ZERO,
             field: Handle::default(),
             field_origin: Vec3::ZERO,
             field_extent: Vec3::ZERO,
@@ -358,7 +359,7 @@ fn step_wind(
     };
     let Some(camera) = view.entity.map(|_| view.position) else {
         grid.active = false;
-        state.at_camera = state.prevailing_velocity();
+        state.at_focus = state.prevailing_velocity();
         return;
     };
 
@@ -427,7 +428,7 @@ fn step_wind(
     state.field_origin = origin.as_vec3() * WIND_CELL_M;
     state.field_extent = grid.size.as_vec3() * WIND_CELL_M;
     state.field_live = grid.live.load(Ordering::Relaxed);
-    state.at_camera = snapshot
+    state.at_focus = snapshot
         .wind
         .as_ref()
         .and_then(|w| w.sample(camera))

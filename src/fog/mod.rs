@@ -90,6 +90,31 @@ pub fn distance_fog_falloff(visibility_m: f32) -> FogFalloff {
     }
 }
 
+/// Distance fog for an orthographic camera: `near_depth_m` is the depth, along the view axis, of
+/// the nearest ground the view shows (`orthographic_near_depth`). Bevy measures fog from the
+/// camera's translation, which an isometric camera puts far behind what it shows, so an
+/// exponential would fog the whole frame by the empty stand-off. The fog starts at the bottom of
+/// the view and rises with the exponential's initial slope `σ_V`: `Linear { start, end: start +
+/// 1/σ_V }`, exact while the scene's depth is short of the visibility and fully fogged at a
+/// quarter of it (`docs/research/view-anchor.md` Deviation 1).
+pub fn orthographic_fog_falloff(visibility_m: f32, near_depth_m: f32) -> FogFalloff {
+    let start = near_depth_m.max(0.0);
+    FogFalloff::Linear {
+        start,
+        end: start + 1.0 / extinction_for_visibility(visibility_m),
+    }
+}
+
+/// Depth along the view axis of the nearest ground an orthographic view shows, m: the ground
+/// through `focus` seen at the bottom edge of a view `view_height_m` high, looking down along the
+/// unit `forward`. A screen offset `v` lands on the ground `v · cot θ` nearer than the focus, with
+/// `θ` the look-down angle (at least 10°); a straight-down view sees all its ground at the focus.
+pub fn orthographic_near_depth(eye: Vec3, forward: Vec3, focus: Vec3, view_height_m: f32) -> f32 {
+    let down = (-forward.y).clamp(10f32.to_radians().sin(), 1.0);
+    let cot = (1.0 - down * down).sqrt() / down;
+    (focus - eye).dot(forward) - 0.5 * view_height_m * cot
+}
+
 /// Linear-RGB fog colour before brightness: the fog hue, tinted toward sunset orange as the sun
 /// drops below 10° (`celestial::dusk_tint`); and toward dust as `dust` rises.
 pub fn fog_hue(sun_altitude_deg: f32, dust: f32) -> Vec3 {
@@ -299,6 +324,7 @@ fn update_volume(
     gpu: Option<ResMut<FogGpu>>,
     cloud_map: Option<Res<CloudWeatherMap>>,
     mut volumes: Query<(&mut FogVolume, &mut Transform), With<GroundFog>>,
+    cameras: Query<&Projection>,
     snapshot: Res<EnvironmentSnapshot>,
 ) {
     let Some(mut gpu) = gpu else {
@@ -330,6 +356,20 @@ fn update_volume(
     let ground = snapshot.ground_height(camera.xz());
     let centre = volume_centre(camera, ground);
     *transform = Transform::from_translation(centre).with_scale(GROUND_FOG_EXTENT);
+    // An orthographic view looks down through the whole layer at every pixel along one slant: a
+    // uniform veil set by the look-down angle and the layer's height, not by the scene, opaque
+    // under `Fog`. Its distance fog, counted from the focus plane, carries the weather's whole
+    // extinction instead, and the particles the precipitation (`docs/research/view-anchor.md`
+    // Deviation 4).
+    if view
+        .entity
+        .and_then(|e| cameras.get(e).ok())
+        .is_some_and(|p| matches!(p, Projection::Orthographic(_)))
+    {
+        gpu.active = false;
+        volume.density_factor = 0.0;
+        return;
+    }
 
     let dust = weather.dust.clamp(0.0, 1.0);
     // Precipitation takes its share of the visibility's extinction as shafts (see
@@ -414,14 +454,28 @@ fn precipitation_map(
     }
 }
 
+/// The cameras whose distance fog the crate drives, with what fixes their falloff.
+type FogCameras<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static mut DistanceFog,
+        &'static Exposure,
+        Option<&'static Projection>,
+        &'static GlobalTransform,
+    ),
+    With<ElementsCamera>,
+>;
+
 fn update_distance_fog(
     weather: Res<Weather>,
     sun: Res<SunState>,
     frame: Res<CelestialFrame>,
+    view: Res<ElementsView>,
     shadows: Option<Res<CloudShadows>>,
-    mut cameras: Query<(&mut DistanceFog, &Exposure), With<ElementsCamera>>,
+    mut cameras: FogCameras,
 ) {
-    let falloff = distance_fog_falloff(weather.visibility_m);
     // Fog colour is added after exposure (bevy_pbr fog.wesl), so it carries the scene's
     // luminance times the camera's exposure: lit like everything else at a fixed exposure,
     // steady under auto exposure.
@@ -431,17 +485,51 @@ fn update_distance_fog(
         cloud_light(weather.cloud_cover, shadows.as_deref()),
     ) / std::f32::consts::PI;
     let hue = fog_hue(sun.altitude_deg, weather.dust);
-    for (mut fog, exposure) in &mut cameras {
+    for (entity, mut fog, exposure, projection, transform) in &mut cameras {
         let brightness = luminance * exposure.exposure();
         let c = hue * brightness;
         fog.color = Color::linear_rgb(c.x, c.y, c.z);
-        fog.falloff = falloff.clone();
+        fog.falloff = match projection {
+            Some(Projection::Orthographic(o)) => {
+                // The followed camera's focus; another orthographic camera fogs from its plane.
+                let eye = transform.translation();
+                let focus = if view.entity == Some(entity) {
+                    view.position
+                } else {
+                    eye
+                };
+                let near =
+                    orthographic_near_depth(eye, *transform.forward(), focus, o.area.height());
+                orthographic_fog_falloff(weather.visibility_m, near)
+            }
+            _ => distance_fog_falloff(weather.visibility_m),
+        };
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The nearest ground a view 40 m high shows, looking down 30° at a focus 1500 m away, is
+    /// 20 · cot 30° = 34.6 m in front of the focus; straight down, all of it is at the focus; a
+    /// grazing view is held at 10°.
+    #[test]
+    fn an_orthographic_view_fogs_from_the_bottom_of_its_ground() {
+        let focus = Vec3::new(3.0, 0.0, -4.0);
+        let at = |down_deg: f32| {
+            let d = down_deg.to_radians();
+            let forward = Vec3::new(0.0, -d.sin(), -d.cos());
+            orthographic_near_depth(focus - forward * 1500.0, forward, focus, 40.0)
+        };
+        assert!(
+            (at(30.0) - (1500.0 - 20.0 * 3f32.sqrt())).abs() < 1e-2,
+            "{}",
+            at(30.0)
+        );
+        assert!((at(90.0) - 1500.0).abs() < 1e-2, "{}", at(90.0));
+        assert!((at(2.0) - at(10.0)).abs() < 1e-2);
+    }
 
     #[test]
     fn the_fog_volume_stands_on_the_ground() {

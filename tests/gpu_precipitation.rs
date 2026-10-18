@@ -50,19 +50,48 @@ fn pin_weather(pin: Res<Pin>, mut weather: ResMut<Weather>) {
     weather.temperature_c = pin.temperature_c;
 }
 
+/// An isometric orthographic camera standing `ISO_BACK_M` back from this focus, 35° down, with
+/// `ElementsFocus::Point` on it; inserted by a test before its first update.
+#[derive(Resource, Clone, Copy)]
+struct Iso(Vec3);
+
+const ISO_BACK_M: f32 = 1500.0;
+
+fn iso_eye(focus: Vec3) -> Vec3 {
+    let down = 35f32.to_radians();
+    focus + ISO_BACK_M * Vec3::new(0.0, down.sin(), down.cos())
+}
+
 fn setup(
     mut commands: Commands,
     pin: Res<Pin>,
     scene: Res<Scene>,
+    iso: Option<Res<Iso>>,
     mut director: ResMut<WeatherDirector>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    commands.spawn((
-        Camera3d::default(),
-        support::image_target(&mut images),
-        ElementsCamera::default(),
-        Transform::from_xyz(0.0, scene.camera_y, 0.0),
-    ));
+    match iso {
+        Some(iso) => commands.spawn((
+            Camera3d::default(),
+            support::image_target(&mut images),
+            ElementsCamera::default(),
+            ElementsFocus::Point(iso.0),
+            Projection::from(OrthographicProjection {
+                scaling_mode: bevy::camera::ScalingMode::FixedVertical {
+                    viewport_height: 80.0,
+                },
+                far: 4000.0,
+                ..OrthographicProjection::default_3d()
+            }),
+            Transform::from_translation(iso_eye(iso.0)).looking_at(iso.0, Vec3::Y),
+        )),
+        None => commands.spawn((
+            Camera3d::default(),
+            support::image_target(&mut images),
+            ElementsCamera::default(),
+            Transform::from_xyz(0.0, scene.camera_y, 0.0),
+        )),
+    };
     if let Some(above) = scene.roof_above {
         commands.spawn((
             PrecipitationBlocker {
@@ -490,6 +519,100 @@ fn a_dust_storm_fills_forty_percent_of_the_buffer_with_wind_driven_sprites() {
         sprites
             .iter()
             .all(|p| p.pos.y > -0.2 && p.pos.y < top + 0.01)
+    );
+    finish(app);
+}
+
+/// The rain particles around `centre`, and how many there are: every one above the ground and
+/// within the largest box an orthographic view grows (120 m half edge, a frame of fall of slack),
+/// and their mean within 3 m of `centre` horizontally, so the box is centred there (a camera
+/// 1500 m away would put it 1500 m off).
+fn rain_in_box_around(all: &[Particle], centre: Vec3) -> usize {
+    let rain: Vec<&Particle> = all.iter().filter(|p| p.kind & 3 == 0).collect();
+    let mut sum = Vec3::ZERO;
+    for p in &rain {
+        let d = (p.pos - centre).abs();
+        assert!(
+            d.x <= 120.01 && d.z <= 120.01 && p.pos.y > -0.2,
+            "{:?} outside the box around {centre:?}",
+            p.pos
+        );
+        sum += p.pos;
+    }
+    let mean = sum / rain.len().max(1) as f32;
+    assert!(
+        (mean.xz() - centre.xz()).length() < 3.0,
+        "the rain is centred at {mean:?}, not at {centre:?}"
+    );
+    rain.len()
+}
+
+/// Issue #7 (`view-anchor.md` Validation 1): under an isometric orthographic camera standing
+/// 1500 m back from its `ElementsFocus`, the rain box, the wind window and the ground fog volume
+/// centre on the focus, not on the camera; panning the focus 20 m moves the box with it and the
+/// rain keeps its count (the box wraps rather than respawns).
+#[test]
+#[ignore = "needs a GPU"]
+fn the_domains_centre_on_the_focus_of_an_orthographic_camera() {
+    let _lock = serial();
+    let focus = Vec3::new(400.0, 0.0, -300.0);
+    let pin = Pin {
+        preset: WeatherPreset::Rain,
+        mm_h: 10.0,
+        temperature_c: 12.0,
+    };
+    let scene = Scene {
+        camera_y: 1.7,
+        roof_above: None,
+    };
+    let mut app = app_with(ElementsQuality::High, Climate::temperate(), pin, scene);
+    app.insert_resource(Iso(focus));
+    run(&mut app, 60);
+    let all = particles(&mut app);
+    let half = ElementsQuality::High.precipitation_particles() as usize / 2;
+    let rain = rain_in_box_around(&all, focus);
+    assert!(
+        rain.abs_diff(half) <= 1,
+        "{rain} rain particles, expected {half}"
+    );
+
+    let wind = app.world().resource::<WindState>();
+    let window = wind.field_origin + 0.5 * wind.field_extent;
+    // Whole 4 m cells.
+    assert!(
+        (window.xz() - focus.xz()).length() <= 4.0 * std::f32::consts::SQRT_2,
+        "wind window centred at {window:?}, focus {focus:?}"
+    );
+    let mut fog = app
+        .world_mut()
+        .query::<(&Transform, &bevy::light::FogVolume)>();
+    let (fog, volume) = fog.single(app.world()).expect("one ground fog volume");
+    let (fog, density) = (fog.translation, volume.density_factor);
+    // Whole texels of 240 m / 128; switched off under an orthographic view (view-anchor.md
+    // Deviation 4), the distance fog carrying the weather instead.
+    assert!(
+        (fog.xz() - focus.xz()).length() <= 2.0 * std::f32::consts::SQRT_2,
+        "fog volume centred at {fog:?}, focus {focus:?}"
+    );
+    assert_eq!(
+        density, 0.0,
+        "the ground fog volume is off under an orthographic view"
+    );
+
+    let panned = focus + Vec3::new(20.0, 0.0, 0.0);
+    let mut cameras = app
+        .world_mut()
+        .query_filtered::<(&mut ElementsFocus, &mut Transform), With<ElementsCamera>>();
+    for (mut f, mut t) in cameras.iter_mut(app.world_mut()) {
+        *f = ElementsFocus::Point(panned);
+        *t = Transform::from_translation(iso_eye(panned)).looking_at(panned, Vec3::Y);
+    }
+    run(&mut app, 30);
+    let all = particles(&mut app);
+    let rain = rain_in_box_around(&all, panned);
+    assert!(
+        rain.abs_diff(half) <= 1,
+        "{rain} rain particles after the pan"
     );
     finish(app);
 }

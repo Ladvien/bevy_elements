@@ -24,8 +24,10 @@ mod waves;
 mod weathered;
 mod wind;
 
-// Plugin group, system sets, camera, quality.
-pub use plugin::{ElementsCamera, ElementsPlugins, ElementsQuality, ElementsSystems};
+// Plugin group, system sets, camera, its focus, quality.
+pub use plugin::{
+    ElementsCamera, ElementsFocus, ElementsPlugins, ElementsQuality, ElementsSystems,
+};
 
 // Readback cadence.
 pub use gpu::readback::ElementsReadback;
@@ -60,7 +62,8 @@ pub use precipitation::{
 pub use fog::{
     CLEAR_AIR_EXTINCTION, CLEAR_VISIBILITY_M, FogPlugin, GROUND_FOG_EXTENT, GROUND_FOG_TEXELS,
     GroundFog, KOSCHMIEDER, distance_fog_falloff, extinction_for_visibility, fog_hue,
-    sky_air_extinction, volume_light_compensation,
+    orthographic_fog_falloff, orthographic_near_depth, sky_air_extinction,
+    volume_light_compensation,
 };
 
 // Clouds.

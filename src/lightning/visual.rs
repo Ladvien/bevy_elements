@@ -38,7 +38,7 @@ const GLOW_AMPLITUDE: f32 = 0.0004;
 /// Texels across the ramp.
 const RAMP_TEXELS: u32 = 256;
 /// Pixel angle of a 1080p, 60° view, rad: the width used when the followed camera's is unknown.
-const DEFAULT_PIXEL_ANGLE: f32 = 1.069e-3;
+const DEFAULT_PIXEL: PixelSize = PixelSize::Angle(1.069e-3);
 
 /// A bolt's render objects.
 #[derive(Component)]
@@ -68,10 +68,29 @@ pub(crate) fn pixel_angle(fov_y: f32, height_px: f32) -> f32 {
     2.0 * (fov_y * 0.5).tan() / height_px
 }
 
+/// The world size of one pixel of the followed camera at a distance from it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum PixelSize {
+    /// A perspective camera's: the angle one pixel subtends vertically, rad.
+    Angle(f32),
+    /// An orthographic camera's: one pixel's height in world units, at every distance.
+    Fixed(f32),
+}
+
+impl PixelSize {
+    /// One pixel's height at `distance_m` from the camera, m.
+    pub(crate) fn at(self, distance_m: f32) -> f32 {
+        match self {
+            Self::Angle(angle) => angle * distance_m,
+            Self::Fixed(size) => size,
+        }
+    }
+}
+
 /// Half-width of the channel core at `distance_m`: the physical channel, or two pixels if that
 /// is wider on screen.
-pub(crate) fn core_half_width(distance_m: f32, pixel_angle: f32) -> f32 {
-    PHYSICAL_HALF_WIDTH_M.max(0.5 * CORE_PIXELS * distance_m * pixel_angle)
+pub(crate) fn core_half_width(distance_m: f32, pixel: PixelSize) -> f32 {
+    PHYSICAL_HALF_WIDTH_M.max(0.5 * CORE_PIXELS * pixel.at(distance_m))
 }
 
 /// Half-width of the ribbon quad around a core of half-width `core`.
@@ -159,7 +178,7 @@ pub(crate) fn ribbon_mesh(
     channels: &[&Channel],
     origin: Vec3,
     view: Vec3,
-    pixel_angle: f32,
+    pixel: PixelSize,
     extinction: f32,
 ) -> Mesh {
     let mut positions: Vec<[f32; 3]> = Vec::new();
@@ -188,7 +207,7 @@ pub(crate) fn ribbon_mesh(
                 .unwrap_or_else(|| tangent.any_orthonormal_vector());
             let s2 = tangent.cross(s1);
             let distance = p.distance(view);
-            let core = core_half_width(distance, pixel_angle) * channel.width;
+            let core = core_half_width(distance, pixel) * channel.width;
             let q = quad_half_width(core);
             let t = (-extinction * distance).exp();
             let local = p - origin;
@@ -268,20 +287,29 @@ struct ViewPixels<'w, 's> {
 }
 
 impl ViewPixels<'_, '_> {
-    /// The angle one pixel of the followed camera subtends, rad; a 1080p, 60° view's if there is
-    /// no followed perspective camera with a target yet.
-    fn angle(&self) -> f32 {
+    /// The world size of one pixel of the followed camera: the angle a perspective camera's
+    /// pixel subtends, or an orthographic camera's pixel height; a 1080p, 60° view's if there is
+    /// no followed camera with a target yet.
+    fn size(&self) -> PixelSize {
         self.view
             .entity
             .and_then(|e| self.cameras.get(e).ok())
             .and_then(|(camera, projection)| {
-                let Projection::Perspective(p) = projection else {
-                    return None;
-                };
-                let size = camera.physical_target_size()?;
-                Some(pixel_angle(p.fov, size.y as f32))
+                let height_px = camera.physical_target_size()?.y as f32;
+                match projection {
+                    Projection::Perspective(p) => {
+                        Some(PixelSize::Angle(pixel_angle(p.fov, height_px)))
+                    }
+                    Projection::Orthographic(o) => {
+                        Some(PixelSize::Fixed(o.area.height() / height_px))
+                    }
+                    Projection::Custom(_) => None,
+                }
             })
-            .unwrap_or(DEFAULT_PIXEL_ANGLE)
+            .filter(|p| match *p {
+                PixelSize::Angle(a) | PixelSize::Fixed(a) => a.is_finite() && a > 0.0,
+            })
+            .unwrap_or(DEFAULT_PIXEL)
     }
 }
 
@@ -298,7 +326,7 @@ fn attach(
     if new.is_empty() {
         return;
     }
-    let pixel = pixels.angle();
+    let pixel = pixels.size();
     let ramp = ramp.0.clone();
     let extinction = extinction_for_visibility(weather.visibility_m);
     for (entity, active) in &new {
@@ -431,6 +459,7 @@ mod tests {
     fn the_ribbon_keeps_two_pixels_of_core() {
         let delta = pixel_angle(60f32.to_radians(), 1080.0);
         assert!((delta - 1.069e-3).abs() < 1e-6, "{delta}");
+        let delta = PixelSize::Angle(delta);
         let core = |d| 2.0 * core_half_width(d, delta);
         assert!((core(1000.0) - 2.14).abs() < 0.01, "{}", core(1000.0));
         assert!(
@@ -446,6 +475,21 @@ mod tests {
         assert!((core(5000.0) - 10.7).abs() < 0.05, "{}", core(5000.0));
     }
 
+    /// Under an orthographic camera a pixel is the same size at every distance, so the core is
+    /// two pixels wide wherever the bolt strikes (issue #7).
+    #[test]
+    fn an_orthographic_ribbon_keeps_two_pixels_at_every_distance() {
+        // A 1080-pixel view 200 m high: 0.185 m a pixel, 0.370 m of core.
+        let pixel = PixelSize::Fixed(200.0 / 1080.0);
+        for d in [10.0, 1500.0, 8000.0] {
+            let core = 2.0 * core_half_width(d, pixel);
+            assert!(
+                core.is_finite() && (core - 0.3704).abs() < 1e-3,
+                "{d} m: {core}"
+            );
+        }
+    }
+
     #[test]
     fn a_ribbon_pair_is_four_triangles_per_segment() {
         let bolt = generate(11, Vec3::ZERO, 1500.0);
@@ -453,7 +497,7 @@ mod tests {
             &[&bolt.channels[0]],
             Vec3::ZERO,
             Vec3::new(1000.0, 5.0, 0.0),
-            1e-3,
+            PixelSize::Angle(1e-3),
             0.0,
         );
         let triangles = mesh.indices().map_or(0, Indices::len) / 3;
@@ -470,7 +514,13 @@ mod tests {
         let bolt = generate(11, Vec3::ZERO, 1500.0);
         let view = Vec3::new(1500.0, 0.0, 0.0);
         let colours = |extinction| {
-            let mesh = ribbon_mesh(&[&bolt.channels[0]], Vec3::ZERO, view, 1e-3, extinction);
+            let mesh = ribbon_mesh(
+                &[&bolt.channels[0]],
+                Vec3::ZERO,
+                view,
+                PixelSize::Angle(1e-3),
+                extinction,
+            );
             match mesh.attribute(Mesh::ATTRIBUTE_COLOR) {
                 Some(bevy::mesh::VertexAttributeValues::Float32x4(c)) => c.clone(),
                 other => panic!("no vertex colours: {other:?}"),

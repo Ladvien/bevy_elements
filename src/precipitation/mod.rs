@@ -154,6 +154,9 @@ pub(crate) struct DrawParams {
     dust: Vec4,
     /// xyz: camera velocity, m/s. w: box half edge, m.
     camera: Vec4,
+    /// xyz: the box centre (the view's focus), m. w: under an orthographic view, the depth at
+    /// which its distance fog starts (`fog::orthographic_near_depth`), m.
+    centre: Vec4,
 }
 
 /// One blocker as the kernel reads it (80 bytes): the rows of the inverse of the box's affine
@@ -307,10 +310,31 @@ fn ensure_buffers(
     });
 }
 
+/// Largest half edge the box grows to under an orthographic view, m: beyond it the drops would
+/// be spread too thin to read.
+const MAX_ORTHOGRAPHIC_HALF_EDGE_M: f32 = 120.0;
+
+/// The box's half edge, m: [`PRECIPITATION_BOX_M`]` / 2`, or under an orthographic followed
+/// camera enough to cover the ground it shows, half the diagonal of the view's footprint (its
+/// width by its height over the sine of the look-down angle), up to
+/// [`MAX_ORTHOGRAPHIC_HALF_EDGE_M`]. A perspective view sees the rain near the eye; an
+/// orthographic one sees all of it at one size, so the container covers what the view shows
+/// (Puig-Centelles et al. 2009, §4.3; `docs/research/view-anchor.md` Deviation 4).
+pub(crate) fn box_half_edge(view: Option<(&Projection, &GlobalTransform)>) -> f32 {
+    let base = PRECIPITATION_BOX_M * 0.5;
+    let Some((Projection::Orthographic(o), transform)) = view else {
+        return base;
+    };
+    let down = (-transform.forward().y).clamp(0.2, 1.0);
+    let footprint = o.area.width().hypot(o.area.height() / down);
+    (0.5 * footprint).clamp(base, MAX_ORTHOGRAPHIC_HALF_EDGE_M)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn update_precipitation(
     time: Res<Time<Virtual>>,
     view: Res<ElementsView>,
+    cameras: Query<(&Projection, &GlobalTransform)>,
     weather: Res<Weather>,
     wind: Res<WindState>,
     sun: Res<SunState>,
@@ -353,6 +377,18 @@ fn update_precipitation(
         return;
     }
     let camera = view.position;
+    let followed = view.entity.and_then(|e| cameras.get(e).ok());
+    let half_edge = box_half_edge(followed);
+    let fog_start = match followed {
+        Some((Projection::Orthographic(o), t)) => crate::fog::orthographic_near_depth(
+            t.translation(),
+            *t.forward(),
+            view.position,
+            o.area.height(),
+        )
+        .max(0.0),
+        _ => 0.0,
+    };
     let live = terrain.as_ref().filter(|t| t.is_live());
 
     let selected = nearest_blockers(
@@ -365,8 +401,8 @@ fn update_precipitation(
         camera: camera.extend(dt),
         motion: Vec4::new(
             runtime.time,
-            PRECIPITATION_BOX_M * 0.5,
-            SPLASH_RADIUS_M,
+            half_edge,
+            SPLASH_RADIUS_M * half_edge / (PRECIPITATION_BOX_M * 0.5),
             GROUND_M,
         ),
         counts: UVec4::new(
@@ -444,7 +480,8 @@ fn update_precipitation(
             runtime.time,
         ),
         dust: crate::fog::DUST_ALBEDO.extend(DUST_SPRITE_DRAW_M),
-        camera: view.velocity.extend(PRECIPITATION_BOX_M * 0.5),
+        camera: view.velocity.extend(half_edge),
+        centre: view.position.extend(fog_start),
     };
 }
 

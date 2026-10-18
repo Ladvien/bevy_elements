@@ -217,7 +217,7 @@ pub(crate) fn run_strikes(
         commands.spawn(ActiveBolt {
             bolt: bolt::generate(seed, position, base_m),
             strokes: Strokes::new(seed),
-            view: view.position,
+            view: view.eye,
             age,
             mean: 0.0,
             mean_first: 0.0,

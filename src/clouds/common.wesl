@@ -202,22 +202,57 @@ fn ground_before_layer(o_r: f32, mu: f32, shell_in: f32, big_r: f32) -> f32 {
     return -1.0;
 }
 
-/// Unit world direction of the ray through screen position `uv` (0–1, top-left origin).
-fn ray_dir(uv: vec2<f32>, world_from_clip: mat4x4<f32>, cam: vec3<f32>) -> vec3<f32> {
-    let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
-    let p = world_from_clip * vec4<f32>(ndc, 1.0, 1.0);
-    return normalize(p.xyz / p.w - cam);
+/// A view ray: its origin and unit direction.
+struct ViewRay {
+    origin: vec3<f32>,
+    dir: vec3<f32>,
 }
 
-/// Distance from the camera to the surface seen at `uv` with reverse-Z `depth`; a huge value
-/// for the sky (depth 0).
-fn scene_distance(uv: vec2<f32>, depth: f32, world_from_clip: mat4x4<f32>, cam: vec3<f32>) -> f32 {
+/// Whether `clip_from_view` is an orthographic projection: `w` is 1 everywhere (Bevy's own
+/// test, `cluster_raster.wesl`).
+fn is_orthographic(clip_from_view: mat4x4<f32>) -> bool {
+    return clip_from_view[3].w == 1.0;
+}
+
+/// The ray through screen position `uv` (0–1, top-left origin). A perspective view's starts at
+/// the eye `cam`. An orthographic view's runs along the view direction from the pixel's point on
+/// the plane through `focus` across it (Marschner & Shirley §4.3.1, view-anchor.md Model 3 and
+/// Deviation 5): an isometric camera's stand-off is not air, and a camera far back and high up
+/// would otherwise start its rays inside or above a low deck that is not between the viewer and
+/// the scene. Without a focus `focus` is the camera and the plane is its own. The direction
+/// joins the pixel's points at reverse-Z depths 1 and 0.5, finite for both projections.
+fn view_ray(
+    uv: vec2<f32>,
+    world_from_clip: mat4x4<f32>,
+    cam: vec3<f32>,
+    orthographic: bool,
+    focus: vec3<f32>,
+) -> ViewRay {
+    let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    let n = world_from_clip * vec4<f32>(ndc, 1.0, 1.0);
+    let on_near = n.xyz / n.w;
+    if orthographic {
+        let m = world_from_clip * vec4<f32>(ndc, 0.5, 1.0);
+        let dir = normalize(m.xyz / m.w - on_near);
+        return ViewRay(on_near + dir * dot(focus - on_near, dir), dir);
+    }
+    return ViewRay(cam, normalize(on_near - cam));
+}
+
+/// Distance along the ray from its `origin` to the surface seen at `uv` with reverse-Z `depth`,
+/// negative for a surface in front of the origin; a huge value for the sky (depth 0).
+fn scene_distance(
+    uv: vec2<f32>,
+    depth: f32,
+    world_from_clip: mat4x4<f32>,
+    ray: ViewRay,
+) -> f32 {
     if depth <= 0.0 {
         return NO_SURFACE;
     }
     let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
     let p = world_from_clip * vec4<f32>(ndc, depth, 1.0);
-    return length(p.xyz / p.w - cam);
+    return dot(p.xyz / p.w - ray.origin, ray.dir);
 }
 
 /// Offset of the pixel a march texel owns this frame inside its k×k block: the Bayer order
