@@ -15,7 +15,8 @@ use isomesh::Sdf;
 use isomesh::chunk::{ChunkId, ChunkLayout};
 
 use super::systems::{VoxelGroundState, should_warn_erosion};
-use super::{VoxelGround, VoxelGroundSystems, add_systems, configure_sets};
+use super::{VoxelGround, VoxelGroundSystems, VoxelSnow, add_systems, configure_sets};
+use crate::climate::SurfaceWeathering;
 use crate::cover::CoverSnapshot;
 use crate::hydrology::{ErosionLocked, ErosionSettings, erosion_enabled};
 use crate::plugin::ElementsQuality;
@@ -180,7 +181,7 @@ fn the_first_scan_spawns_the_terrain_and_wraps_the_field() {
         &state.installed
     ));
 
-    let terrain_entity = state.terrain;
+    let terrain_entity = state.terrain.expect("a voxel ground owns a terrain");
     let terrain = app
         .world()
         .get::<Terrain>(terrain_entity)
@@ -285,7 +286,9 @@ fn carve_the_top_lowers_the_top() {
         ));
     let volume = spawn_volume(&mut app, Plane);
     app.update();
-    let terrain_entity = state(&app, volume).terrain;
+    let terrain_entity = state(&app, volume)
+        .terrain
+        .expect("a voxel ground owns a terrain");
     let grid = state(&app, volume).columns.grid;
     let live_state = TerrainState {
         entity: terrain_entity,
@@ -385,7 +388,9 @@ fn removing_the_ground_restores_the_field() {
     let volume = spawn_volume(&mut app, Plane);
     let base_ptr = field_ptr(&app, volume);
     app.update();
-    let terrain = state(&app, volume).terrain;
+    let terrain = state(&app, volume)
+        .terrain
+        .expect("a voxel ground owns a terrain");
     assert_ne!(field_ptr(&app, volume), base_ptr);
     clear_marks(&mut app);
     app.world_mut().entity_mut(volume).remove::<VoxelGround>();
@@ -551,4 +556,161 @@ fn voxel_cost() {
     assert!(scan_ms <= 150.0, "the initial scan: {scan_ms} ms");
     assert!(rescan_ms <= 2.0, "a chunk column rescan: {rescan_ms} ms");
     assert!(mesh_ms <= 2.0, "a surface chunk: {mesh_ms} ms");
+}
+
+/// A `VoxelSnow` volume over `Plane` (a flat top at `y = 6`) placed by `transform`, every chunk
+/// spawned and marked; returns its entity. The test app has no transform propagation, so the
+/// `GlobalTransform` is set directly.
+fn spawn_snow_volume(app: &mut App, transform: Transform) -> Entity {
+    let volume = app
+        .world_mut()
+        .spawn((
+            VoxelVolume::new(layout(), Plane),
+            VoxelSnow,
+            GlobalTransform::from(transform),
+        ))
+        .id();
+    for x in 0..2 {
+        for y in 0..3 {
+            for z in 0..2 {
+                app.world_mut().spawn((
+                    VoxelChunk {
+                        id: ChunkId::new([x, y, z]),
+                        volume,
+                    },
+                    NeedsRemesh,
+                ));
+            }
+        }
+    }
+    volume
+}
+
+/// An app with a point snowpack of 120 mm of water at 200 kg/m³: 0.6 m on exposed flat ground,
+/// above the half-voxel (0.25 m) swap threshold of the test layout even halved by a scale of 2.
+fn snowy_app() -> App {
+    let mut app = ground_app(false);
+    app.insert_resource(SurfaceWeathering::restored(120.0, 200.0, 0.0));
+    app
+}
+
+fn turned() -> Transform {
+    Transform::from_xyz(40.0, 2.0, -10.0)
+        .with_rotation(Quat::from_rotation_y(0.3))
+        .with_scale(Vec3::splat(2.0))
+}
+
+fn held(app: &App, volume: Entity) -> Vec<f32> {
+    state(app, volume).snow.to_vec()
+}
+
+/// Issue #13: two volumes, one moved, turned and scaled, each get a slab from the point pack and
+/// no terrain exists.
+#[test]
+fn two_snow_volumes_get_slabs_and_no_terrain() {
+    let mut app = snowy_app();
+    let plain = spawn_snow_volume(&mut app, Transform::IDENTITY);
+    let moved = spawn_snow_volume(&mut app, turned());
+    app.update();
+    app.update();
+    let terrains = app
+        .world_mut()
+        .query::<&Terrain>()
+        .iter(app.world())
+        .count();
+    assert_eq!(terrains, 0, "VoxelSnow spawns no terrain");
+    // The pack's 0.6 m in field units: the volume scaled by 2 holds half of it.
+    for (volume, want) in [(plain, 0.6), (moved, 0.3)] {
+        assert!(state(&app, volume).terrain.is_none());
+        let snow = held(&app, volume);
+        assert!(
+            snow.iter().all(|d| (d - want).abs() < 1e-5),
+            "every flat column holds {want}: {:?}",
+            &snow[..4]
+        );
+        let field = &app
+            .world()
+            .get::<VoxelVolume>(volume)
+            .expect("the volume")
+            .field;
+        assert!(
+            field.sample([8.0, 6.0 + 0.5 * want, 8.0]) < 0.0,
+            "inside the slab"
+        );
+        assert!(
+            field.sample([8.0, 6.0 + 1.5 * want, 8.0]) > 0.0,
+            "above the slab"
+        );
+    }
+    assert!(
+        !marked_ids(&mut app).is_empty(),
+        "the slab's chunks are remeshed"
+    );
+}
+
+/// Where a cover map lies under a volume's world position its depth is used; elsewhere the pack.
+#[test]
+fn a_snow_volume_samples_the_cover_map_at_its_world_position() {
+    let mut app = snowy_app();
+    let plain = spawn_snow_volume(&mut app, Transform::IDENTITY);
+    let moved = spawn_snow_volume(&mut app, turned());
+    // 1 m of snow over x in [30, 158), z in [−60, 68): under the moved volume only.
+    let grid = TerrainGrid {
+        origin: Vec2::new(30.0, -60.0),
+        cell_m: 1.0,
+        size: UVec2::splat(128),
+        y0: 0.0,
+    };
+    app.world_mut().resource_mut::<EnvironmentSnapshot>().cover = Some(CoverSnapshot {
+        grid,
+        depth: vec![1.0_f32; 128 * 128].into(),
+        wetness: vec![0.0; 128 * 128].into(),
+    });
+    app.update();
+    app.update();
+    assert!(held(&app, plain).iter().all(|d| (d - 0.6).abs() < 1e-5));
+    // 1 m of world snow on a volume scaled by 2 is 0.5 field units.
+    assert!(held(&app, moved).iter().all(|d| (d - 0.5).abs() < 1e-5));
+}
+
+#[test]
+fn a_tilted_snow_volume_gets_no_slab() {
+    let mut app = snowy_app();
+    let volume = spawn_snow_volume(
+        &mut app,
+        Transform::from_rotation(Quat::from_rotation_x(0.2)),
+    );
+    let base = field_ptr(&app, volume);
+    app.update();
+    app.update();
+    assert!(app.world().get::<VoxelGroundState>(volume).is_none());
+    assert_eq!(field_ptr(&app, volume), base);
+}
+
+#[test]
+fn a_volume_with_both_components_is_a_voxel_ground() {
+    let mut app = snowy_app();
+    let volume = spawn_snow_volume(&mut app, Transform::IDENTITY);
+    app.world_mut()
+        .entity_mut(volume)
+        .insert(VoxelGround::new(UVec2::splat(32)));
+    app.update();
+    app.update();
+    assert!(state(&app, volume).terrain.is_some());
+}
+
+#[test]
+fn removing_voxel_snow_restores_the_field() {
+    let mut app = snowy_app();
+    let volume = spawn_snow_volume(&mut app, Transform::IDENTITY);
+    let base = field_ptr(&app, volume);
+    app.update();
+    app.update();
+    assert_ne!(field_ptr(&app, volume), base);
+    clear_marks(&mut app);
+    app.world_mut().entity_mut(volume).remove::<VoxelSnow>();
+    app.update();
+    assert!(app.world().get::<VoxelGroundState>(volume).is_none());
+    assert_eq!(field_ptr(&app, volume), base);
+    assert_eq!(marked_ids(&mut app).len(), 12, "every chunk is remeshed");
 }
