@@ -32,13 +32,13 @@ Two defects of one cause, found by the iteration-15 review and reproduced on `ma
 |---|---|---|
 | Shadow map extent (the regional mean's area) | 8 km square, centred on the camera | `clouds.md` (`SHADOW_EXTENT_M`) |
 | Query grid averaged | 256² cells, 31.25 m | `cloud-shadow-query.md` |
-| Smoothing of `T̄` | 1 s time constant | unchanged (`CAMERA_TRANSMITTANCE_TAU_S`, renamed) |
+| Smoothing of `T̄` | 1 s time constant | unchanged (`CAMERA_TRANSMITTANCE_TAU_S`, renamed `MEAN_TRANSMITTANCE_TAU_S`) |
 | Before the first readback | `1 − cover^3.4` | Kasten & Czeplak, unchanged |
 | March exit | `T < 0.01` → `T = 0`, `L /= 1 − T` | Schneider & Vos 2015 |
 
 ## GPU mapping
 
-No new pass. The `cloud_shadow_camera` dispatch (one 9 × 9 workgroup re-marching 81 texels of the shadow) and its readback are removed; the mean is a CPU sum of the 65 536 floats the coarse readback already decodes (≈ 20 µs, measured under Validation 5). The march gains one branch after its loop.
+No new pass. The `cloud_shadow_camera` dispatch (one 9 × 9 workgroup re-marching 81 texels of the shadow) and its readback are removed; the mean is a CPU sum of the 65 536 floats the coarse readback already decodes, 47 µs (release, best of 200) at the readback's 4 Hz. The march gains one branch after its loop.
 
 ## What great looks like
 
@@ -46,13 +46,17 @@ A summer afternoon of fair-weather cumulus: walking into a cloud's shadow, the g
 
 ## Validation targets
 
-1. **The light does not follow the camera's shadow (GPU, `tests/gpu_clouds.rs`).** Under `Clear` with a cover that leaves both shade and sun in the map, the camera moved between the darkest and the brightest 70 m spot of the same field: the sun's illuminance differs by at most 2 % and the mean of a clear-sky region of the frame by at most 5 %. Before: the illuminance follows the camera's 9 × 9 mean (≈ 0 vs ≈ 1).
-2. **The light carries the map's mean.** Clear and Overcast: `|direct − mean(T)| ≤ 0.01`, and the overcast beam is still at most 5 % of the clear one; the ambient is still `0.25 (1 − T̄)` of the clear-sky illuminance.
-3. **An opaque cloud hides what is behind it (CPU mirror, `clouds::model`).** A column the march gives up on returns `T = 0` and a finite radiance at most `1/0.99` of the integrated one.
-4. **Visual.** `waves` at 17.5 h, frames 600/1200/1800: a blue sky and an unchanged horizon; `day_night` at 17.5 h: no disc in the cloud, a silver lining; a `terrain_tour`/`weather_tour` sequence under `PartlyCloudy` with a shadow crossing the camera: the sky's mean luminance steady to within 5 % while the near ground darkens and the distant terrain stays lit.
-5. **Performance.** `elements_clouds_*` passes no slower than iteration 15's run; the readback mean's CPU cost recorded.
+1. **The light does not follow the camera's shadow (GPU, `tests/gpu_clouds.rs` `a_cloud_over_the_camera_leaves_the_lights_alone`).** Under `Clear` with a cover that leaves both shade and sun in the map, the camera moved between the darkest and the brightest 70 m spot of the same field: the sun's illuminance differs by at most 2 % and the ambient by at most 1 % of the clear sun. Measured: local shadow 0.002 vs 0.907, beam 0.5666 vs 0.5752 (1.5 %; the 8 km window moved with the camera), ambient 11 842 vs 11 607 lx. The same test on `7dd1ef0`: beam 0.0222 in the shade vs 0.8591 in the sun — fails. The frame's sky is measured in Validation 4 (Deviation 1).
+2. **The light carries the map's mean.** Clear and Overcast: `|direct − mean(T)| ≤ 0.01`, and the overcast beam is still at most 5 % of the clear one; the ambient is still `0.25 (1 − T̄)` of the clear-sky illuminance. Measured: Clear beam 0.9696 for a full-map mean 0.9691, Overcast 0.0023 for 0.0012; overcast / clear beam 0.002; ambient 0.210 of `RAW_SUNLIGHT` under Overcast.
+3. **An opaque cloud hides what is behind it (CPU mirror, `clouds::model` `an_opaque_column_hides_what_is_behind_it`).** A column the march gives up on returns `T = 0` and a finite radiance; a thin column (τ = 0.4) keeps `e^{−0.4}` within 0.02. Passes.
+4. **Visual.** `waves` at 17.5 h, frames 600/1200/1800: a blue sky and an unchanged horizon; `day_night` at 17.5 h: no disc in the cloud, a silver lining; a `terrain_tour`/`weather_tour` sequence under `PartlyCloudy` with a shadow crossing the camera: the sky's mean luminance steady to within 5 % while the near ground darkens and the distant terrain stays lit. Measured (`/tmp/i16/seq_*`, `terrain_tour` hills, `PartlyCloudy`, 15.5 h, 81 frames over 20 s while a shadow settles on the camera): sky band 157 → 123 before (26.6 % range, grey), 183–184 after (0.9 %); mid-distance terrain 1.5 %, the shaded near ground 101–107 in both. `day_night` at 16.5 h and 18.0 h (camera in sun) unchanged within 0.5 %; at 17.5 h (camera in the cloud's shadow) the sky rises from (49, 63, 80) % to (64, 77, 92) %, onto the trend of the two. Overcast, Thunderstorm, a moonlit night and a 19.6 h dusk unchanged (`/tmp/i16/cmp/all.png`).
+5. **Performance.** `elements_clouds_*` passes no slower than before; the readback mean's CPU cost recorded. Measured (`bench_elements`, High, hills, `PartlyCloudy`, 1080p, four rounds alternating `7dd1ef0` and this tree, P2 at 1740–1800 MHz logged in the same shell, a vLLM server sharing the GPU, minimum per run): `elements_clouds_shadow` 0.066–0.079 → 0.059–0.065 ms (the camera kernel gone); `elements_clouds_march` 0.436–0.466 → 0.443–0.468 ms (the exit branch is within the spread); `elements_clouds_composite` 0.037–0.038 → 0.042 ms in all three uncontended runs, though its shader and inputs are unchanged [INFERENCE: the timestamp lands differently with one dispatch fewer before it]; net ≈ −0.003 ms. CPU: 47 µs at 4 Hz.
 
 ## Deviations from this plan
+
+1. **Validation 1's GPU test measures the lights, not the frame.** The frame of a camera moved 300 m shows different clouds, so its sky mean would compare cloud layouts, not light. Bevy's sky, aerial perspective and environment map are functions of the lights' `color · illuminance`, so equal lights are equal sky; the frame's sky is measured where the clouds stay put, in Validation 4's sequence.
+2. **The `waves` example's bodies are `WeatheredMaterial`.** With the lights at the regional mean, a `StandardMaterial` hull in a cloud's shadow stayed sunlit beside the shaded water (`/tmp/i16/after/props.png`). The crate's own surfaces take the shadow per pixel; a prop takes it through `WeatheredMaterial`, which the example now uses. The other examples keep their `StandardMaterial` props (markers and test boxes); converting every example is not this item, and the README says which material takes the shadow.
+3. **The mean is over the readback grid (every fourth texel), not all 1024².** It is already read back for `Environment::cloud_shadow_at`; the difference from the full map is within 0.0011 (Validation 2).
 
 ## Pending index
 
