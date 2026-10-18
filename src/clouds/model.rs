@@ -76,66 +76,29 @@ fn hg(cos_t: f64, g: f64) -> f64 {
     (1.0 - g2) / (4.0 * PI * (1.0 + g2 - 2.0 * g * cos_t).powf(1.5))
 }
 
-/// The dual lobe with both anisotropies scaled by `c_pow`: forward lobe (g = 0.8) weighted 0.7,
-/// backward lobe (g = −0.5) weighted 0.3.
-fn dual_lobe(cos_t: f64, c_pow: f64) -> f64 {
-    0.7 * hg(cos_t, 0.8 * c_pow) + 0.3 * hg(cos_t, -0.5 * c_pow)
+/// `phase` of `common.wesl`: the single-scattering dual lobe, forward lobe (g = 0.8) weighted
+/// 0.7, backward lobe (g = −0.5) weighted 0.3.
+pub(crate) fn phase(cos_t: f64) -> f64 {
+    0.7 * hg(cos_t, 0.8) + 0.3 * hg(cos_t, -0.5)
 }
 
-/// Phase function of octave `n` of the multiple-scattering sum with `c = 0.5`.
-pub(crate) fn phase_octave(cos_theta: f64, octave: u32) -> f64 {
-    phase_octave_with(cos_theta, octave, 0.5)
-}
+/// Diffusion's extrapolation length in optical depths, `2 / (3 (1 − g))` with `g = 0.8`
+/// (`march.wesl`; `cloud-lighting.md`).
+pub(crate) const DIFFUSE_EXTRAPOLATION: f64 = 10.0 / 3.0;
+/// Albedo of the diffuse source, fitted to the Monte Carlo slabs.
+pub(crate) const DIFFUSE_ALBEDO: f64 = 0.68;
+/// How far behind a sample (away from the light) the cloud behind it is sampled, m; the sample
+/// stands for twice this.
+const BELOW_M: f64 = 300.0;
 
-/// Phase function of octave `n` with the anisotropy factor `c` per octave.
-fn phase_octave_with(cos_theta: f64, octave: u32, c: f64) -> f64 {
-    dual_lobe(cos_theta, c.powi(octave as i32))
-}
-
-/// The Wrenninge multiple-scattering octave sum: octave `n` scatters `a^n`, is attenuated by
-/// `exp(-b^n τ)` and has the phase of anisotropy `c^n`. Energy conservation needs `a ≤ b`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct MultiScatter {
-    a: f64,
-    b: f64,
-    c: f64,
-}
-
-impl MultiScatter {
-    /// The note's values, `a = b = c = 0.5`.
-    pub(crate) const PLAN: Self = Self {
-        a: 0.5,
-        b: 0.5,
-        c: 0.5,
-    };
-
-    /// `None` unless `0 ≤ a ≤ b ≤ 1` and `0 ≤ c ≤ 1`: with `a > b` a deeper octave would scatter
-    /// more than it is attenuated and the sum could return more light than arrives.
-    pub(crate) fn new(a: f64, b: f64, c: f64) -> Option<Self> {
-        let ok = (0.0..=1.0).contains(&a)
-            && (0.0..=1.0).contains(&b)
-            && (0.0..=1.0).contains(&c)
-            && a <= b;
-        ok.then_some(Self { a, b, c })
-    }
-
-    /// The octave sum without the energy rule, for the test that shows why the rule exists.
-    fn unchecked(a: f64, b: f64, c: f64) -> Self {
-        Self { a, b, c }
-    }
-
-    /// Source of the sum per unit of incoming light: light-path optical depth `tau`, phase
-    /// cosine `cos_theta`, `powder` multiplying octave 0 (1 when off).
-    pub(crate) fn sum(&self, octaves: u32, tau: f64, cos_theta: f64, powder: f64) -> f64 {
-        (0..octaves)
-            .map(|n| {
-                let octave = self.a.powi(n as i32)
-                    * (-self.b.powi(n as i32) * tau).exp()
-                    * phase_octave_with(cos_theta, n, self.c);
-                if n == 0 { octave * powder } else { octave }
-            })
-            .sum()
-    }
+/// `cloud_scatter` of `march.wesl` per unit of the light's illuminance, without the ambient:
+/// single scattering `powder · e^{−τ_l} p(θ)` plus the diffuse fluence of a conservative slab
+/// between extrapolated boundaries, `α √μ_l / π · (τ_b + z) / (τ_l + τ_b + 2z)`.
+pub(crate) fn scatter_source(tau_l: f64, tau_b: f64, mu_l: f64, cos_t: f64, powder: f64) -> f64 {
+    let z = DIFFUSE_EXTRAPOLATION;
+    let diffuse =
+        DIFFUSE_ALBEDO / PI * mu_l.max(0.0).sqrt() * (tau_b + z) / (tau_l + tau_b + 2.0 * z);
+    powder * (-tau_l).exp() * phase(cos_t) + diffuse
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -665,21 +628,16 @@ pub(crate) struct Scene {
     pub(crate) sun: f64,
     /// Ambient source term `E_d / 2π`, cd/m².
     pub(crate) ambient: f64,
-    /// Whether the powder term darkens octave 0.
+    /// Whether the powder term darkens single scattering.
     pub(crate) powder: bool,
     /// Primary steps Q.
     pub(crate) steps: u32,
     /// Jitter of the first sample inside its step, 0–1.
     pub(crate) jitter: f64,
-    /// Octaves of multiple scattering.
-    pub(crate) octaves: u32,
-    /// The octave weights.
-    pub(crate) scatter: MultiScatter,
 }
 
 impl Scene {
-    /// Full sun, no ambient, powder on, 64 steps, three octaves of the plan's multiple
-    /// scattering; the phase cosine is that of `dir` and `light`.
+    /// Full sun, no ambient, powder on, 64 steps; the phase cosine is that of `dir` and `light`.
     pub(crate) fn new(camera: DVec3, dir: DVec3, light: DVec3) -> Self {
         let (dir, light) = (dir.normalize(), light.normalize());
         Self {
@@ -692,8 +650,6 @@ impl Scene {
             powder: true,
             steps: 64,
             jitter: 0.5,
-            octaves: 3,
-            scatter: MultiScatter::PLAN,
         }
     }
 }
@@ -745,6 +701,14 @@ fn light_optical_depth(off: DVec3, light: DVec3, camera: DVec3, medium: &impl Me
         tau += (1.0 + g) * sigma * len;
     }
     tau
+}
+
+/// `below_optical_depth` of `march.wesl`: one base-shape sample [`BELOW_M`] behind the point
+/// along the light, standing for twice that, times `1 + g`.
+fn below_optical_depth(off: DVec3, light: DVec3, camera: DVec3, medium: &impl Medium) -> f64 {
+    let o = off - light * BELOW_M;
+    let (sigma, g) = medium.sample(camera.y + o.y, [camera.x + o.x, camera.z + o.z], 0.0);
+    (1.0 + g) * sigma * 2.0 * BELOW_M
 }
 
 /// Mirror of the fine march of `march.wesl` (coarse and fine phases, early exit, per-sample
@@ -801,15 +765,14 @@ pub(crate) fn march(scene: &Scene, medium: &impl Medium) -> Marched {
         let seg = (t1 - (t - dt * scene.jitter)).clamp(0.0, dt);
         let step_t = (-sigma * seg).exp();
         let tau_l = light_optical_depth(off, scene.light, scene.camera, medium);
+        let tau_b = below_optical_depth(off, scene.light, scene.camera, medium);
         let powder = if scene.powder {
             mix(1.0, 1.0 - (-2.0 * tau_l).exp(), powder_weight)
         } else {
             1.0
         };
-        let mut source = scene.sun
-            * scene
-                .scatter
-                .sum(scene.octaves, tau_l, scene.cos_theta, powder);
+        let mut source =
+            scene.sun * scatter_source(tau_l, tau_b, scene.light.y, scene.cos_theta, powder);
         let f = (h - medium.base_m()) / (medium.top_m() - medium.base_m());
         source += scene.ambient * (AMBIENT_BOTTOM + (1.0 - AMBIENT_BOTTOM) * f);
         radiance += transmittance * source * (1.0 - step_t);
@@ -825,77 +788,6 @@ pub(crate) fn march(scene: &Scene, medium: &impl Medium) -> Marched {
         radiance,
         transmittance,
     }
-}
-
-/// Thickness of the slab of the slab tests, m.
-pub(crate) const SLAB_THICKNESS_M: f64 = 900.0;
-
-/// The scene and medium of the analytic slab of Validation 5: a homogeneous slab of thickness
-/// [`SLAB_THICKNESS_M`] and optical depth `sigma_h` seen along its normal, lit by a light whose
-/// direction makes cosine `mu_s` with the normal; the phase function is evaluated at
-/// `cos_theta` whatever the two directions are. Ambient and powder off, atmosphere
-/// transmittance 1, unit illuminance, 64 steps.
-pub(crate) fn slab_case(
-    sigma_h: f64,
-    mu_s: f64,
-    cos_theta: f64,
-    octaves: u32,
-    a: f64,
-    b: f64,
-    c: f64,
-) -> (Scene, Slab) {
-    let slab = Slab {
-        sigma: sigma_h / SLAB_THICKNESS_M,
-        base_m: 1500.0,
-        top_m: 1500.0 + SLAB_THICKNESS_M,
-    };
-    let light = DVec3::new((1.0 - mu_s * mu_s).max(0.0).sqrt(), mu_s, 0.0);
-    let mut scene = Scene::new(DVec3::new(0.0, slab.base_m, 0.0), DVec3::Y, light);
-    scene.cos_theta = cos_theta;
-    scene.sun = 1.0;
-    scene.powder = false;
-    scene.octaves = octaves;
-    scene.scatter = MultiScatter::unchecked(a, b, c);
-    (scene, slab)
-}
-
-/// `L / E` of the homogeneous slab of [`slab_case`] by the shader's integrator at Q = 64.
-pub(crate) fn slab_radiance(
-    sigma_h: f64,
-    mu_s: f64,
-    cos_theta: f64,
-    octaves: u32,
-    a: f64,
-    b: f64,
-    c: f64,
-) -> f64 {
-    let (scene, slab) = slab_case(sigma_h, mu_s, cos_theta, octaves, a, b, c);
-    march(&scene, &slab).radiance
-}
-
-/// The closed form of the slab (Validation 5): octave `n` contributes
-/// `a^n p_n(θ) e^{-q σH} (1 − e^{-σH (1 − q)}) / (1 − q)` with `q = b^n / μ_s`, which for
-/// `μ_s = 1` is `σH e^{-σH}` at octave 0 and the note's expression at the others.
-pub(crate) fn slab_closed_form(
-    sigma_h: f64,
-    mu_s: f64,
-    cos_theta: f64,
-    octaves: u32,
-    a: f64,
-    b: f64,
-    c: f64,
-) -> f64 {
-    (0..octaves)
-        .map(|n| {
-            let q = b.powi(n as i32) / mu_s;
-            let integral = if (1.0 - q).abs() < 1e-9 {
-                sigma_h * (-q * sigma_h).exp()
-            } else {
-                (-q * sigma_h).exp() * (1.0 - (-sigma_h * (1.0 - q)).exp()) / (1.0 - q)
-            };
-            a.powi(n as i32) * phase_octave_with(cos_theta, n, c) * integral
-        })
-        .sum()
 }
 
 #[cfg(test)]
@@ -1026,156 +918,131 @@ mod tests {
     // -----------------------------------------------------------------------------------------
 
     #[test]
-    fn every_phase_octave_integrates_to_one() {
+    fn the_phase_function_integrates_to_one() {
         // ∫ p dΩ = 2π ∫ p dμ, midpoint rule fine enough for the forward lobe (width ~0.03).
         let n = 400_000;
-        for octave in 0..3 {
-            let integral: f64 = (0..n)
-                .map(|k| {
-                    let mu = -1.0 + (f64::from(k) + 0.5) * 2.0 / f64::from(n);
-                    phase_octave(mu, octave)
-                })
-                .sum::<f64>()
-                * (2.0 / f64::from(n))
-                * 2.0
-                * PI;
-            assert!(
-                (integral - 1.0).abs() < 1e-3,
-                "octave {octave} integrates to {integral}"
-            );
-        }
+        let integral: f64 = (0..n)
+            .map(|k| phase(-1.0 + (f64::from(k) + 0.5) * 2.0 / f64::from(n)))
+            .sum::<f64>()
+            * (2.0 / f64::from(n))
+            * 2.0
+            * PI;
+        assert!((integral - 1.0).abs() < 1e-3, "{integral}");
     }
 
     #[test]
-    fn the_phase_octaves_have_the_values_of_the_note() {
-        // The note quotes four decimals.
-        let cases = [
-            (0.0_f64.cos(), 0, 2.5120),
-            (90.0_f64.to_radians().cos(), 0, 0.0224),
-            (PI.cos(), 0, 0.1467),
-            (1.0, 1, 0.2281),
-            (1.0, 2, 0.1210),
-            (-1.0, 1, 0.0701),
-            (-1.0, 2, 0.0660),
-        ];
-        for (cos, octave, expected) in cases {
-            let p = phase_octave(cos, octave);
+    fn the_phase_function_has_the_values_of_the_note() {
+        for (cos, expected) in [(1.0, 2.5120), (0.0, 0.0224), (-1.0, 0.1467)] {
+            let p = phase(cos);
             assert!(
                 (p - expected).abs() <= 5.0e-5,
-                "p_{octave}({cos}) = {p}, note {expected}"
+                "p({cos}) = {p}, note {expected}"
             );
         }
     }
 
     // -----------------------------------------------------------------------------------------
-    // Validation 5: the analytic slab
+    // cloud-lighting.md Validation 1 and 3: the slab against Monte Carlo
     // -----------------------------------------------------------------------------------------
 
-    #[test]
-    fn the_closed_form_of_the_slab_is_the_value_of_the_note() {
-        // σH = 1, sun overhead, θ = 0, three octaves: 0.9241 + 0.0544 + 0.0166 = 0.9951.
-        let single = slab_closed_form(1.0, 1.0, 1.0, 1, 0.5, 0.5, 0.5);
-        let total = slab_closed_form(1.0, 1.0, 1.0, 3, 0.5, 0.5, 0.5);
-        assert!((single - 0.9241).abs() < 5e-5, "single scattering {single}");
-        assert!((total - 0.9951).abs() < 5e-5, "three octaves {total}");
-        let oblique = slab_closed_form(1.0, 0.5, 1.0, 1, 0.5, 0.5, 0.5);
-        assert!(
-            (oblique - 0.5841).abs() < 5e-5,
-            "oblique single scattering {oblique}"
-        );
-    }
+    /// `(τ, μ₀, view (0 above, 1 below), view zenith cosine, azimuth from the sun's side in
+    /// degrees, L/E)` of a homogeneous conservative slab, by Monte Carlo transport with the
+    /// march's phase (`docs/research/cloud-lighting-mc.py`).
+    const MONTE_CARLO_SLAB: &[(f64, f64, u32, f64, f64, f64)] = &include!("monte_carlo_slab.in");
 
-    fn assert_slab(steps: u32, tolerance: f64, sigma_h: f64, mu_s: f64, octaves: u32) {
-        let (mut scene, slab) = slab_case(sigma_h, mu_s, 1.0, octaves, 0.5, 0.5, 0.5);
+    /// `L / E` the march sees on a 900 m slab of optical depth `tau` lit from zenith cosine
+    /// `mu0`, viewed from above or below along the row's direction, with `steps` primary steps.
+    fn slab_view(tau: f64, mu0: f64, below: bool, mu_v: f64, azimuth: f64, steps: u32) -> f64 {
+        let thickness = 900.0;
+        let slab = Slab {
+            sigma: tau / thickness,
+            base_m: 1500.0,
+            top_m: 1500.0 + thickness,
+        };
+        let light = DVec3::new((1.0 - mu0 * mu0).sqrt(), mu0, 0.0);
+        let sv = (1.0 - mu_v * mu_v).sqrt();
+        let a = azimuth.to_radians();
+        // The viewer sits along `toward` and looks back at the slab.
+        let (from, toward) = if below {
+            (slab.base_m, DVec3::new(-sv, -mu_v, 0.0))
+        } else {
+            (slab.top_m, DVec3::new(sv * a.cos(), mu_v, sv * a.sin()))
+        };
+        let mut scene = Scene::new(DVec3::new(0.0, from, 0.0) + toward * 100.0, -toward, light);
+        scene.sun = 1.0;
         scene.steps = steps;
-        let mirror = march(&scene, &slab).radiance;
-        let exact = slab_closed_form(sigma_h, mu_s, 1.0, octaves, 0.5, 0.5, 0.5);
-        let error = (mirror / exact - 1.0).abs();
-        assert!(
-            error <= tolerance,
-            "σH {sigma_h}, μ_s {mu_s}, {octaves} octaves, Q {steps}: mirror {mirror}, closed form {exact} ({:.2} %)",
-            100.0 * error
-        );
+        march(&scene, &slab).radiance
     }
 
+    /// The march returns the light a cloud slab reflects and transmits: the mean squared log
+    /// error over the 96 Monte Carlo cases (floor 0.01) is at most 0.08, every thick top within
+    /// half to twice the reference and every base within 0.4 to 2.5 times (`cloud-lighting.md`
+    /// Deviation 2). Measured: 0.067, thick tops 0.57–1.12×, bases 0.45–1.19×. Three Wrenninge
+    /// octaves gave 0.82, thick tops at a sixth and bases at nothing.
     #[test]
-    fn the_integrator_matches_the_closed_form_of_the_slab() {
-        // Q = 64 within 10 %, Q = 32 within 12 % (the rectangle rule of the light path).
-        // Measured: at σH = 1 the mirror is within 0.75 % of the closed form at Q ≥ 48 and 0.93 %
-        // at Q = 32 (oblique single scattering 0.7 % and 1.7 %); only a low sun (μ_s = 0.2,
-        // 12.8 %) or an optical depth of 4 (4.1 %) leaves the band.
-        for (steps, tolerance) in [(64, 0.10), (32, 0.12)] {
-            assert_slab(steps, tolerance, 1.0, 1.0, 3);
-            assert_slab(steps, tolerance, 1.0, 1.0, 1);
-            assert_slab(steps, tolerance, 1.0, 0.5, 1);
+    fn the_slab_matches_monte_carlo() {
+        let mut error = 0.0;
+        for &(tau, mu0, view, mu_v, azimuth, reference) in MONTE_CARLO_SLAB {
+            let below = view == 1;
+            let marched = slab_view(tau, mu0, below, mu_v, azimuth, 64);
+            let weight = if below { 0.5 } else { 1.0 };
+            error += weight * ((marched + 0.01).ln() - (reference + 0.01).ln()).powi(2);
+            let ratio = marched / reference;
+            if below {
+                assert!(
+                    (0.4..=2.5).contains(&ratio),
+                    "base τ {tau} μ₀ {mu0} μ_v {mu_v}: {marched} against {reference}"
+                );
+            } else if tau >= 10.0 {
+                assert!(
+                    (0.5..=2.0).contains(&ratio),
+                    "top τ {tau} μ₀ {mu0} μ_v {mu_v} az {azimuth}: {marched} against {reference}"
+                );
+            }
         }
+        let error = error / MONTE_CARLO_SLAB.len() as f64;
+        println!("mean squared log error {error:.4}");
+        assert!(error <= 0.08, "{error}");
     }
 
+    /// The march at Q = 64 is within 5 % of the same march converged at Q = 1024.
     #[test]
-    fn the_slab_radiance_function_is_the_integrator_at_sixty_four_steps() {
-        let direct = slab_radiance(1.0, 1.0, 1.0, 3, 0.5, 0.5, 0.5);
-        let (scene, slab) = slab_case(1.0, 1.0, 1.0, 3, 0.5, 0.5, 0.5);
-        assert_eq!(scene.steps, 64);
-        assert_eq!(direct, march(&scene, &slab).radiance);
-    }
-
-    #[test]
-    fn multiple_scattering_needs_a_scatter_weight_no_larger_than_the_extinction() {
-        // a ≤ b: the deeper octaves are attenuated at least as fast as they scatter.
-        assert!(MultiScatter::new(0.5, 0.5, 0.5).is_some());
-        assert!(MultiScatter::new(0.3, 0.5, 0.5).is_some());
-        assert!(
-            MultiScatter::new(0.5, 0.3, 0.5).is_none(),
-            "a > b must be rejected"
-        );
-        assert!(MultiScatter::new(-0.1, 0.5, 0.5).is_none());
-        assert!(MultiScatter::new(0.5, 1.5, 0.5).is_none());
-
-        let at = |a: f64, b: f64| slab_closed_form(1.0, 1.0, 1.0, 3, a, b, 0.5);
-        let plan = at(0.5, 0.5);
-        // A weaker scatter weight with the same extinction returns less light.
-        assert!(
-            at(0.3, 0.5) < plan,
-            "a = 0.3, b = 0.5 gives {} against {plan}",
-            at(0.3, 0.5)
-        );
-        // The pair the rule forbids (a = 0.5, b = 0.3: less extinction than scattering) returns
-        // more, so a deeper octave could add energy; the integrator shows the same.
-        assert!(at(0.5, 0.3) > plan);
-        let integrated = |a: f64, b: f64| slab_radiance(1.0, 1.0, 1.0, 3, a, b, 0.5);
-        assert!(integrated(0.3, 0.5) < integrated(0.5, 0.5));
-        assert!(integrated(0.5, 0.3) > integrated(0.5, 0.5));
-        let valid = MultiScatter::new(0.3, 0.5, 0.5).map(|m| m.sum(3, 1.0, 1.0, 1.0));
-        assert!(valid.is_some_and(|s| s < MultiScatter::PLAN.sum(3, 1.0, 1.0, 1.0)));
+    fn the_integrator_converges_on_the_slab() {
+        for (tau, mu0, below) in [(1.0, 0.9, false), (10.0, 0.5, false), (10.0, 0.9, true)] {
+            let coarse = slab_view(tau, mu0, below, 0.7, 90.0, 64);
+            let fine = slab_view(tau, mu0, below, 0.7, 90.0, 1024);
+            assert!(
+                (coarse / fine - 1.0).abs() <= 0.05,
+                "τ {tau}, μ₀ {mu0}, below {below}: {coarse} at Q = 64, {fine} at Q = 1024"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------------------------
     // Validation 6: energy
     // -----------------------------------------------------------------------------------------
 
-    /// `Σ a^n max_θ p_n(θ)`: the most light one unit of illuminance can return per steradian
-    /// of source term.
-    fn energy_factor() -> f64 {
-        (0..3)
-            .map(|n| {
-                let peak = (0..=2000)
-                    .map(|k| phase_octave(-1.0 + f64::from(k) / 1000.0, n))
-                    .fold(0.0_f64, f64::max);
-                0.5_f64.powi(n as i32) * peak
-            })
-            .sum()
+    /// The most light one unit of illuminance can return per unit of source: the phase
+    /// function's forward peak plus the diffuse term at its largest, `α / π`.
+    fn source_bound() -> f64 {
+        let peak = (0..=2000)
+            .map(|k| phase(-1.0 + f64::from(k) / 1000.0))
+            .fold(0.0_f64, f64::max);
+        peak + DIFFUSE_ALBEDO / PI
     }
 
     #[test]
-    fn the_energy_factor_of_the_multiple_scattering_sum_is_the_note_value() {
-        let factor = energy_factor();
-        assert!((factor - 2.656).abs() < 1e-3, "energy factor {factor}");
-        assert!(
-            factor * SUN_LUX < 3.46e5,
-            "bound {} cd/m²",
-            factor * SUN_LUX
-        );
-        assert!(factor * SUN_LUX > 3.44e5);
+    fn the_source_bound_is_the_phase_peak_and_the_diffuse_albedo() {
+        let bound = source_bound();
+        assert!((bound - 2.7285).abs() < 1e-3, "source bound {bound}");
+        for tau_l in [0.0, 1.0, 10.0] {
+            for tau_b in [0.0, 5.0, 100.0] {
+                for cos in [-1.0, 0.0, 1.0] {
+                    let s = scatter_source(tau_l, tau_b, 1.0, cos, 1.0);
+                    assert!((0.0..=bound + 1e-12).contains(&s), "{s}");
+                }
+            }
+        }
     }
 
     /// Directions of the stress scenes: toward and away from the light, and rings at several
@@ -1201,7 +1068,7 @@ mod tests {
         let light = DVec3::new(0.4, 0.8, 0.3).normalize();
         let mut cumulonimbus = MirrorParams::new(1500.0, 9500.0, 1.0, 1.0, [0.0, 0.0]);
         cumulonimbus.precipitation = 0.5;
-        let bound = energy_factor() * SUN_LUX;
+        let bound = source_bound() * SUN_LUX;
         let ambient = SUN_LUX * 0.15 / (2.0 * PI);
         let mut brightest: f64 = 0.0;
         let mut hits = 0;
@@ -1234,12 +1101,18 @@ mod tests {
         );
         // A cumulonimbus self-shadows far below the bound; a thin slab seen toward the light
         // comes within a third of it.
-        let thin = slab_radiance(1.0, 1.0, 1.0, 3, 0.5, 0.5, 0.5) * SUN_LUX;
+        let slab = Slab {
+            sigma: 1.0 / 900.0,
+            base_m: 1500.0,
+            top_m: 2400.0,
+        };
+        let toward_light = Scene::new(DVec3::new(0.0, 1400.0, 0.0), DVec3::Y, DVec3::Y);
+        let thin = march(&toward_light, &slab).radiance;
         assert!(
             thin <= bound && thin > 0.3 * bound,
             "thin slab {thin} cd/m² against {bound}"
         );
-        assert!(bound < 3.46e5);
+        assert!(bound < 3.56e5);
     }
 
     /// A stratus slab of optical depth 40 (σ = 0.05, the stratus peak, over 800 m), sun off,

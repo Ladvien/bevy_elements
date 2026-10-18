@@ -6,7 +6,7 @@ import bevy_render::view::View;
 import bevy_elements::noise::hash31;
 import bevy_elements::clouds::common::{
     CloudParams, Medium, MAX_MARCH_M, PI, altitude, cloud_medium, coarse_shape, detail_weight,
-    ground_before_layer, light_at, phase_octave, ray_dir, sample_transmittance, scene_distance,
+    ground_before_layer, light_at, phase, ray_dir, sample_transmittance, scene_distance,
     shell_range, slot_offset,
 };
 
@@ -43,17 +43,15 @@ fn sky_irradiance() -> vec3<f32> {
     return PI * (sum / f32(SKY_SAMPLES) * params.air.y + vec3<f32>(params.atmo.w));
 }
 
-/// The ambient source of luminance `s` in the colour of the diffuse light at a sample: the sky's
-/// irradiance `sky_e` and the share of the light's beam `sun` (on a horizontal plane) the cloud
-/// above the sample has scattered out of it, `1 − e^{−τ_l}`. A thin edge takes the sky's
-/// colour, the inside of a thick deck the light's.
-fn ambient_light(sky_e: vec3<f32>, sun: vec3<f32>, tau_l: f32, s: f32) -> vec3<f32> {
-    let e = sky_e + sun * (max(params.light.y, 0.0) * (1.0 - exp(-tau_l)));
-    let lum = dot(e, vec3<f32>(0.2126, 0.7152, 0.0722));
+/// The ambient source of luminance `s` in the colour of the sky's irradiance `sky_e`: the
+/// skylight in the cloud. The sunlight the cloud has scattered out of the beam is
+/// `cloud_scatter`'s diffusion term (cloud-lighting.md Deviation 3).
+fn ambient_light(sky_e: vec3<f32>, s: f32) -> vec3<f32> {
+    let lum = dot(sky_e, vec3<f32>(0.2126, 0.7152, 0.0722));
     if !(lum > 1e-12) {
         return vec3<f32>(s);
     }
-    return e * (s / lum);
+    return sky_e * (s / lum);
 }
 
 /// Consecutive empty fine samples after which the march returns to coarse steps (Nubis).
@@ -110,16 +108,45 @@ fn light_optical_depth(off: vec3<f32>, l: vec3<f32>, cam: vec3<f32>) -> f32 {
     return tau;
 }
 
-/// Radiance of cloud lit by `sun` through a light path of optical depth `tau_l`, seen at angle
-/// `cos_t` to the light: three octaves of multiple scattering (weight a^n, light-path extinction
-/// b^n, phase g c^n) and the ambient source `ambient` (the gradient already applied).
-fn cloud_scatter(sun: vec3<f32>, tau_l: f32, cos_t: f32, powder_weight: f32, ambient: vec3<f32>) -> vec3<f32> {
+/// Diffusion's extrapolation length in optical depths, `2 / (3 (1 − g))` with the forward lobe's
+/// `g = 0.8` (Jensen et al. 2001, the boundary condition `φ − 2AD ∂φ/∂n = 0`, A = 1);
+/// cloud-lighting.md fits 3.39 to the Monte Carlo slabs.
+const DIFFUSE_EXTRAPOLATION: f32 = 3.3333333;
+/// Albedo of the diffuse source, fitted to the Monte Carlo slabs (cloud-lighting.md).
+const DIFFUSE_ALBEDO: f32 = 0.68;
+/// How far below a sample (away from the light) the cloud behind it is sampled, m; the sample
+/// stands for twice this.
+const BELOW_M: f32 = 300.0;
+
+/// Radiance of cloud lit by `sun` through a light path of optical depth `tau_l`, with `tau_b` of
+/// cloud behind the sample along the light, seen at angle `cos_t` to the light that makes
+/// cosine `mu_l` with the local vertical: single scattering with the dual-lobe phase (the
+/// powder darkening near the lit surface) plus the multiply scattered light as photon diffusion
+/// in a conservative slab, whose fluence falls linearly between extrapolated boundaries
+/// `(τ_b + z) / (τ_l + τ_b + 2z)` (cloud-lighting.md, Model), and the ambient source `ambient`.
+fn cloud_scatter(
+    sun: vec3<f32>,
+    tau_l: f32,
+    tau_b: f32,
+    mu_l: f32,
+    cos_t: f32,
+    powder_weight: f32,
+    ambient: vec3<f32>,
+) -> vec3<f32> {
     let powder = mix(1.0, 1.0 - exp(-2.0 * tau_l), powder_weight);
-    return sun * (
-        powder * exp(-tau_l) * phase_octave(cos_t, 1.0)
-        + 0.5 * exp(-0.5 * tau_l) * phase_octave(cos_t, 0.5)
-        + 0.25 * exp(-0.25 * tau_l) * phase_octave(cos_t, 0.25)
-    ) + vec3<f32>(ambient);
+    let z = DIFFUSE_EXTRAPOLATION;
+    let diffuse =
+        DIFFUSE_ALBEDO / PI * sqrt(max(mu_l, 0.0)) * (tau_b + z) / (tau_l + tau_b + 2.0 * z);
+    return sun * (powder * exp(-tau_l) * phase(cos_t) + diffuse) + ambient;
+}
+
+/// Optical depth of the cloud behind the point `off` along the light (away from it), m⁻¹·m: one
+/// base-shape sample `BELOW_M` beyond it standing for `2 · BELOW_M`, times `1 + g`.
+fn below_optical_depth(off: vec3<f32>, l: vec3<f32>, cam: vec3<f32>) -> f32 {
+    let o = off - l * BELOW_M;
+    let h = altitude(o.xz, cam.y + o.y, params.camera.w);
+    let m = medium_at(h, cam.xz + o.xz, 0.0);
+    return (1.0 + m.g) * m.sigma * 2.0 * BELOW_M;
 }
 
 /// Aerial perspective from the camera to `depth` along `dir` (through the screen position `uv`):
@@ -139,9 +166,21 @@ fn aerial_perspective(uv: vec2<f32>, dir: vec3<f32>, depth: f32, o_r: f32) -> Ae
     let lut = textureSampleLevel(aerial_lut, smp_clamp, vec3<f32>(uv, slice), 0.0);
     let r_d = sqrt(max(o_r * o_r + 2.0 * o_r * depth * dir.y + depth * depth, 1.0));
     let mu_d = (o_r * dir.y + depth) / r_d;
-    let t_cam = sample_transmittance(transmittance_lut, smp_clamp, o_r, dir.y, params);
-    let t_far = sample_transmittance(transmittance_lut, smp_clamp, r_d, mu_d, params);
-    let t_ap = min(t_cam / max(t_far, vec3<f32>(1e-6)), vec3<f32>(1.0));
+    // The LUT holds the transmittance to the top of the atmosphere, which a descending ray never
+    // reaches (it meets the ground): the air between two points is then taken along the reversed
+    // ray, which leaves the atmosphere through the camera (Bruneton's `GetTransmittance`). A
+    // camera above the clouds looking down sees them through that much air, not through the
+    // ground's (cloud-lighting.md Deviation 1).
+    var t_ap: vec3<f32>;
+    if dir.y < 0.0 {
+        let t_from_far = sample_transmittance(transmittance_lut, smp_clamp, r_d, -mu_d, params);
+        let t_from_cam = sample_transmittance(transmittance_lut, smp_clamp, o_r, -dir.y, params);
+        t_ap = min(t_from_far / max(t_from_cam, vec3<f32>(1e-6)), vec3<f32>(1.0));
+    } else {
+        let t_cam = sample_transmittance(transmittance_lut, smp_clamp, o_r, dir.y, params);
+        let t_far = sample_transmittance(transmittance_lut, smp_clamp, r_d, mu_d, params);
+        t_ap = min(t_cam / max(t_far, vec3<f32>(1e-6)), vec3<f32>(1.0));
+    }
     let beam = exp(lut.rgb) * clamp(depth / (range / slices), 0.0, 1.0);
     return Aerial(t_ap, beam + (vec3<f32>(1.0) - t_ap) * params.sky.yzw);
 }
@@ -192,12 +231,16 @@ fn far_veil(uv: vec2<f32>, dir: vec3<f32>, shell: vec2<f32>, o_r: f32) -> vec4<f
     let deck = smoothstep(DECK_COVER_FROM, DECK_COVER_TO, params.layer.w);
     let tau_l = FAR_TAU * mix(1.0, 1.0 / max(l.y, MIN_LIGHT_SINE), deck) * (1.0 + params.weather.w);
     let cos_t = dot(dir, l);
+    // Behind a broken layer's lit side lies about as much cloud as in front of it; below a
+    // uniform deck's base, none.
     let radiance = cloud_scatter(
         sun,
         tau_l,
+        FAR_TAU * (1.0 - deck),
+        mu_s,
         cos_t,
         clamp(0.5 - 0.5 * cos_t, 0.0, 1.0),
-        ambient_light(sky_irradiance(), sun, tau_l, params.light_e.w * AMBIENT_BOTTOM),
+        ambient_light(sky_irradiance(), params.light_e.w * AMBIENT_BOTTOM),
     );
     // The visible cloud of the veil lies about one build-up length past where it starts.
     let air = aerial_perspective(uv, dir, t_start + FAR_LENGTH_M, o_r);
@@ -317,13 +360,16 @@ fn cloud_march(@builtin(global_invocation_id) id: vec3<u32>) {
         let mu_s = (dot(off.xz, l.xz) + (big_r + cam.y + off.y) * l.y) / (big_r + h);
         let sun = light_at(transmittance_lut, smp_clamp, h, mu_s, params);
         let tau_l = light_optical_depth(off, l, cam);
+        let tau_b = below_optical_depth(off, l, cam);
         let f = (h - h_b) / (h_t - h_b);
         var scatter = cloud_scatter(
             sun,
             tau_l,
+            tau_b,
+            mu_s,
             cos_t,
             powder_weight,
-            ambient_light(sky_e, sun, tau_l, params.light_e.w * (AMBIENT_BOTTOM + (1.0 - AMBIENT_BOTTOM) * f)),
+            ambient_light(sky_e, params.light_e.w * (AMBIENT_BOTTOM + (1.0 - AMBIENT_BOTTOM) * f)),
         );
         if params.flash.w > 0.0 {
             let d = length(cam + off - params.flash.xyz);
