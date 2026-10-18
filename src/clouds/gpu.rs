@@ -21,8 +21,8 @@ use bevy::render::extract_component::ExtractComponentPlugin;
 use bevy::render::extract_resource::{ExtractResource, ExtractResourcePlugin};
 use bevy::render::render_asset::RenderAssets;
 use bevy::render::render_resource::binding_types::{
-    sampler, storage_buffer_sized, texture_2d, texture_3d, texture_depth_2d, texture_storage_2d,
-    texture_storage_3d, uniform_buffer,
+    sampler, storage_buffer_sized, texture_2d, texture_3d, texture_cube, texture_depth_2d,
+    texture_storage_2d, texture_storage_3d, uniform_buffer,
 };
 use bevy::render::render_resource::{
     AddressMode, BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries,
@@ -208,6 +208,8 @@ fn init_pipelines(
                 sampler(SamplerBindingType::Filtering),
                 sampler(SamplerBindingType::Filtering),
                 texture_storage_2d(TextureFormat::Rgba16Float, write),
+                // The sky the ambient takes its colour from (`CloudGpu::sky_probe`).
+                texture_cube(TextureSampleType::Float { filterable: true }),
             ),
         ),
     );
@@ -402,14 +404,24 @@ fn prepare_views(
     ) else {
         return;
     };
-    let (Some(base), Some(detail), Some(weather), Some(march), Some(history_a), Some(history_b)) = (
+    let (
+        Some(base),
+        Some(detail),
+        Some(weather),
+        Some(march),
+        Some(history_a),
+        Some(history_b),
+        Some(sky_probe),
+    ) = (
         images.get(&cloud.base),
         images.get(&cloud.detail),
         images.get(&cloud.weather),
         images.get(&images_view.march),
         images.get(&images_view.history[0]),
         images.get(&images_view.history[1]),
-    ) else {
+        images.get(&cloud.sky_probe),
+    )
+    else {
         return;
     };
     // The resolve writes history[frame % 2] and reads the other; the composite shows the one
@@ -438,6 +450,7 @@ fn prepare_views(
                 &pipelines.repeat,
                 &pipelines.clamp,
                 &march.texture_view,
+                &sky_probe.texture_view,
             )),
         );
         let resolve_group = device.create_bind_group(

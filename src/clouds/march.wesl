@@ -21,6 +21,40 @@ import bevy_elements::clouds::common::{
 @group(0) @binding(8) var smp_repeat: sampler;
 @group(0) @binding(9) var smp_clamp: sampler;
 @group(0) @binding(10) var march_out: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(11) var sky_probe: texture_cube<f32>;
+
+/// Directions over the upper hemisphere the sky's light is averaged from.
+const SKY_SAMPLES: u32 = 16u;
+
+/// The clear sky's irradiance on the layer, `π L̄`, with `L̄` the mean radiance of Bevy's sky over
+/// the upper hemisphere (clouds.md Deviation 30): a spherical Fibonacci set uniform in solid
+/// angle over the camera's atmosphere environment map (z flipped, cubemaps are left-handed; a
+/// white cube without one), undimmed by the cloud shadow at the camera (`air.y`), plus the night
+/// sky's neutral background behind the atmosphere (`atmo.w`).
+fn sky_irradiance() -> vec3<f32> {
+    var sum = vec3<f32>(0.0);
+    for (var i = 0u; i < SKY_SAMPLES; i += 1u) {
+        let y = (f32(i) + 0.5) / f32(SKY_SAMPLES);
+        let r = sqrt(max(1.0 - y * y, 0.0));
+        let phi = 2.3999632 * f32(i);
+        let d = vec3<f32>(r * cos(phi), y, -r * sin(phi));
+        sum += textureSampleLevel(sky_probe, smp_clamp, d, 0.0).rgb;
+    }
+    return PI * (sum / f32(SKY_SAMPLES) * params.air.y + vec3<f32>(params.atmo.w));
+}
+
+/// The ambient source of luminance `s` in the colour of the diffuse light at a sample: the sky's
+/// irradiance `sky_e` and the share of the light's beam `sun` (on a horizontal plane) the cloud
+/// above the sample has scattered out of it, `1 − e^{−τ_l}`. A thin edge takes the sky's
+/// colour, the inside of a thick deck the light's.
+fn ambient_light(sky_e: vec3<f32>, sun: vec3<f32>, tau_l: f32, s: f32) -> vec3<f32> {
+    let e = sky_e + sun * (max(params.light.y, 0.0) * (1.0 - exp(-tau_l)));
+    let lum = dot(e, vec3<f32>(0.2126, 0.7152, 0.0722));
+    if !(lum > 1e-12) {
+        return vec3<f32>(s);
+    }
+    return e * (s / lum);
+}
 
 /// Consecutive empty fine samples after which the march returns to coarse steps (Nubis).
 const EMPTY_LIMIT: u32 = 10u;
@@ -79,7 +113,7 @@ fn light_optical_depth(off: vec3<f32>, l: vec3<f32>, cam: vec3<f32>) -> f32 {
 /// Radiance of cloud lit by `sun` through a light path of optical depth `tau_l`, seen at angle
 /// `cos_t` to the light: three octaves of multiple scattering (weight a^n, light-path extinction
 /// b^n, phase g c^n) and the ambient source `ambient` (the gradient already applied).
-fn cloud_scatter(sun: vec3<f32>, tau_l: f32, cos_t: f32, powder_weight: f32, ambient: f32) -> vec3<f32> {
+fn cloud_scatter(sun: vec3<f32>, tau_l: f32, cos_t: f32, powder_weight: f32, ambient: vec3<f32>) -> vec3<f32> {
     let powder = mix(1.0, 1.0 - exp(-2.0 * tau_l), powder_weight);
     return sun * (
         powder * exp(-tau_l) * phase_octave(cos_t, 1.0)
@@ -163,7 +197,7 @@ fn far_veil(uv: vec2<f32>, dir: vec3<f32>, shell: vec2<f32>, o_r: f32) -> vec4<f
         tau_l,
         cos_t,
         clamp(0.5 - 0.5 * cos_t, 0.0, 1.0),
-        params.light_e.w * AMBIENT_BOTTOM,
+        ambient_light(sky_irradiance(), sun, tau_l, params.light_e.w * AMBIENT_BOTTOM),
     );
     // The visible cloud of the veil lies about one build-up length past where it starts.
     let air = aerial_perspective(uv, dir, t_start + FAR_LENGTH_M, o_r);
@@ -231,7 +265,7 @@ fn cloud_march(@builtin(global_invocation_id) id: vec3<u32>) {
     let jitter = hash31(vec3<i32>(i32(px.x), i32(px.y), i32(frame)));
     let cos_t = dot(dir, l);
     let powder_weight = clamp(0.5 - 0.5 * cos_t, 0.0, 1.0);
-    let ambient = params.light_e.w;
+    let sky_e = sky_irradiance();
 
     var radiance = vec3<f32>(0.0);
     var transmittance = 1.0;
@@ -288,7 +322,7 @@ fn cloud_march(@builtin(global_invocation_id) id: vec3<u32>) {
             tau_l,
             cos_t,
             powder_weight,
-            ambient * (AMBIENT_BOTTOM + (1.0 - AMBIENT_BOTTOM) * f),
+            ambient_light(sky_e, sun, tau_l, params.light_e.w * (AMBIENT_BOTTOM + (1.0 - AMBIENT_BOTTOM) * f)),
         );
         if params.flash.w > 0.0 {
             let d = length(cam + off - params.flash.xyz);

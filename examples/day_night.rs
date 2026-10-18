@@ -46,8 +46,17 @@ fn main() {
         },
         None => clock.with_time_scale(720.0),
     };
+    // `ELEMENTS_PRESET=PartlyCloudy` holds another preset (default `Clear`).
+    let preset = std::env::var("ELEMENTS_PRESET")
+        .ok()
+        .and_then(|name| {
+            WeatherPreset::ALL
+                .into_iter()
+                .find(|p| format!("{p:?}").eq_ignore_ascii_case(&name))
+        })
+        .unwrap_or(WeatherPreset::Clear);
     let mut director = WeatherDirector::default();
-    director.force(WeatherPreset::Clear, std::time::Duration::ZERO);
+    director.force(preset, std::time::Duration::ZERO);
     App::new()
         .add_plugins((DefaultPlugins, ElementsPlugins, ExampleHarness))
         .insert_resource(clock)
