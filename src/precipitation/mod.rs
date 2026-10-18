@@ -10,7 +10,10 @@
 //! terrain).
 
 mod gpu;
+mod look;
 pub(crate) mod model;
+
+pub use look::PrecipitationLook;
 
 use bevy::asset::embedded_asset;
 use bevy::color::Luminance;
@@ -165,6 +168,11 @@ pub(crate) struct DrawParams {
     /// metre frame; the shader draws them at world position × this, and takes the view's world
     /// distances and depths back to metres. yzw: unused.
     units: Vec4,
+    /// [`PrecipitationLook`]: x rain fall scale, y rain wind scale, z flake size spread σ,
+    /// w smallest flake half width, px.
+    look: Vec4,
+    /// [`PrecipitationLook::rain_tint`]: rgb on the streak's radiance, a on its opacity.
+    tint: Vec4,
 }
 
 /// One blocker as the kernel reads it (80 bytes): the rows of the inverse of the box's affine
@@ -254,6 +262,7 @@ impl Plugin for PrecipitationPlugin {
         embedded_asset!(app, "precip.wesl");
         embedded_asset!(app, "draw.wesl");
         app.init_resource::<PrecipitationRuntime>()
+            .init_resource::<PrecipitationLook>()
             .init_resource::<CelestialFrame>()
             .init_resource::<LightningFlash>()
             .add_observer(mark_camera)
@@ -453,6 +462,7 @@ fn update_precipitation(
     gpu: Option<ResMut<PrecipitationGpu>>,
     state: Option<ResMut<PrecipitationState>>,
     flash: Res<LightningFlash>,
+    look: Res<PrecipitationLook>,
     shadows: Option<Res<CloudShadows>>,
     terrain: Option<Res<TerrainState>>,
 ) {
@@ -542,6 +552,7 @@ fn update_precipitation(
     };
 
     let lit = light.draw_light(&view, &weather, shadows.as_deref());
+    let (style, tint) = look.gpu();
     gpu.draw = DrawParams {
         sun: lit.sun_dir.extend(lit.e_sun),
         moon: lit.moon_dir.extend(lit.e_moon),
@@ -570,6 +581,8 @@ fn update_precipitation(
         camera: view.velocity.extend(half_edge),
         centre: view.position.extend(fog_start),
         units: Vec4::new(units.per_metre(), 0.0, 0.0, 0.0),
+        look: style,
+        tint,
     };
 }
 
