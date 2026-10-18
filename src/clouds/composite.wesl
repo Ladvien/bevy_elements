@@ -5,7 +5,8 @@
 import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput;
 import bevy_render::view::View;
 import bevy_elements::clouds::common::{
-    CloudParams, MAX_MARCH_M, ground_before_layer, ray_dir, scene_distance, shell_range,
+    CloudParams, MAX_MARCH_M, ground_before_layer, is_orthographic, scene_distance, shell_range,
+    view_ray,
 };
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -25,12 +26,19 @@ fn cloud_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     }
     let pixel = vec2<i32>(in.position.xy);
     let depth = textureLoad(depth_tex, pixel, 0);
+    let ray = view_ray(
+        in.uv,
+        view.world_from_clip,
+        view.world_position,
+        is_orthographic(view.clip_from_view),
+        params.camera.xyz,
+    );
+    let cam = ray.origin;
+    let dir = ray.dir;
     if depth > 0.0 {
-        let cam = view.world_position;
-        let dir = ray_dir(in.uv, view.world_from_clip, cam);
         let big_r = params.camera.w;
         let shell = shell_range(big_r + cam.y, dir.y, params.layer.x, params.layer.y, big_r);
-        if scene_distance(in.uv, depth, view.world_from_clip, cam) < shell.x {
+        if scene_distance(in.uv, depth, view.world_from_clip, ray) < shell.x {
             return vec4<f32>(0.0, 0.0, 0.0, 1.0);
         }
     }
@@ -42,8 +50,6 @@ fn cloud_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         // opaque cloud must not amplify the sky behind it. A ray that meets the planet before
         // the layer (past the edge of a finite ground) ends beneath the deck, which the beam
         // lights correctly: no gain there (clouds.md Deviation 28).
-        let cam = view.world_position;
-        let dir = ray_dir(in.uv, view.world_from_clip, cam);
         let big_r = params.camera.w;
         let o_r = big_r + cam.y;
         let shell = shell_range(o_r, dir.y, params.layer.x, params.layer.y, big_r);

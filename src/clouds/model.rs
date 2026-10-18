@@ -7,7 +7,7 @@
 //! the shader's march on a flat shell. The GPU tests of `gpu.rs` compare the kernels with these
 //! functions.
 
-use bevy::math::{DVec3, Vec3};
+use bevy::math::{DVec3, Mat4, Vec2, Vec3, Vec4};
 
 use crate::gpu::noise_mirror::{cloud_base_at, cloud_coverage_field, cloud_detail_at};
 
@@ -664,6 +664,28 @@ pub(crate) struct Marched {
     pub(crate) transmittance: f64,
 }
 
+/// Mirror of `view_ray` of `common.wesl`: the origin and unit direction of the ray through
+/// screen position `uv` (0–1, top-left origin). A perspective view's starts at the eye `cam`;
+/// an orthographic view's runs along the view direction from the pixel's point on the plane
+/// through `focus` across it.
+pub(crate) fn view_ray(
+    uv: Vec2,
+    world_from_clip: Mat4,
+    cam: Vec3,
+    orthographic: bool,
+    focus: Vec3,
+) -> (Vec3, Vec3) {
+    let ndc = Vec2::new(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    let n = world_from_clip * Vec4::new(ndc.x, ndc.y, 1.0, 1.0);
+    let on_near = n.truncate() / n.w;
+    if orthographic {
+        let m = world_from_clip * Vec4::new(ndc.x, ndc.y, 0.5, 1.0);
+        let dir = (m.truncate() / m.w - on_near).normalize();
+        return (on_near + dir * (focus - on_near).dot(dir), dir);
+    }
+    (cam, (on_near - cam).normalize())
+}
+
 /// Where a ray from altitude `y` with vertical component `dy` is between two altitudes (the
 /// flat shell): `(t_enter, t_exit)`, `t_enter ≥ 0`.
 fn flat_range(y: f64, dy: f64, base_m: f64, top_m: f64) -> (f64, f64) {
@@ -911,6 +933,79 @@ mod tests {
                 }
             }
         }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // view-anchor.md Validation 3: the rays of both projections
+    // -----------------------------------------------------------------------------------------
+
+    /// `world_from_clip` of a camera at `eye` looking at `at`, through `projection` on a 16:9
+    /// target.
+    fn world_from_clip(projection: bevy::camera::Projection, eye: Vec3, at: Vec3) -> Mat4 {
+        let mut projection = projection;
+        projection.update(1920.0, 1080.0);
+        let world_from_view = bevy::prelude::Transform::from_translation(eye)
+            .looking_at(at, Vec3::Y)
+            .to_matrix();
+        world_from_view * projection.get_clip_from_view().inverse()
+    }
+
+    /// Under an orthographic projection the rays of two pixels start at different points of the
+    /// plane through the focus across the view and share the view direction, and without a focus
+    /// the plane is the camera's own; under a perspective one they start at the eye and differ in
+    /// direction (issue #7).
+    #[test]
+    fn orthographic_rays_are_parallel_and_perspective_rays_share_the_eye() {
+        use bevy::camera::{
+            OrthographicProjection, PerspectiveProjection, Projection, ScalingMode,
+        };
+        let (eye, focus) = (Vec3::new(0.0, 860.4, 1228.7), Vec3::ZERO);
+        let forward = (focus - eye).normalize();
+        let ortho = world_from_clip(
+            Projection::from(OrthographicProjection {
+                scaling_mode: ScalingMode::FixedVertical {
+                    viewport_height: 80.0,
+                },
+                far: 4000.0,
+                ..OrthographicProjection::default_3d()
+            }),
+            eye,
+            focus,
+        );
+        let (a, b) = (Vec2::new(0.1, 0.2), Vec2::new(0.9, 0.7));
+        let (oa, da) = view_ray(a, ortho, eye, true, focus);
+        let (ob, db) = view_ray(b, ortho, eye, true, focus);
+        assert!(oa.distance(ob) > 10.0, "{oa} {ob}");
+        assert!(
+            da.distance(db) < 1e-5 && da.distance(forward) < 1e-5,
+            "{da} {db} {forward}"
+        );
+        // The origins lie on the plane through the focus across the view direction.
+        assert!((oa - focus).dot(forward).abs() < 1e-2 && (ob - focus).dot(forward).abs() < 1e-2);
+        // Without a focus (it is the camera) they lie on the camera's own plane.
+        let (own, _) = view_ray(a, ortho, eye, true, eye);
+        assert!((own - eye).dot(forward).abs() < 1e-2 && own.distance(oa) > 1000.0);
+
+        let persp = world_from_clip(
+            Projection::from(PerspectiveProjection::default()),
+            eye,
+            focus,
+        );
+        let (pa, ea) = view_ray(a, persp, eye, false, focus);
+        let (pb, eb) = view_ray(b, persp, eye, false, focus);
+        assert_eq!((pa, pb), (eye, eye));
+        assert!(ea.distance(eb) > 0.1 && (ea.length() - 1.0).abs() < 1e-5);
+        // The centre of the screen looks along the view direction in both (a perspective ray is
+        // the difference of the eye and a point 0.1 m from it, in f32 1500 m out: 1e-3), and an
+        // orthographic one starts at the focus.
+        let centre = Vec2::splat(0.5);
+        assert!(
+            view_ray(centre, persp, eye, false, focus)
+                .1
+                .distance(forward)
+                < 1e-3
+        );
+        assert!(view_ray(centre, ortho, eye, true, focus).0.distance(focus) < 1e-2);
     }
 
     // -----------------------------------------------------------------------------------------

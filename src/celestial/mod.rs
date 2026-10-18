@@ -8,7 +8,7 @@ mod stars;
 
 use bevy::camera::Exposure;
 use bevy::light::light_consts::lux;
-use bevy::light::{CascadeShadowConfigBuilder, SunDisk, VolumetricLight};
+use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, SunDisk, VolumetricLight};
 use bevy::prelude::*;
 
 pub(crate) use clock::plugin as clock_plugin;
@@ -16,7 +16,9 @@ pub use clock::{CivilDate, GeoLocation, WorldClock};
 
 use crate::climate::Weather;
 use crate::clouds::CloudShadows;
-use crate::plugin::{ElementsCamera, ElementsSystems, SkyBackground, ensure_gpu_core};
+use crate::plugin::{
+    ElementsCamera, ElementsSystems, ElementsView, SkyBackground, ensure_gpu_core,
+};
 
 /// Marks the sun's `DirectionalLight`.
 #[derive(Component, Clone, Copy, Debug, Default, Reflect)]
@@ -102,7 +104,13 @@ impl Plugin for CelestialPlugin {
             .add_systems(Startup, spawn_lights)
             .add_systems(
                 Update,
-                (update_sky, update_ambient, auto_exposure, sky_background)
+                (
+                    update_sky,
+                    update_ambient,
+                    auto_exposure,
+                    sky_background,
+                    fit_shadow_cascades,
+                )
                     .chain()
                     .in_set(ElementsSystems::Celestial),
             );
@@ -168,6 +176,34 @@ pub(crate) const MOON_TINT: Vec3 = Vec3::new(0.88, 0.92, 1.0);
 /// toward the horizon; the cascades cover the ground-fog volume (±400 m) with margin.
 const SUN_SHADOW_DISTANCE_M: f32 = 600.0;
 
+/// The sun's shadow cascades for a perspective view: four, out to [`SUN_SHADOW_DISTANCE_M`].
+fn sun_cascades() -> CascadeShadowConfig {
+    CascadeShadowConfigBuilder {
+        maximum_distance: SUN_SHADOW_DISTANCE_M,
+        first_cascade_far_bound: 15.0,
+        ..default()
+    }
+    .build()
+}
+
+/// Shadow cascades for an orthographic view whose focus lies `focus_depth_m` in front of the
+/// camera. Bevy splits cascades by depth from the camera, which an isometric camera puts far
+/// behind what it shows, so the default cascades end before the scene begins. An orthographic
+/// pixel is the same size at every depth, so one cascade, [`SUN_SHADOW_DISTANCE_M`] deep and
+/// centred on the focus, serves the whole view evenly (`docs/research/view-anchor.md`
+/// Deviation 2).
+fn orthographic_cascades(focus_depth_m: f32) -> CascadeShadowConfig {
+    let near = (focus_depth_m - 0.5 * SUN_SHADOW_DISTANCE_M).max(0.0);
+    CascadeShadowConfigBuilder {
+        num_cascades: 1,
+        minimum_distance: near,
+        first_cascade_far_bound: near + SUN_SHADOW_DISTANCE_M,
+        maximum_distance: near + SUN_SHADOW_DISTANCE_M,
+        ..default()
+    }
+    .build()
+}
+
 fn spawn_lights(mut commands: Commands) {
     commands.spawn((
         Name::new("Sun"),
@@ -177,12 +213,7 @@ fn spawn_lights(mut commands: Commands) {
             shadow_maps_enabled: true,
             ..default()
         },
-        CascadeShadowConfigBuilder {
-            maximum_distance: SUN_SHADOW_DISTANCE_M,
-            first_cascade_far_bound: 15.0,
-            ..default()
-        }
-        .build(),
+        sun_cascades(),
         VolumetricLight,
         Transform::default(),
     ));
@@ -198,6 +229,40 @@ fn spawn_lights(mut commands: Commands) {
         SunDisk::OFF,
         Transform::default(),
     ));
+}
+
+/// The sun's and the moon's shadow cascades, and whether each is the sun's.
+type CelestialCascades<'w, 's> =
+    Query<'w, 's, (&'static mut CascadeShadowConfig, Has<Sun>), Or<(With<Sun>, With<Moon>)>>;
+
+/// Give the sun and the moon cascades that reach the scene: the perspective ones, or under an
+/// orthographic followed camera one cascade around its focus.
+fn fit_shadow_cascades(
+    view: Res<ElementsView>,
+    cameras: Query<(&Projection, &GlobalTransform)>,
+    mut lights: CelestialCascades,
+) {
+    let orthographic =
+        view.entity
+            .and_then(|e| cameras.get(e).ok())
+            .and_then(|(projection, transform)| match projection {
+                Projection::Orthographic(_) => Some(orthographic_cascades(
+                    (view.position - transform.translation()).dot(*transform.forward()),
+                )),
+                _ => None,
+            });
+    for (mut config, is_sun) in &mut lights {
+        let want = orthographic.clone().unwrap_or_else(|| {
+            if is_sun {
+                sun_cascades()
+            } else {
+                CascadeShadowConfig::default()
+            }
+        });
+        if config.bounds != want.bounds || config.minimum_distance != want.minimum_distance {
+            *config = want;
+        }
+    }
 }
 
 /// East-north-up to world: +X east, +Y up, −Z north.

@@ -78,6 +78,35 @@ fn the_lightning_schedule_is_frozen() {
     assert_eq!(counts, [60, 62, 45, 64, 51]);
 }
 
+/// With an `ElementsFocus`, strikes fall around the focus and their thunder is heard there, not
+/// at the camera standing 1500 m back from it (issue #7).
+#[test]
+fn strikes_and_thunder_centre_on_the_focus() {
+    let mut app = storm(42, 6.0);
+    let focus = Vec3::new(10_000.0, 3.0, -5_000.0);
+    app.world_mut().spawn((
+        Camera::default(),
+        ElementsCamera::default(),
+        ElementsFocus::Point(focus),
+        GlobalTransform::from_xyz(focus.x, focus.y + 1060.0, focus.z + 1060.0),
+    ));
+    run(&mut app, TEN_MINUTES / 5);
+    let seen = app.world().resource::<Seen>();
+    assert!(!seen.strikes.is_empty() && !seen.thunder.is_empty());
+    for (_, strike) in &seen.strikes {
+        let horizontal = Vec2::new(strike.position.x - focus.x, strike.position.z - focus.z);
+        assert!(horizontal.length() <= STRIKE_RADIUS_M + 0.01, "{strike:?}");
+    }
+    for (_, thunder) in &seen.thunder {
+        let expected = thunder.position.distance(focus);
+        assert!(
+            (thunder.distance_m - expected).abs() < 0.01,
+            "thunder {} m, focus {expected} m",
+            thunder.distance_m
+        );
+    }
+}
+
 #[test]
 fn every_thunder_arrives_distance_over_343_seconds_after_its_strike() {
     let mut app = storm(42, 6.0);

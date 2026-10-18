@@ -29,8 +29,8 @@ struct Target(Handle<Image>);
 struct Deck;
 
 /// The mean linear colour of the deck straight overhead under `Overcast` at `hour` on the June
-/// solstice (lat 45° N), with the camera's environment map or without it.
-fn deck(hour: f64, sky_probe: bool) -> Vec3 {
+/// solstice (lat 45° N), with the camera's environment map or without it, through `projection`.
+fn deck(hour: f64, sky_probe: bool, projection: Projection) -> Vec3 {
     let mut app = App::new();
     let plugins = ElementsPlugins
         .build()
@@ -64,6 +64,7 @@ fn deck(hour: f64, sky_probe: bool) -> Vec3 {
                     DebandDither::Disabled,
                     Hdr,
                     Deck,
+                    projection.clone(),
                     Transform::from_xyz(0.0, 2.0, 0.0).looking_to(Vec3::Y, Vec3::Z),
                 ));
                 director.force(WeatherPreset::Overcast, Duration::ZERO);
@@ -119,8 +120,15 @@ fn purpleness(c: Vec3) -> f32 {
 #[test]
 #[ignore = "needs a GPU"]
 fn the_deck_takes_the_colour_of_its_light() {
-    let (noon, noon_neutral) = (deck(12.0, true), deck(12.0, false));
-    let (dusk, dusk_neutral) = (deck(20.2, true), deck(20.2, false));
+    let perspective = Projection::default;
+    let (noon, noon_neutral) = (
+        deck(12.0, true, perspective()),
+        deck(12.0, false, perspective()),
+    );
+    let (dusk, dusk_neutral) = (
+        deck(20.2, true, perspective()),
+        deck(20.2, false, perspective()),
+    );
     println!("noon {noon} (neutral {noon_neutral}); dusk {dusk} (neutral {dusk_neutral})");
     assert!(
         purpleness(dusk) > purpleness(dusk_neutral) * 1.1,
@@ -131,4 +139,35 @@ fn the_deck_takes_the_colour_of_its_light() {
         ratio > 1.0 && ratio < 1.2,
         "noon: {noon} against {noon_neutral} (blue/red ratio {ratio})"
     );
+}
+
+/// Issue #7 (`view-anchor.md` Validation 5): an orthographic camera looking straight up sees the
+/// same overcast deck as a perspective one. Its rays are parallel, each from its own point on the
+/// near plane; a march that still built them from one eye point would draw a fan of rays through
+/// a 200 m wide pinhole, or none.
+#[test]
+#[ignore = "needs a GPU"]
+fn an_orthographic_camera_sees_the_deck_a_perspective_one_does() {
+    let perspective = deck(12.0, true, Projection::default());
+    let orthographic = deck(
+        12.0,
+        true,
+        Projection::from(OrthographicProjection {
+            scaling_mode: bevy::camera::ScalingMode::FixedVertical {
+                viewport_height: 200.0,
+            },
+            ..OrthographicProjection::default_3d()
+        }),
+    );
+    println!("perspective {perspective}, orthographic {orthographic}");
+    let ratio = luminance(orthographic) / luminance(perspective);
+    assert!(
+        (0.85..=1.15).contains(&ratio),
+        "orthographic {orthographic} against perspective {perspective} ({ratio})"
+    );
+}
+
+/// Relative luminance of a linear colour.
+fn luminance(c: Vec3) -> f32 {
+    c.dot(Vec3::new(0.2126, 0.7152, 0.0722))
 }

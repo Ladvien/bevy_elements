@@ -6,8 +6,8 @@ import bevy_render::view::View;
 import bevy_elements::noise::hash31;
 import bevy_elements::clouds::common::{
     CloudParams, Medium, MAX_MARCH_M, PI, altitude, cloud_medium, coarse_shape, detail_weight,
-    ground_before_layer, light_at, phase, ray_dir, sample_transmittance, scene_distance,
-    shell_range, slot_offset,
+    ground_before_layer, is_orthographic, light_at, phase, sample_transmittance, scene_distance,
+    shell_range, slot_offset, view_ray,
 };
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -258,8 +258,12 @@ fn cloud_march(@builtin(global_invocation_id) id: vec3<u32>) {
     let frame = params.counts.x;
     let px = min(id.xy * k + slot_offset(frame, k), size - vec2<u32>(1u));
     let uv = (vec2<f32>(px) + 0.5) / vec2<f32>(size);
-    let cam = view.world_position;
-    let dir = ray_dir(uv, view.world_from_clip, cam);
+    let orthographic = is_orthographic(view.clip_from_view);
+    let ray = view_ray(uv, view.world_from_clip, view.world_position, orthographic, params.camera.xyz);
+    // The planet's centre lies straight below the ray's origin: the eye of a perspective view,
+    // the pixel's point on the focus plane of an orthographic one.
+    let cam = ray.origin;
+    let dir = ray.dir;
     let big_r = params.camera.w;
     let o_r = big_r + cam.y;
     let h_b = params.layer.x;
@@ -280,9 +284,9 @@ fn cloud_march(@builtin(global_invocation_id) id: vec3<u32>) {
             let q = min(id.xy * k + vec2<u32>(i, j), size - vec2<u32>(1u));
             let quv = (vec2<f32>(q) + 0.5) / vec2<f32>(size);
             let d = textureLoad(depth_tex, vec2<i32>(q), 0);
-            let qdir = ray_dir(quv, view.world_from_clip, cam);
-            let q_shell = shell_range(o_r, qdir.y, h_b, h_t, big_r);
-            if scene_distance(quv, d, view.world_from_clip, cam) >= q_shell.x {
+            let q_ray = view_ray(quv, view.world_from_clip, view.world_position, orthographic, params.camera.xyz);
+            let q_shell = shell_range(big_r + q_ray.origin.y, q_ray.dir.y, h_b, h_t, big_r);
+            if scene_distance(quv, d, view.world_from_clip, q_ray) >= q_shell.x {
                 hidden = false;
             }
         }

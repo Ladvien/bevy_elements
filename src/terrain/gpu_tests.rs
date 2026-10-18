@@ -616,7 +616,7 @@ fn every_patch_bounds_its_displaced_vertices() {
             state(&app).expect("state").grid,
         )
     };
-    let camera = app.world().resource::<ElementsView>().position;
+    let camera = app.world().resource::<ElementsView>().eye;
     let snapshot = app
         .world()
         .resource::<EnvironmentSnapshot>()

@@ -845,10 +845,12 @@ pub(crate) fn update_patches(
         return;
     };
     let grid = state.grid;
+    // The eye, not the focus: the vertex shader morphs by Bevy's `lod_view_world_position`, the
+    // camera's translation, and CDLOD's selection must use the same centre.
     let camera = Vec3::new(
-        view.position.x - grid.origin.x,
-        view.position.y - grid.y0,
-        view.position.z - grid.origin.y,
+        view.eye.x - grid.origin.x,
+        view.eye.y - grid.y0,
+        view.eye.z - grid.origin.y,
     );
     let mut wanted = select_patches(&lod, &tree, camera);
     if wanted.len() > POOL_CAPACITY {
