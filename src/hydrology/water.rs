@@ -40,6 +40,7 @@ use crate::terrain::{
     NO_TERRAIN, TerrainParamsGpu, TerrainRuntime, TerrainState, assign_slots, lod_uniform,
     patch_mesh, patch_transform, shadow_inputs,
 };
+use crate::waves::WaveState;
 use crate::wind::WindState;
 
 /// Edge of the generated normal map, texels.
@@ -159,6 +160,8 @@ pub struct WaterParams {
     pub(crate) flow: Vec4,
     /// Foam speed threshold, thickness threshold, albedo, roughness.
     pub(crate) foam: Vec4,
+    /// x: the finest wave cascade's texel (m). y: texels a side. z: 1 when a field is bound.
+    pub(crate) waves: Vec4,
 }
 
 /// The extension that makes a `StandardMaterial` one pass of the water: the vertex shader
@@ -179,6 +182,10 @@ pub struct WaterExtension {
     #[texture(105)]
     #[sampler(106)]
     pub(crate) cloud_shadow: Option<Handle<Image>>,
+    /// The wave field (`WaveState`), one layer per cascade.
+    #[texture(107, dimension = "2d_array")]
+    #[sampler(108)]
+    pub(crate) waves: Option<Handle<Image>>,
 }
 
 impl MaterialExtension for WaterExtension {
@@ -310,6 +317,7 @@ fn pass_materials(
         flow: NO_TERRAIN,
         normals: normals.clone(),
         cloud_shadow: None,
+        waves: None,
     };
     let base = StandardMaterial {
         base_color: Color::BLACK,
@@ -532,6 +540,7 @@ pub(crate) fn water_params(
             settings.foam_albedo,
             settings.foam_roughness,
         ),
+        waves: Vec4::ZERO,
     }
 }
 
@@ -544,6 +553,7 @@ fn update_water_materials(
     settings: Res<WaterSettings>,
     shadows: Option<Res<CloudShadows>>,
     wind: Option<Res<WindState>>,
+    waves: Option<Res<WaveState>>,
     runtime: Res<WaterRuntime>,
     mut materials: ResMut<Assets<WaterMaterial>>,
 ) {
@@ -555,7 +565,7 @@ fn update_water_materials(
     // Quantised to 0.5 m/s: the wind drifts every frame, and a changed uniform re-prepares the
     // bind group.
     let wind_ms = wind.map_or(MAP_WIND_MS, |w| (w.speed_10m * 2.0).round() * 0.5);
-    let params = water_params(
+    let mut params = water_params(
         &settings,
         TerrainParamsGpu::new(&state.grid, 1, state.is_live()),
         lod,
@@ -563,6 +573,10 @@ fn update_water_materials(
         (shadow, light),
         wind_ms,
     );
+    let field = waves.as_deref().map(|w| w.field.clone());
+    if let Some(w) = waves.as_deref() {
+        params.waves = Vec4::new(w.texel_m[0], w.texels as f32, 1.0, 0.0);
+    }
     for handle in [&runtime.absorb, &runtime.surface] {
         let Some(material) = materials.get(handle) else {
             continue;
@@ -571,13 +585,15 @@ fn update_water_materials(
         if (e.params != params
             || e.cells != state.cells
             || e.flow != state.flow_cells
-            || e.cloud_shadow != map)
+            || e.cloud_shadow != map
+            || e.waves != field)
             && let Some(mut material) = materials.get_mut(handle)
         {
             material.extension.params = params;
             material.extension.cells = state.cells.clone();
             material.extension.flow = state.flow_cells.clone();
             material.extension.cloud_shadow = map.clone();
+            material.extension.waves = field.clone();
         }
     }
 }

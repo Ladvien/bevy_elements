@@ -1035,3 +1035,53 @@ Sumner, O'Brien & Hodgins 1999; Alvarado et al. 2022; Su et al. 2023; Goswami 20
 3. **Night thunderstorm rain** reads as white static (carried).
 4. **Trails on `VoxelGround` and the wind's solid mask**: an imprint does not yet change the wind or the hydrology (the field is visual and erodes, it does not drain).
 5. **Save/restore of the GPU layers** and the cosmetic set (the aerial's 2-px line, the composite's pillar edge step, `STRIKE_LEAD`, sparse roof splashes, POM silhouettes without AA).
+
+## Iteration 15 — 2026-10-18 — waves: ripples and wakes from bodies in the water
+
+**Commits:** `ec7027d` (research note `docs/research/waves.md`), the implementation with `tests/gpu_waves.rs` (the note's Deviations 1–10 and measured validations), the README / CHANGELOG / stills / GIF, this log. Merged through a pull request. **Sibling repos:** none (no sibling owns open water). **Not released.**
+
+### What changed, and why it ranked first
+
+The hydrology fills lakes and rivers, but nothing that moved through them disturbed them: a boat, a wader or a dropped stone passed through a glassy flow-mapped surface. Trails gave the ground an answer to what crosses it; the water had none. `WavesPlugin` adds it: a `WaterContact` ellipsoid presses the water with the pressure head of its occupied column (Colen & Kolomeisky's pressure-forced oscillator, so a body at rest leaves the water flat around it) plus Bernoulli's impact head while it enters; a linear capillary-gravity field in three camera-following cascades (iWave, a 13 × 13 kernel least-squares fitted to Airy's dispersion per cascade, Canabal's analysis) carries the waves, reflected by the shores, slowed by depth, advected by the current, broken at `ak` = 0.44 into foam. The water's two passes add its slopes and a lace of foam.
+
+Eleven capture rounds. The defects found and fixed, in order: no wake (the example scaled the contact with the hull's mesh), tan hard-edged reflections on wave faces (reflections below the horizon sampled Bevy's ground disc; now held at the horizon), foam a featureless smear (now lace), a falling pebble making no rings (the entry head), a pebble's foam a notched rectangle (five-point binomial and a coverage cap), checkerboards at the forcing (the band split's 3 × 3 binomial).
+
+### Candidates ranked
+
+| # | Candidate | Category | Note |
+|---|---|---|---|
+| 1 | **Interactive water: ripples and wakes from bodies** | 3 (missing game ↔ world interaction) | picked: the water is the one simulated surface that ignored what crossed it |
+| 2 | Save/restore of the GPU layers | 3 | carried |
+| 3 | View-dependent exposure cap | 2 | carried |
+| 4 | Flat terrain shading | 2 | carried |
+| 5 | Night thunderstorm rain as white static | 1 | carried |
+
+### Sources
+
+Tessendorf 2004 (iWave; *Simulating Ocean Water* course notes); Canabal et al. 2016 (dispersion kernels); Ottosson 2011 (Frostbite's interactive water); Crest (`UpdateDynWaves.compute` and docs); Yuksel et al. 2007 (wave particles); Jeschke & Wojtan 2017 (breaking at `a` = 0.07λ); Schreck et al. 2019; Kass & Miller 1990; Colen & Kolomeisky 2021 (pressure-forced surface, eq. 8); Darmon et al. 2014 (Kelvin's 19.47° for all Froude numbers, the apparent narrowing); `s2006-advances-materials-5/6` (ToyShop's water); `eth-cgl-sim_anim-Sol11b`.
+
+### Critique and verdicts (`/tmp/i15/critique.md`; rounds `/tmp/i15/r1`–`r11`, final `/tmp/i15/final/`)
+
+| Feature | Evidence | Verdict |
+|---|---|---|
+| Hull wake at 16.5 h | `r11/sheet.png` (side, behind, front, over), `final/gif/` | GREAT: Kelvin's V with transverse crests, silvered by the horizon, lace foam behind the stern |
+| Pebble rings | `final/peb_strip.png` | GREAT: short wavelets outrun long ones; the foam dissolves |
+| Wader | `r11/wader.png` | GREAT: two short V wakes and flecks |
+| Float | `r11/float.png` | right but subtle: 0.7 Hz rings are 3 m swells |
+| Window seam | `r11/main_far.png` | none where the 25.6 m window ends |
+| Motion | `docs/waves.gif` (frames 1500–1900) | no swimming as the camera rides with the hull |
+
+### Verification
+
+- `tests/gpu_waves.rs` (3): a body at rest holds the water down under it (−3.63 cm) and nowhere else (0.09 mm 3.5 m away), unchanged after the camera moves 3 m; a hull at 2 m/s leaves a wake whose edge stays within 19.1° (Kelvin 19.47°) with a 7.7 cm peak; waves do not cross onto dry ground (4.6 cm on the water, 0 on the bank). Four unit tests in `waves::model` (the kernels' dispersion within 3 % over 3–12 texels and stable, a floating sphere's head, a rotated ellipsoid's chord, a falling body striking only as it crosses).
+- Gates: `cargo build --release`, `cargo test` (0 failures), `cargo build --examples --all-features`, clippy `-D warnings`, `cargo doc` `-D warnings`, wasm32, rustfmt on this iteration's files, `tests/save.rs` with `--features serde` (2). GPU, one process per file/module: every `tests/gpu_*.rs` file (waves 3, hydrology 9, precipitation 6, clouds 5, trails 4, weathered 4, twilight 3, water 2, wind 2, cloud ambient, imports, plugins, readback) and lib `clouds` (10), `terrain` (8), `cover` (7), `dust` (6), `voxel` (1), `the_horizon_sky` — all pass.
+- Performance (`bench_elements`, High, lake, `ELEMENTS_CONTACTS=8`, `PartlyCloudy`, 1080p, P2 at 1.74–1.80 GHz logged in the same shell, two rounds on and off): force 0.037, step 0.217, publish 0.033 ms (0.29 ms; 0.23 ms on still water; Low 0.15 ms), above the note's 0.15 ms and logged as `waves.md` Deviation 10. The GPU was shared with a vLLM server during the runs.
+- Stills `docs/waves_wake.png`, `docs/waves_rings.png` and `docs/waves.gif` (new).
+
+### Top 5 remaining items, ranked
+
+1. **The sky darkens toward black over a filled lake at 17.5 h** (found here; identical with `ELEMENTS_WAVES=off`, so not the waves).
+2. **Buoyancy readback**: publish the wave height under each `WaterContact` so a float can ride the waves it and others make.
+3. **Save/restore of the GPU layers** (carried).
+4. **A view-dependent exposure cap** and **flat terrain shading** (carried).
+5. **Wave cost**: step the coarse cascades at 30 Hz or skip windows with no body and no waves; refraction of what is under the water (the pebble draws where it is, not where it appears).
