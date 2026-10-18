@@ -53,6 +53,10 @@ struct CloudParams {
     /// matrices and depth are in world units, so the shaders divide what they take from them by
     /// this and multiply what they hand back.
     units: vec4<f32>,
+    /// The sky probe (sky-light.md): x the followed camera's exposure (the display-referred
+    /// `haze.xyz` over it is the fog's luminance), y the slot block edge k, z texels per face edge,
+    /// w the weight a marched texel takes in its history (1 when the history is invalid).
+    probe: vec4<f32>,
 }
 
 const PI: f32 = 3.14159265358979;
@@ -505,4 +509,34 @@ fn light_at(
         return vec3<f32>(0.0);
     }
     return p.light_e.xyz * sample_transmittance(lut, smp, r, clamp(mu, -1.0, 1.0), p) * v;
+}
+
+/// Cloud transmittance below which the sky behind is hidden, and above which it is really in
+/// view: the sky gain ramps in between (`clouds.md` Deviation 28).
+const OPAQUE_BELOW: f32 = 0.02;
+const SKY_ABOVE: f32 = 0.2;
+
+/// The cloud layer and the weather's air over the sky, along a ray that reaches the layer (no
+/// ground before it): premultiplied `(L, T)` of `cloud`, to be composed as `L + L_sky · T`.
+///
+/// Bevy's atmosphere is lit by the sun light, which carries only the beam `T̄` under cloud, but
+/// the sky above the cloud is not dimmed by the cloud below it: the sky gain (`params.sky.x`)
+/// ramps in above a transmittance of 0.02, since the march stops at 0.01 and an opaque cloud
+/// must not amplify the sky behind it. Then the weather's air over the path to the layer entry
+/// (`air.x = σ_fog − 3.912/40 km`): a sky pixel already has Bevy's atmosphere, which draws the
+/// clear air, so this is what the weather adds on top, in-scatter and extinction both the fog's,
+/// so the sky converges on the fog colour `haze` as distant ground does and clear air (σ_air = 0)
+/// is an exact no-op (`clouds.md` Deviation 29). A ray that never enters the layer
+/// (`shell.y <= 0`) has the weather's whole extent of air; a ray starting inside it has none.
+/// `haze` is in the units of `cloud`: display-referred for the screen, luminance for the probe.
+fn sky_through_clouds(
+    cloud: vec4<f32>,
+    shell: vec2<f32>,
+    p: CloudParams,
+    haze: vec3<f32>,
+) -> vec4<f32> {
+    let a = cloud.a * mix(1.0, p.sky.x, smoothstep(OPAQUE_BELOW, SKY_ABOVE, cloud.a));
+    let air_path = select(shell.x, MAX_MARCH_M, shell.y <= 0.0);
+    let t = exp(-p.air.x * air_path);
+    return vec4<f32>(cloud.rgb * t + haze * (1.0 - t), a * t);
 }

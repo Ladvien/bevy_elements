@@ -1467,3 +1467,61 @@ Gregory 2018 (MKS simulations, the world unit the game's choice; corpus), Lagard
 3. **A bolt hidden by heavy rain at 1.5 km** in `storm` (the scene or the bolt's brightness against the rain veil).
 4. **The anti-solar sky at sunset**, **rim sparkle** (carried).
 5. **Bevy's perspective-only sky under an orthographic camera** (carried).
+
+## Iteration 25 — 2026-10-18 — the clouds in the environment map (sky light and reflections under cloud)
+
+**Commits:** `e561f09` (research note `docs/research/sky-light.md`), `cac69fa` (fix: the crate's atmosphere planet centre, iteration 24's regression), the sky probe with its tests, docs and images, this log. Merged through a pull request. **Sibling repos:** none. **Not released.** The GPU was taken through `gpu-tenant claim coding --who bevy_elements@big` (olmOCR held 15.5 GB; the examples ran out of memory without the lease).
+
+### First: a regression from iteration 24
+
+The baseline's `waves` under Clear showed a beige dome of radial streaks instead of a blue sky, reflected in the pond, and the partly cloudy town an orange glow. Bisected to `9628f11`: the crate's `Atmosphere` got `Transform::from_scale(u)`, and Bevy reads that entity's `GlobalTransform` as the planet's centre (it places a default one `R` below the origin, which the `Transform` then overwrote). Fixed with `plugin::planet_transform` and a test that fails on the old transform; AGENTS.md trap; `units.md` Deviation 1. The iteration-24 GPU suite and feet/metre captures had passed because they never looked at this sky.
+
+### Candidates (no open issues)
+
+| Rank | Candidate | Class | Decision |
+|---|---|---|---|
+| 1 | Glossy surfaces mirror a clear sky under cloud; overcast water brighter than its sky `(230,238,240)` under `(226,226,226)` | 1 (physically wrong) | **this iteration** |
+| 2 | Bright snow scenes under the illuminance-metered exposure | 2 | carried |
+| 3 | A bolt hidden by heavy rain in `storm` | 2 | carried |
+| 4 | Anti-solar sunset sky, rim sparkle | 2 | carried |
+| 5 | Bevy's perspective-only sky under an orthographic camera | 4 | carried |
+
+Rank 1 beat rank 2 because it is wrong in every cloudy preset on every glossy surface (water, puddles, wet ground, `WeatheredMaterial`), where the exposure item touches one scene class. It is the backlog's "wet ground reflects the sun under overcast": the cause was not the sun but the uniform cloud `AmbientLight`, whose specular term Bevy shades with the same boost as its diffuse (2.2× the sky in water at grazing), plus a clear-sky environment map.
+
+### What changed
+
+- **The sky probe.** `march.wesl`'s second entry point marches the clouds into a cube of the atmosphere cube's size (128²) around the followed camera, composes it with Bevy's cube as the screen composite composes the sky (`common.wesl::sky_through_clouds`, now shared), and the camera's `GeneratedEnvironmentMapLight` is handed the composed cube once every texel has been marched (`SkyProbe`, an `Arc<AtomicU32>` handshake). One texel of every 4×4 block per face a frame at High, half the screen's steps, blended into a ping-pong history. The ray march itself became `integrate()`, shared by the screen and the cube; the screen march now computes the sky irradiance once per ray instead of twice.
+- **The cloud ambient is retired on the probe camera** (`celestial::update_ambient`): the cube's dome is that light, shaded over normals by Bevy's irradiance map (top : wall : underside 1 : 0.67 : 0.37).
+- **The Moon & Spencer shade factor became a relief cue** (`surface_cover.wesl::overcast_relief`, terrain and weathered): the first build darkened walls twice (a metal box's side 86 DN); removing it outright flattened the overcast relief from the air; dividing out the dome's own cosine keeps the −6.5 % relief cue without the double shading (`snow-cover.md` Deviation 16).
+
+### Sources
+
+Hillaire 2016 (Frostbite; clouds in every view including the environment map, eq. 22), Lagarde & de Rousiers 2014 §4.9 (the distant light probe refreshed with the weather; clear 8000, overcast 2000 cd/m²), Epic's *Sky Lights* documentation (Real Time Capture, 128² cube, 9-frame time slicing, PS4 costs), Bauer 2019 via imgeself 2020 (RDR2's per-frame sky cube with clouds), Karis 2013 (split sum, `/tmp/i25/pdf/karis2013.pdf`), Kittler & Darula 2014 (`10.2478/brj-2014-0012`, downloaded: Kähler's 2:1 and 3:1 overcast gradations, `L_Z/E`), Schneider & Vos 2015, Patry 2021, Kasten & Czeplak 1980, Bevy 0.20 source.
+
+### Critique and verdicts (`/tmp/i25/critique.md`)
+
+| Scene | Before → after | Verdict |
+|---|---|---|
+| Pond, PartlyCloudy | uniform blue water → cumulus and blue gaps in the water; temporal d2/d1 1.39 (motion, not flicker) | GREAT |
+| Pond, Overcast / storm | water brighter than its sky → `(194,209,211)` at grazing under `(226,226,226)` | GREAT |
+| Town, Overcast / Rain | white veil, metal box glowing on every face → colours read, metal mirrors sky on top (194) and ground on its sides (98) | GREAT |
+| Terrain, Overcast (6 m, 120 m) | one washed tone → saturated, haze layers; relief cue kept (`cmp/relief2.png`) | GREAT |
+| Snow (6 h grown) | snow brighter than its sky → `(217,222,227)` under `(224,227,230)` | GREAT |
+| Dusk, night | no blowout, no black frame | GREAT |
+| Clear | unchanged (probe ≡ atmosphere cube: 0.0000) | GREAT |
+
+### Verification
+
+- `tests/gpu_sky_probe.rs`: without cloud the probe is the atmosphere cube (worst relative difference 0.0000); overcast noon E/model 0.76 (±35 %), `L_Z/E` 0.343, wall 0.67 and underside 0.37 of a top through Bevy's irradiance map, ambient 0; partly cloudy cloud share above 10° 0.373 at cover 0.40, Bevy's cube 0.000.
+- `plugin::tests::the_crate_atmosphere_centres_the_planet_below_the_origin` (fails on iteration 24's transform).
+- `gpu_clouds::the_shadow_map_and_the_sun_factor_follow_the_clouds` and `a_cloud_over_the_camera_leaves_the_lights_alone` lost their ambient assertions (the ambient is 0 on the probe camera; the model's share stays covered by `celestial::tests::the_ambient_carries_the_diffuse_share_and_nothing_at_night`).
+- Full GPU suite, cargo test (276), clippy, doc, wasm, save: pass.
+- Bench (`bench_elements`, 3840 × 2160, PartlyCloudy, P2 1680–1770 MHz, minimum): `elements_clouds_sky_probe` 0.047 / 0.062 / 0.155 ms (Low / High / Ultra); first build 0.189 ms at High. Screen march 0.883 → 0.869 ms; clouds total 1.418 → 1.474 ms at High.
+
+### Top 5 remaining items, ranked
+
+1. **The overcast dome is flat** (zenith 1.08 × the horizon; Kähler and CIE 2:1–3:1): Eddington's emergent radiance `(2 + 3μ)/5` in `cloud_scatter`'s diffusion term, checked against the fogged horizon (`clouds.md` Deviation 29). `sky-light.md` Deviation 7.
+2. **Bright snow scenes** (the illuminance-metered exposure on a sunlit snowfield); the overcast is now metered 0.4 EV above what the dome lights (`sky-light.md` Deviation 8).
+3. **The water's body colour under a grey sky** (the storm pond's teal mid-distance `(160,189,197)`, pre-existing).
+4. **A bolt hidden by heavy rain at 1.5 km** in `storm`.
+5. **The anti-solar sky at sunset**, **rim sparkle**, **Bevy's perspective-only sky under an orthographic camera** (carried).

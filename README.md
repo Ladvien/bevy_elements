@@ -153,6 +153,14 @@ By default the crate draws the ground: a pool of 33 × 33-vertex patches selecte
 
 ![Standing in a cumulus shadow on a June afternoon. Left, before: the sky went grey with the camera's shadow. Right, after: only the ground in the shadow darkens](docs/cloud_shadow_sky.png)
 
+#### Clouds in reflections and sky light
+
+Every reflection and the sky light of every PBR surface come from the camera's environment map. `CloudPlugin` puts the clouds in it: it marches them into a cube around the followed camera (the size of its atmosphere cube, 128² per face by default), composes that cube with Bevy's clear-sky cube exactly as the screen composite composes the sky (toward the ground, Bevy's ground lit by the light the dome lets through), and hands it to the camera's `GeneratedEnvironmentMapLight`, which Bevy filters into the glossy reflections and the diffuse irradiance. A pond under cumulus reflects the cumulus and the blue between them; under overcast, water and wet ground are a grey mirror a little darker than the sky (they reflected a blue sky, and near grazing were brighter than the sky); and the overcast dome lights a top more than a wall and a wall more than an underside (1 : 0.67 : 0.37), so a metal box mirrors the bright sky on its top and the ground on its sides. The camera's `AmbientLight` then carries no cloud light. One texel of every k × k block of each face is re-marched a frame at half the screen march's steps (`CloudQuality::probe_edge`) and blended into its history; a camera without the crate's atmosphere, or that is not followed, keeps Bevy's sky and the uniform cloud ambient. The overcast dome comes out nearly flat (zenith 1.08 × the sky 5–10° up) where real overcast skies are graded 2:1 to 3:1: that is the cloud model's, on the screen too. `docs/research/sky-light.md`.
+
+![A pond at 16:30. Left, the clear-sky environment map; right, the clouds in it. Top, partly cloudy: the cumulus now reflect in the water. Bottom, overcast: the water was brighter and bluer than the sky it reflects, it is now a grey mirror darker than it](docs/sky_light.png)
+
+![The partly cloudy pond: the cumulus and the blue gaps between them in the moving water](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/sky_light.gif)
+
 ### Lightning
 
 Strikes are a Poisson process at `Weather::storminess / 60` per second of `Time<Virtual>`, uniform over an 8 km disc around the followed camera and deterministic from `Climate::seed`. Each one writes `LightningStrike { position, seed }`, spawns a bolt (a channel with side branches, then 1–3 restrikes 40–80 ms apart), lights the ground with a 1e8 lm `PointLight`, writes `LightningFlash` for the clouds, and writes `Thunder { position, distance_m, loudness }` `distance_m / 343` s of real time later. `StrikeLightning { at }` scripts a strike. The bolt's brightness is multiplied by the camera's exposure and clamped, so it saturates at night and fades by day. The strike process and messages run without a renderer.
@@ -191,7 +199,7 @@ fn spawn(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials
 }
 ```
 
-The shading is a public WESL import for your own shaders, `bevy_elements::surface_cover` (`weather_surface`, `mesh_snow_cover`, `rain_streak`, `ripple_offset`, `ElementsGlobals`): bind `ELEMENTS_GLOBALS_BUFFER` read-only at any free storage slot of your own material (`#[storage(N, read_only)]`), import `ElementsGlobals`, and read the wetness, snow cover, rain intensity, wind and the cloud shadow map's placement (`CloudShadows::map` is the map). `WeatheredPlugin` (in `ElementsPlugins`) keeps the buffer current. The forward and deferred passes are covered; the depth and normal prepass stays Bevy's, so SSAO reads the dry normal. Order-independent transparency, meshlets and forward decals are not weathered.
+The shading is a public WESL import for your own shaders, `bevy_elements::surface_cover` (`weather_surface`, `mesh_snow_cover`, `rain_streak`, `ripple_offset`, `overcast_relief`, `ElementsGlobals`): bind `ELEMENTS_GLOBALS_BUFFER` read-only at any free storage slot of your own material (`#[storage(N, read_only)]`), import `ElementsGlobals`, and read the wetness, snow cover, rain intensity, wind and the cloud shadow map's placement (`CloudShadows::map` is the map). `WeatheredPlugin` (in `ElementsPlugins`) keeps the buffer current. The forward and deferred passes are covered; the depth and normal prepass stays Bevy's, so SSAO reads the dry normal. Order-independent transparency, meshlets and forward decals are not weathered.
 
 ### Hydrology and erosion
 
@@ -415,7 +423,7 @@ Clouds at 1920 × 1080, PartlyCloudy (the scene the clouds note fixes for the be
 | High | 1/2 | 64 | 0.085 ms | 0.069 ms | 0.095 ms | 0.068 ms | 0.035 ms | 0.351 ms |
 | Ultra | 1/2 | 96 | 0.085 ms | 0.067 ms | 0.125 ms | 0.068 ms | 0.034 ms | 0.378 ms |
 
-The budget is 1.0 ms at High. The weather map, shadow map, resolve and composite passes cost about 0.27 ms at every quality, so the qualities differ only in the march, and Low and Medium (both a quarter of the resolution) within the measurement's noise.
+The budget is 1.0 ms at High. The weather map, shadow map, resolve and composite passes cost about 0.27 ms at every quality, so the qualities differ only in the march, and Low and Medium (both a quarter of the resolution) within the measurement's noise. The sky probe (`elements_clouds_sky_probe`, the clouds in the environment map) does not depend on the screen: 0.047 ms at Low, **0.062 ms** at High and 0.155 ms at Ultra for Bevy's default 128² cube (3840 × 2160, PartlyCloudy, the GPU at 1680–1770 MHz).
 
 Terrain with 1024² cells over 2048 m (`hills(42)`; measured before High took Medium's 512² simulation size, below), 3840 × 2160, the camera 30 m above the ground looking 20° above the horizon (about half the frame is ground), minimum over the diagnostic history with the GPU at 1800–1950 MHz: the generator and first pack (`elements_terrain`: generate, pack, flow pack, leaf bounds and readback kernels, once at spawn, then again only when hydrology or erosion changes a layer) 0.34 ms; the terrain drawn: Bevy's `main_opaque_pass_3d` 0.088 ms (mean 0.146) against 0.016 ms (0.025) for the flat test scene, and the depth prepass 0.005 ms (0.002 ms for the flat scene). The selection picks at most 133 patches at High over 1500 random cameras, and the pool update writes nothing for a patch that kept its slot and bounds.
 
@@ -487,6 +495,7 @@ Native (Vulkan, Metal, DX12) and wasm WebGPU. WebGL2 is unsupported: the simulat
 - [A focus and orthographic cameras](docs/research/view-anchor.md) — Marschner & Shirley (orthographic rays), Real-Time Rendering, Puig-Centelles et al. 2009 and 2011 (the rain container around what the observer sees), Losasso & Hoppe 2004, Tatarchuk 2006.
 - [A game keeps its own look and lights](docs/research/integration.md) — Patry 2021 (art direction over a physical sky), Schneider & Vos 2015, Tatarchuk 2006; the camera's dressing flags, `CelestialSettings`, the public globals buffer.
 - [The snowpack in a save, and a snow season](docs/research/snow-season.md) — Jennings et al. 2018 (the rain–snow threshold varies from −0.4 to 2.4 °C), Patry 2021; `SnowSeason`, `Weather::snow_possible`, the restored pack and the seeded cover maps.
+- [Sky light and reflections under cloud](docs/research/sky-light.md) — Hillaire 2016 (clouds in every view, the environment map included), Lagarde & de Rousiers 2014 (the distant light probe, refreshed with the weather), Unreal's real-time sky light capture, Bauer 2019 (RDR2), Karis 2013 (split sum), Kittler & Darula 2014 (the graded overcast); the clouds' sky probe.
 
 ## Examples
 

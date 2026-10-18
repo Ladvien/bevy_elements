@@ -8,8 +8,8 @@
 // pbr.wesl:59-67, build the input, edit it, light it.
 
 import bevy_elements::surface_cover::{
-    ElementsGlobals, cloud_shadow_ratio, cloud_shadow_uv, mesh_snow_cover, rain_streak,
-    weather_surface,
+    ElementsGlobals, cloud_shadow_ratio, cloud_shadow_uv, mesh_snow_cover, overcast_relief,
+    rain_streak, weather_surface,
 };
 import bevy_pbr::render::{
     pbr_fragment::pbr_input_from_standard_material,
@@ -40,7 +40,6 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 @group(constants::MATERIAL_BIND_GROUP) @binding(102) var cloud_map: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(103) var cloud_sampler: sampler;
 
-/// The delta between the sky's shaped light over the flat ambient inside `apply_pbr_lighting`.
 @if(!PREPASS_PIPELINE || DEFERRED_PREPASS)
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
@@ -102,20 +101,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 @if(!PREPASS_PIPELINE) {
     var out: FragmentOutput;
     if (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {
+        // The overcast dome shades the surface through the environment map (the clouds' sky
+        // probe, `docs/research/sky-light.md`); the relief cue adds what the dome lacks, ramped
+        // by the deck: `t` is the raw cloud map transmittance sampled above (1 outside the map
+        // or with none), so clear air is exactly no change.
         out.color = apply_pbr_lighting(pbr_input);
-        // The Moon & Spencer 1942 overcast dome as a shade factor (top 1, side 0.68, bottom
-        // 0.5; `docs/research/snow-cover.md` Deviation 15), ramped by the deck: `t` is the raw
-        // cloud map transmittance sampled above (1.0 outside the map or with none), so clear
-        // air is exactly 1 (no change). Under a deck the beam is ~0, so scaling the lit colour
-        // scales the sky's fill alone; the beam share at partial cover is in Deviation 15.
-out.color = vec4<f32>(
-        out.color.rgb * mix(
-            1.0,
-            (1.0 - 0.35 * pow(max(1.0 - pbr_input.N.y, 0.0), 0.3)),
-            1.0 - t,
-        ),
-        out.color.a,
-    );
+        out.color = vec4<f32>(out.color.rgb * overcast_relief(pbr_input.N.y, 1.0 - t), out.color.a);
     } else {
         out.color = pbr_input.material.base_color;
     }

@@ -203,3 +203,18 @@ fn cloud_shadow_ratio(t: f32, mean_transmittance: f32) -> f32 {
     let lights = max(0.25 + 0.75 * mean_transmittance, 0.01);
     return clamp(here / lights, 0.0, 4.0);
 }
+
+/// The relief cue under a deck (`docs/research/snow-cover.md` Deviation 15, as revised by
+/// `sky-light.md` Deviation 9): the lit colour's scale for a surface whose normal has vertical
+/// component `n_y`, `deck` 0 in clear air (exactly no change) to 1 under a deck. The environment
+/// map carries the overcast dome, which shades a surface by its cosine, `1 − 0.30 (1 − n_y)`
+/// (measured on the sky probe's irradiance map: a side 0.70 and an underside 0.40 of a top); the
+/// iteration-7 curve `1 − 0.35 (1 − n_y)^0.3` was fitted so gentle relief reads (−6.7 % at 5°),
+/// standing for the sky occlusion real relief has. Their quotient, never above 1, is what the
+/// dome lacks: about −6.5 % on any tilted surface, and no second darkening of a wall.
+fn overcast_relief(n_y: f32, deck: f32) -> f32 {
+    let tilt = max(1.0 - n_y, 0.0);
+    let shape = 1.0 - 0.35 * pow(tilt, 0.3);
+    let dome = 1.0 - 0.30 * tilt;
+    return mix(1.0, min(shape / dome, 1.0), deck);
+}

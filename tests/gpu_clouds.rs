@@ -120,19 +120,13 @@ fn shadow_transmittance(app: &mut App) -> Vec<f32> {
 }
 
 /// The sun's direct light as a fraction of the clear value, `T̄`, as the light currently carries
-/// it, and the horizontal illuminance the camera's ambient light gives, lx.
-fn sun_light(app: &mut App) -> (f32, f32) {
+/// it.
+fn sun_light(app: &mut App) -> f32 {
     let mut lights = app
         .world_mut()
         .query_filtered::<&DirectionalLight, With<Sun>>();
     let light = lights.single(app.world()).expect("one sun");
-    let direct = light.illuminance / lux::RAW_SUNLIGHT;
-    let mut ambient = app
-        .world_mut()
-        .query_filtered::<&AmbientLight, With<ElementsCamera>>();
-    let ambient = ambient.single(app.world()).expect("one camera");
-    // Bevy shows a diffuse surface `albedo · L · 0.452` under an ambient light (`F_AB(1, NdotV).x`).
-    (direct, ambient.brightness * 0.452 * std::f32::consts::PI)
+    light.illuminance / lux::RAW_SUNLIGHT
 }
 
 /// A mean over the 9×9 texels (70 m) around 64 deterministic texel positions of the light
@@ -222,7 +216,8 @@ fn the_weather_map_holds_the_requested_sky_fraction() {
 }
 
 /// Validation 11 (a)–(e) and the light-factor wiring: the shadow map's coverage, the camera
-/// factor `0.25 + 0.75 T̄` per weather, the sun's beam `T̄` and the ambient light that is the rest.
+/// factor `0.25 + 0.75 T̄` per weather and the sun's beam `T̄`. The rest, the cloud-scattered
+/// light, reaches this camera through the environment map (`tests/gpu_sky_probe.rs`).
 #[test]
 #[ignore = "needs a GPU"]
 fn the_shadow_map_and_the_sun_factor_follow_the_clouds() {
@@ -271,7 +266,7 @@ fn the_shadow_map_and_the_sun_factor_follow_the_clouds() {
 
     // The sun's beam carries the mean transmittance the readback gave, which is the map's mean
     // (`broken-cloud-light.md` Validation 2; the readback samples every fourth texel).
-    for (camera, map, (direct, _)) in [
+    for (camera, map, direct) in [
         (clear_camera, mean(&clear), clear_sun),
         (overcast_camera, mean(&overcast), overcast_sun),
     ] {
@@ -285,24 +280,7 @@ fn the_shadow_map_and_the_sun_factor_follow_the_clouds() {
             "sun beam {direct} for a map mean {map}"
         );
     }
-    // The ambient light is the rest of the factor, `0.25 · (1 − T̄)` of the clear-sky horizontal
-    // illuminance: at noon in June (sun at 68°) between 0.2 and 0.25 of `RAW_SUNLIGHT` under
-    // overcast, next to nothing in the clear.
-    let overcast_ambient = overcast_sun.1 / lux::RAW_SUNLIGHT;
-    println!(
-        "ambient overcast {overcast_ambient:.3}, clear {:.4}",
-        clear_sun.1 / lux::RAW_SUNLIGHT
-    );
-    assert!(
-        (0.2..=0.25).contains(&overcast_ambient),
-        "overcast ambient {overcast_ambient}"
-    );
-    assert!(
-        clear_sun.1 < 0.05 * overcast_sun.1,
-        "clear ambient {}",
-        clear_sun.1
-    );
-    let ratio = overcast_sun.0 / clear_sun.0;
+    let ratio = overcast_sun / clear_sun;
     println!("sun beam overcast / clear = {ratio:.3}");
     assert!(ratio <= 0.05, "{ratio}");
 
@@ -385,15 +363,11 @@ fn a_cloud_over_the_camera_leaves_the_lights_alone() {
         let mean = app.world().resource::<CloudShadows>().mean_transmittance;
         (local, mean, sun_light(app))
     };
-    let (dark_local, dark_mean, (dark_direct, dark_ambient)) = at(&mut app, world(dx, dy));
-    let (lit_local, lit_mean, (lit_direct, lit_ambient)) = at(&mut app, world(bx, by));
+    let (dark_local, dark_mean, dark_direct) = at(&mut app, world(dx, dy));
+    let (lit_local, lit_mean, lit_direct) = at(&mut app, world(bx, by));
     finish(&mut app);
-    println!(
-        "shade: local {dark_local:.3}, mean {dark_mean:.3}, beam {dark_direct:.4}, ambient {dark_ambient:.0} lx"
-    );
-    println!(
-        "sun:   local {lit_local:.3}, mean {lit_mean:.3}, beam {lit_direct:.4}, ambient {lit_ambient:.0} lx"
-    );
+    println!("shade: local {dark_local:.3}, mean {dark_mean:.3}, beam {dark_direct:.4}");
+    println!("sun:   local {lit_local:.3}, mean {lit_mean:.3}, beam {lit_direct:.4}");
     assert!(
         dark_local < 0.2 && lit_local > 0.8,
         "{dark_local} / {lit_local}"
@@ -404,10 +378,6 @@ fn a_cloud_over_the_camera_leaves_the_lights_alone() {
     assert!(
         (dark_direct - lit_direct).abs() <= 0.05 * lit_direct,
         "beam {dark_direct} in the shade, {lit_direct} in the sun"
-    );
-    assert!(
-        (dark_ambient - lit_ambient).abs() <= 0.01 * lux::RAW_SUNLIGHT,
-        "ambient {dark_ambient} in the shade, {lit_ambient} in the sun"
     );
 }
 

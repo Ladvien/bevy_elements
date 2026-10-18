@@ -21,8 +21,9 @@ use bevy::render::extract_component::ExtractComponentPlugin;
 use bevy::render::extract_resource::{ExtractResource, ExtractResourcePlugin};
 use bevy::render::render_asset::RenderAssets;
 use bevy::render::render_resource::binding_types::{
-    sampler, storage_buffer_sized, texture_2d, texture_3d, texture_cube, texture_depth_2d,
-    texture_storage_2d, texture_storage_3d, uniform_buffer,
+    sampler, storage_buffer_sized, texture_2d, texture_2d_array, texture_3d, texture_cube,
+    texture_depth_2d, texture_storage_2d, texture_storage_2d_array, texture_storage_3d,
+    uniform_buffer,
 };
 use bevy::render::render_resource::{
     AddressMode, BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries,
@@ -30,7 +31,8 @@ use bevy::render::render_resource::{
     ColorTargetState, ColorWrites, ComputePassDescriptor, FilterMode, FragmentState, LoadOp,
     MipmapFilterMode, Operations, PipelineCache, RenderPassColorAttachment, RenderPassDescriptor,
     RenderPipelineDescriptor, Sampler, SamplerBindingType, SamplerDescriptor, ShaderStages,
-    StorageTextureAccess, StoreOp, TextureFormat, TextureSampleType, UniformBuffer,
+    StorageTextureAccess, StoreOp, TextureFormat, TextureSampleType, TextureViewDescriptor,
+    TextureViewDimension, UniformBuffer,
 };
 use bevy::render::renderer::{RenderContext, RenderDevice, RenderGraph, RenderQueue, ViewQuery};
 use bevy::render::storage::GpuShaderBuffer;
@@ -68,6 +70,8 @@ struct CloudPipelines {
     shadow: Kernel,
     march: Kernel,
     resolve: Kernel,
+    /// The sky probe (`docs/research/sky-light.md`): `march.wesl`'s second entry point.
+    probe: Kernel,
     composite: CachedRenderPipelineId,
     composite_layout: BindGroupLayoutDescriptor,
     repeat: Sampler,
@@ -97,6 +101,8 @@ struct CloudViewGroups {
     march: BindGroup,
     resolve: BindGroup,
     composite: BindGroup,
+    /// The sky probe's, while the view has one.
+    probe: Option<BindGroup>,
 }
 
 pub(super) fn plugin(app: &mut App) {
@@ -121,7 +127,7 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(
             Core3d,
             (
-                (cloud_march, cloud_resolve)
+                (cloud_march, cloud_resolve, cloud_sky_probe)
                     .chain()
                     .in_set(Core3dSystems::MainPass)
                     .before(main_opaque_pass_3d),
@@ -208,6 +214,37 @@ fn init_pipelines(
                 texture_storage_2d(TextureFormat::Rgba16Float, write),
                 // The sky the ambient takes its colour from (`CloudGpu::sky_probe`).
                 texture_cube(TextureSampleType::Float { filterable: true }),
+            ),
+        ),
+    );
+    // The sky probe: `march.wesl`'s bindings at their indices, without the view, the depth, the
+    // aerial-view LUT and the screen output, plus the probe's cloud states and composed cube.
+    let float_cube = || texture_cube(TextureSampleType::Float { filterable: true });
+    let probe_layout = BindGroupLayoutDescriptor::new(
+        "elements_clouds_sky_probe",
+        &BindGroupLayoutEntries::with_indices(
+            compute,
+            (
+                (1, uniform_buffer::<CloudParams>(false)),
+                (2, float_3d!()),
+                (3, float_3d!()),
+                (4, float_2d!()),
+                (5, float_2d!()),
+                (8, sampler(SamplerBindingType::Filtering)),
+                (9, sampler(SamplerBindingType::Filtering)),
+                (11, float_cube()),
+                (
+                    12,
+                    texture_2d_array(TextureSampleType::Float { filterable: true }),
+                ),
+                (
+                    13,
+                    texture_storage_2d_array(TextureFormat::Rgba16Float, write),
+                ),
+                (
+                    14,
+                    texture_storage_2d_array(TextureFormat::Rgba16Float, write),
+                ),
             ),
         ),
     );
@@ -299,8 +336,9 @@ fn init_pipelines(
         threshold: kernel(weather.clone(), "cloud_threshold", &weather_layout),
         weather: kernel(weather, "cloud_weather", &weather_layout),
         shadow: kernel(shadow, "cloud_shadow", &shadow_layout),
-        march: kernel(march, "cloud_march", &march_layout),
+        march: kernel(march.clone(), "cloud_march", &march_layout),
         resolve: kernel(resolve, "cloud_resolve", &resolve_layout),
+        probe: kernel(march, "cloud_sky_probe", &probe_layout),
         composite,
         composite_layout,
         repeat: make_sampler(AddressMode::Repeat),
@@ -474,12 +512,72 @@ fn prepare_views(
                 depth,
             )),
         );
+        let probe_group = probe_bind_group(
+            &cloud,
+            &pipelines,
+            &uniform,
+            &images,
+            &cache,
+            &device,
+            (base, detail, weather, sky_probe),
+            atmosphere,
+        );
         commands.entity(entity).insert(CloudViewGroups {
             march: march_group,
             resolve: resolve_group,
             composite: composite_group,
+            probe: probe_group,
         });
     }
+}
+
+/// The sky probe's bind group: the march's inputs, the state the last dispatch wrote (read), the
+/// other (written) and the composed cube through a 2D-array view. `None` without a probe or
+/// before its images exist. The states alternate with the dispatches, not the frames, so a
+/// skipped frame cannot read a stale state.
+#[allow(clippy::too_many_arguments)]
+fn probe_bind_group(
+    cloud: &CloudGpu,
+    pipelines: &CloudPipelines,
+    uniform: &CloudUniform,
+    images: &RenderAssets<GpuImage>,
+    cache: &PipelineCache,
+    device: &RenderDevice,
+    (base, detail, weather, sky): (&GpuImage, &GpuImage, &GpuImage, &GpuImage),
+    atmosphere: &AtmosphereTextures,
+) -> Option<BindGroup> {
+    let probe = cloud.probe.as_ref()?;
+    let (a, b, composed) = (
+        images.get(&probe.state[0])?,
+        images.get(&probe.state[1])?,
+        images.get(&probe.composed)?,
+    );
+    let (read, write) = if cloud.probe_frames.load(Ordering::Relaxed).is_multiple_of(2) {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    let composed_layers = composed.texture.create_view(&TextureViewDescriptor {
+        dimension: Some(TextureViewDimension::D2Array),
+        ..default()
+    });
+    Some(device.create_bind_group(
+        "elements_clouds_sky_probe",
+        &cache.get_bind_group_layout(&pipelines.probe.layout),
+        &BindGroupEntries::with_indices((
+            (1, &uniform.0),
+            (2, &base.texture_view),
+            (3, &detail.texture_view),
+            (4, &weather.texture_view),
+            (5, &atmosphere.transmittance_lut.default_view),
+            (8, &pipelines.repeat),
+            (9, &pipelines.clamp),
+            (11, &sky.texture_view),
+            (12, &read.texture_view),
+            (13, &write.texture_view),
+            (14, &composed_layers),
+        )),
+    ))
 }
 
 fn dispatch_global(
@@ -652,6 +750,45 @@ fn cloud_resolve(
     pass.set_bind_group(0, &bind.resolve, &[offset.offset, previous.offset]);
     pass.dispatch_workgroups(groups(size.x, WG2), groups(size.y, WG2), 1);
     span.end(&mut pass);
+}
+
+/// The sky probe (`docs/research/sky-light.md`): every texel of the cube, a `k × k` slot of them
+/// marched, the rest copied, all composed. Counts the dispatch, which flips the cloud states and
+/// tells the main world when every texel has been marched.
+fn cloud_sky_probe(
+    view: ViewQuery<&CloudViewGroups>,
+    cloud: Option<Res<CloudGpu>>,
+    pipelines: Option<Res<CloudPipelines>>,
+    progress: Res<CloudProgress>,
+    cache: Res<PipelineCache>,
+    mut ctx: RenderContext,
+) {
+    let (Some(cloud), Some(pipelines)) = (cloud, pipelines) else {
+        return;
+    };
+    if !cloud.active || !noise_ready(&progress) {
+        return;
+    }
+    let (Some(probe), Some(bind)) = (cloud.probe.as_ref(), view.into_inner().probe.as_ref()) else {
+        return;
+    };
+    let Some(pipeline) = ready(&cache, &pipelines.probe) else {
+        return;
+    };
+    let diagnostics = ctx.diagnostic_recorder();
+    let diagnostics = diagnostics.as_deref();
+    let mut pass = ctx
+        .command_encoder()
+        .begin_compute_pass(&ComputePassDescriptor {
+            label: Some("elements_clouds_sky_probe"),
+            ..default()
+        });
+    let span = diagnostics.pass_span(&mut pass, "elements_clouds_sky_probe");
+    pass.set_pipeline(pipeline);
+    pass.set_bind_group(0, bind, &[]);
+    pass.dispatch_workgroups(groups(probe.size, WG2), groups(probe.size, WG2), 6);
+    span.end(&mut pass);
+    cloud.probe_frames.fetch_add(1, Ordering::Relaxed);
 }
 
 fn cloud_composite(
