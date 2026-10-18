@@ -1394,3 +1394,41 @@ A game on bevy_flora 0.46 built two copies with the `flora` feature (pinned to 0
 3. **Wet ground reflects the sun under overcast**.
 4. **The anti-solar sky at sunset**, **rim sparkle** (carried).
 5. **Bevy's perspective-only sky under an orthographic camera** (carried).
+
+## Iteration 23 — 2026-10-18 — snow on many voxel volumes without a terrain (issue #13)
+
+**Commits:** `3b95667` (research note `docs/research/voxel-volumes.md`), the implementation with tests, the `voxel_walls` example, README / CHANGELOG / still / GIF, this log. Merged through a pull request; closes #13. **Sibling repos:** none. **Not released.**
+
+### What changed
+
+`VoxelSnow` puts `VoxelGround`'s snow slab on any number of volumes with no terrain: one column per voxel in the volume's field space, the same scan, hold, edit rescans and field swaps (the state is shared; `terrain: Option<Entity>` tells the two apart), and a depth per column from the ground-cover map at the column's world position where a crate terrain lies under it, else the point snowpack, times the top's shed-slope exposure, in field units under a moved, yawed and uniformly scaled volume. `VoxelPlugin` runs it even without the terrain, hydrology and cover plugins.
+
+Two crate defects surfaced in the capture review, both at cliffs that the smooth voxel hill never had: `SnowyField` blended a top across a step and floated the slab's underside off the lower columns (now the nearest column across a step of more than a voxel), and the slope exposure read a merlon beside a walk as a 63° slope and shed the walk's snow (now a neighbour more than a voxel away in height is a wall).
+
+The issue's "builds against 0.0.10" is declined with evidence (Deviation 1): bevy_isomesh 0.0.10 is built on Bevy 0.19 and lacks `replace_field` and `IsomeshSystems`, and bevy_isomesh 0.0.11 pins isomesh 0.0.11 exactly, so a widened core requirement could never resolve to 0.0.10. The consumer moves its path checkout to the published 0.0.11.
+
+### Sources
+
+This crate's `voxel-snow.md`, `snow-cover.md` (Fearing 2000's shed angles) and `snow-season.md` (the point pack); bevy_isomesh 0.0.10 (docs.rs) and 0.0.11 (registry) sources; isomesh 0.0.10 and 0.0.11 diffed for every item used.
+
+### Critique and verdicts (`/tmp/i23/critique.md`)
+
+| Round | Finding | Verdict |
+|---|---|---|
+| 1 | Base seam, blobby merlons, black wedges | FAIL |
+| 2 | Wedges are geometry: the slab across a cliff (crate) and an air sheet under each merlon (example SDF) | NOT YET |
+| 3 | Slab sides shaded as stone (painted per vertex); bare notch in each crenel (exposure across a cliff, crate) | NOT YET |
+| 4 | `docs/voxel_walls.png`, `docs/voxel_walls.gif` | GREAT |
+
+### Verification
+
+- New tests: `voxel::tests` `two_snow_volumes_get_slabs_and_no_terrain` (two volumes, one moved, turned 0.3 rad and scaled by 2, no `Terrain`, 0.6 m and 0.3 m field-unit slabs), `a_snow_volume_samples_the_cover_map_at_its_world_position`, `a_tilted_snow_volume_gets_no_slab`, `a_volume_with_both_components_is_a_voxel_ground`, `removing_voxel_snow_restores_the_field`; `voxel::model` `snow_columns_are_one_per_voxel_until_the_cap`, `a_top_sheds_by_its_slope` (with the cliff case), `only_an_upright_evenly_scaled_volume_takes_snow`; `voxel::field` `the_slab_sits_on_both_sides_of_a_cliff`.
+- Gates: build, `cargo test`, examples, clippy `-D warnings`, `cargo doc`, wasm32 with `isomesh`, rustfmt, `tests/save.rs`, the voxel GPU tests.
+
+### Top 5 remaining items, ranked
+
+1. **#8 world-units scale**.
+2. **Wet ground reflects the sun under overcast**.
+3. **Bright snow scenes**: the illuminance-metered exposure renders a sunlit snowfield and the stone on it pale (`voxel_walls`).
+4. **The anti-solar sky at sunset**, **rim sparkle** (carried).
+5. **Bevy's perspective-only sky under an orthographic camera** (carried).
