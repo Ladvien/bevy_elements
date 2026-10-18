@@ -24,7 +24,7 @@ The depth is multiplied by the column top's own **shed-slope exposure** (the slo
 
 **Transforms.** A volume may be translated, turned about the vertical and scaled uniformly: its columns stay vertical in the world, and only the world position and the depth's scale change. A tilted or non-uniformly scaled volume gets no snow (one warning): its field-space columns are not the direction snow falls.
 
-**Versions.** `isomesh` accepts `>=0.0.10, <0.0.12` (its API this crate uses is identical in both). `bevy_isomesh` stays at 0.0.11: 0.0.10 is built on Bevy 0.19 (the pin-parity rule forbids it) and lacks two APIs the feature uses.
+**Versions.** Both stay at 0.0.11 (Deviation 1).
 
 ## Parameters
 
@@ -51,11 +51,13 @@ Two walls of a small fort in a snowfall, one turned 30° and raised on the game'
 - A tilted volume gets no slab and warns once.
 - A volume with both `VoxelGround` and `VoxelSnow` is a voxel ground.
 - Removing `VoxelSnow` restores the user's field and remeshes the chunks.
-- `cargo build --features isomesh` with `isomesh` 0.0.10 resolved (`cargo update -p isomesh --precise 0.0.10` is impossible while bevy_isomesh 0.0.11 requires `isomesh = "0.0.11"`; the check is that this crate's own use compiles against 0.0.10's API, see Deviations).
+- `isomesh` 0.0.10's API for every item this crate uses (`Sdf`, `ChunkId`, `ChunkLayout`, `chunk::dirty::{DirtySet, mark_edit}`, `marching_cubes::MarchingCubes`, `MeshBuffer`, `fields::Sphere`, `brush::smooth_min`) is compared with 0.0.11's.
 
 ## Deviations from this plan
 
-1. **"Builds against isomesh 0.0.10 and 0.0.11" is met for `isomesh` alone.** `bevy_isomesh` 0.0.10 depends on Bevy 0.19 (pin parity, AGENTS.md "Plays well with the family" 1) and has neither `VoxelVolume::replace_field` nor `IsomeshSystems`, both used by this feature. A game on a path checkout of bevy_isomesh patches it (`[patch.crates-io]`) with a Bevy 0.20 build whose version is 0.0.11 or a 0.0.11-compatible API.
+1. **The `isomesh` feature does not accept 0.0.10.** The plan was to widen the `isomesh` requirement to `>=0.0.10, <0.0.12`: every item this crate uses is identical in both (`Sdf` trait and `ChunkLayout` signatures diffed, the rest found at the same paths). But a widened core requirement builds nothing new. bevy_isomesh 0.0.11 requires `isomesh = "0.0.11"`, which for a `0.0.x` version means exactly 0.0.11, so every build resolves the core to 0.0.11; a second copy at 0.0.10 would make `SnowyField`'s `Sdf` impl another trait than the one bevy_isomesh samples. bevy_isomesh 0.0.10 itself is built on Bevy 0.19 (pin parity, AGENTS.md "Plays well with the family" 1) and has neither `VoxelVolume::replace_field` nor `IsomeshSystems`, both used here. So both stay at 0.0.11, a published Bevy 0.20 release; a game on a path checkout labelled 0.0.10 moves it to 0.0.11 (or patches with `[patch.crates-io]` from a checkout versioned 0.0.11).
+2. **`VoxelSnow` has no `resolution`.** The plan gave it one; the columns are one per voxel, and wider by doubling only past `ElementsQuality::terrain_max_resolution` a side (`snow_columns`), which is what a wall wants, so the field was dropped (`VoxelSnow` is a unit component).
+3. **Across a cliff the slab takes the nearest column's top and snow, not the bilinear blend (found in the capture review).** `voxel-snow.md` samples the tops and the depths bilinearly, which the voxel hill never noticed: no step on it is steeper than a voxel. On crenellated walls (0.25 m voxels, 1 m merlons) a top blended between a walk column (5 m) and a merlon column (6 m) floated the slab's underside 0.2 m above the walk in front of every merlon, and a top blended between a wall column and the "no top" of the air beside it hung the slab down the wall's face: black wedges at every merlon's foot and a wavy seam along each wall's base (`/tmp/i23/seq/frame0079.png`). `SnowyField` now checks the four taps it blends: when they differ by more than one voxel `c` it takes the nearest column's top and depth, so a step keeps a sharp edge and the slab sits on both sides of it; elsewhere nothing changes (`the_slab_sits_on_both_sides_of_a_cliff`). On a `VoxelGround` this affects only slopes steeper than 45° per cell, which the shed exposure keeps nearly bare anyway.
 
 ## Pending index
 
