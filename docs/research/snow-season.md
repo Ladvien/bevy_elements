@@ -30,7 +30,7 @@ Outside the season:
 
 **After a load the clock may not match.** A restored `SurfaceWeathering` (it carries a `restored` flag that is never written and is true when read back) integrates its first step normally when the clock is within one game hour of the saved `last_hours`, so a save and load at the same clock continues exactly as the unsaved run. A load onto a clock further away re-arms on that clock without integrating: the pack neither melts nor grows across a gap the game did not simulate. (Without this a load a day later would integrate 24 h of melt in one frame, the clamp `MAX_STEP_H`.)
 
-**The cover maps are re-derived from the pack.** With a terrain the published values come from the ground-cover maps (`cover::weathering_from_map`), a per-cell GPU state (16 + 4 B a cell, 4 MB on a 512² grid) that starts zeroed. Saving it is out of proportion to the issue, and an empty map would overwrite the restored pack within a frame. Instead the maps are **seeded from the pack**: when they are created and when a restored `SurfaceWeathering` is inserted, one `cover_seed` dispatch, after the shelter mask is built, sets each cell's snow to the published depth (the mean the player saw around the camera at the save) at the pack's bulk density, times the cell's snow exposure (the slope shed and the blocker shelter), and its wetness to the published wetness times its rain exposure. Drifts, the lapse-rate line and the shelter's finer structure re-form as the simulation runs. A terrain rebuilt mid-game now keeps its snow too, uniform, instead of starting bare.
+**The cover maps are re-derived from the pack.** With a terrain the published values come from the ground-cover maps (`cover::weathering_from_map`), a per-cell GPU state (16 + 4 B a cell, 4 MB on a 512² grid) that starts zeroed. Saving it is out of proportion to the issue, and an empty map would overwrite the restored pack within a frame. Instead the maps are **seeded from the pack**: when they are created and when a restored `SurfaceWeathering` is inserted, one `cover_seed` dispatch, after the shelter mask is built, sets each cell's snow to the point pack's depth and SWE (exposed flat ground at the reference elevation), times the cell's snow exposure (the slope shed and the blocker shelter), and its wetness to the saved wetness times its rain exposure. A map readback in flight across the seed is dropped, and the cover's own clock re-arms on the loaded one. Drifts, the lapse-rate line and the shelter's finer structure re-form as the simulation runs. A terrain rebuilt mid-game now keeps its snow too, uniform, instead of starting bare.
 
 ## Parameters
 
@@ -65,7 +65,8 @@ Sanctuary's November in the `weathered_town`: rain on the first nights wets the 
 
 ## Deviations from this plan
 
-(none yet)
+1. **The maps are seeded from the point pack, not from the published depth.** The plan seeded every cell with the published `snow_depth_m`, the map's mean within 50 m of the camera at the save. That mean already counts the cells under roofs and on shed slopes as bare, so multiplying it by each cell's exposure again would under-fill the open ground by the sheltered fraction. The point pack is the snow on exposed flat ground, exactly what the exposure scales: open cells come back at the pack's depth, sheltered ones bare (`gpu_a_restored_snowpack_seeds_the_maps`).
+2. **The scheduler gates the snow presets for the whole out-of-season day, ramps included.** `snow_possible` ramps over the hour before the first day, but the scheduler's hourly step looks only at the date of the hour, so Snow and Blizzard become possible at 00:00 of the first day, after the phase has already turned. A forced Snow is the only way to snow during the ramp hour.
 
 ## Pending index
 

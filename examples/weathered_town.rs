@@ -11,11 +11,21 @@
 //! starts the clock at that local hour, and `ELEMENTS_SCALE=600` changes the time scale; for
 //! screenshots run `ELEMENTS_PRESET=Snow ELEMENTS_FRAMES=2400 ELEMENTS_SHOT=/tmp/x.png`. The
 //! clock keeps running: wetness and snow only build while game time passes.
+//!
+//! `ELEMENTS_CALENDAR=november` lets the scheduler pick the weather of a cool-temperate November
+//! instead (mean 9.4 °C, annual swing 10 °C, daily 4 °C, seed 1, 42.5° N, from 1 November 2026)
+//! with a `SnowSeason` from 14 November to 31 March: the cold rain of the first fortnight wets the
+//! town and never whitens it. `ELEMENTS_SNOW_SEASON=off` drops the season (the same weather then
+//! lies as snow from the second night). With the `serde` feature, `ELEMENTS_SAVE=/tmp/town.json`
+//! writes a save (clock, climate, location, weather director, snowpack) on the last frame and
+//! `ELEMENTS_LOAD=/tmp/town.json` starts from one. `ELEMENTS_EV100=13` fixes the exposure, for
+//! time-lapse stills (auto exposure adapts over 1.5 s of real time).
 
 mod common;
 
 use std::time::Duration;
 
+use bevy::camera::Exposure;
 use bevy::prelude::*;
 use bevy_elements::*;
 use common::{ExampleHarness, camera};
@@ -34,19 +44,110 @@ fn fixed_preset() -> Option<WeatherPreset> {
         .find(|p| format!("{p:?}").eq_ignore_ascii_case(&name))
 }
 
+/// The snow may fall from 14 November to 31 March.
+const SNOW_SEASON: SnowSeason = SnowSeason {
+    first: (11, 14),
+    last: (3, 31),
+};
+
+fn november() -> bool {
+    std::env::var("ELEMENTS_CALENDAR").is_ok_and(|v| v.eq_ignore_ascii_case("november"))
+}
+
 fn main() {
-    let clock = WorldClock::new(CivilDate::new(2026, 4, 15))
-        .at_hour(env_f64("ELEMENTS_HOUR").unwrap_or(13.0))
-        .with_time_scale(env_f64("ELEMENTS_SCALE").unwrap_or(300.0) as f32);
+    let hour = env_f64("ELEMENTS_HOUR").unwrap_or(13.0);
+    let scale = env_f64("ELEMENTS_SCALE").unwrap_or(300.0) as f32;
     let mut app = App::new();
     app.add_plugins((DefaultPlugins, ElementsPlugins, ExampleHarness))
-        .insert_resource(clock)
-        .insert_resource(Climate::temperate())
         .add_systems(Startup, setup);
-    if fixed_preset().is_none() {
-        app.add_systems(Update, cycle.before(ElementsSystems::Clock));
+    if november() {
+        let season = std::env::var("ELEMENTS_SNOW_SEASON").map_or(true, |v| v != "off");
+        app.insert_resource(
+            WorldClock::new(CivilDate::new(2026, 11, 1))
+                .at_hour(hour)
+                .with_time_scale(scale),
+        )
+        .insert_resource(GeoLocation {
+            latitude_deg: 42.5,
+            ..default()
+        })
+        .insert_resource(Climate {
+            mean_temperature_c: 9.4,
+            annual_amplitude_c: 10.0,
+            diurnal_amplitude_c: 4.0,
+            snow_season: season.then_some(SNOW_SEASON),
+            ..Climate::temperate().with_seed(1)
+        });
+    } else {
+        app.insert_resource(
+            WorldClock::new(CivilDate::new(2026, 4, 15))
+                .at_hour(hour)
+                .with_time_scale(scale),
+        )
+        .insert_resource(Climate::temperate());
+        if fixed_preset().is_none() {
+            app.add_systems(Update, cycle.before(ElementsSystems::Clock));
+        }
     }
+    #[cfg(feature = "serde")]
+    save::plugin(&mut app);
     app.run();
+}
+
+/// A save file: what the weather and the ground cannot re-derive.
+#[cfg(feature = "serde")]
+mod save {
+    use bevy::prelude::*;
+    use bevy_elements::*;
+
+    type SaveFile = (
+        WorldClock,
+        Climate,
+        GeoLocation,
+        WeatherDirector,
+        SurfaceWeathering,
+    );
+
+    pub fn plugin(app: &mut App) {
+        if let Some(path) = std::env::var_os("ELEMENTS_LOAD") {
+            let file = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("ELEMENTS_LOAD {path:?}: {e}"));
+            let (mut clock, climate, location, director, ground): SaveFile =
+                serde_json::from_str(&file)
+                    .unwrap_or_else(|e| panic!("ELEMENTS_LOAD {path:?}: {e}"));
+            // The saved clock runs at its own scale unless ELEMENTS_SCALE says otherwise.
+            if let Some(scale) = super::env_f64("ELEMENTS_SCALE") {
+                clock.time_scale = scale as f32;
+            }
+            app.insert_resource(clock)
+                .insert_resource(climate)
+                .insert_resource(location)
+                .insert_resource(director)
+                .insert_resource(ground);
+        }
+        if std::env::var_os("ELEMENTS_SAVE").is_some() {
+            app.add_systems(Last, write_on_exit);
+        }
+    }
+
+    fn write_on_exit(mut exits: MessageReader<AppExit>, world: &World) {
+        if exits.read().next().is_none() {
+            return;
+        }
+        let Some(path) = std::env::var_os("ELEMENTS_SAVE") else {
+            return;
+        };
+        let file = serde_json::to_string(&(
+            world.resource::<WorldClock>(),
+            world.resource::<Climate>(),
+            world.resource::<GeoLocation>(),
+            world.resource::<WeatherDirector>(),
+            world.resource::<SurfaceWeathering>(),
+        ))
+        .unwrap_or_else(|e| panic!("ELEMENTS_SAVE: {e}"));
+        std::fs::write(&path, file).unwrap_or_else(|e| panic!("ELEMENTS_SAVE {path:?}: {e}"));
+        info!("saved to {path:?}");
+    }
 }
 
 /// Rain, then snow, then rain again.
@@ -142,7 +243,19 @@ fn setup(
         Ok("wall") => (Vec3::new(-12.0, 2.5, 8.0), Vec3::new(-12.0, 2.5, 22.0)),
         _ => (Vec3::new(0.0, 12.0, -20.0), Vec3::new(0.0, 2.0, 26.0)),
     };
-    commands.spawn(camera(eye, target));
+    let mut view = commands.spawn(camera(eye, target));
+    // A fixed exposure for time-lapse stills: auto exposure adapts over 1.5 s of real time.
+    if let Some(ev100) = env_f64("ELEMENTS_EV100") {
+        view.insert((
+            ElementsCamera {
+                auto_exposure: false,
+                ..default()
+            },
+            Exposure {
+                ev100: ev100 as f32,
+            },
+        ));
+    }
     if let Some(preset) = fixed_preset() {
         commands.queue(move |world: &mut World| {
             world
