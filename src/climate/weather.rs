@@ -135,6 +135,16 @@ pub struct Weather {
     pub storminess: f32,
     /// Airborne dust, 0–1.
     pub dust: f32,
+    /// How far precipitation may fall as snow, 0–1: 0 outside the climate's
+    /// [`SnowSeason`](crate::SnowSeason) (raised by a forced Snow or Blizzard), 1 otherwise.
+    /// [`snow_fraction`](Self::snow_fraction) is scaled by it.
+    #[cfg_attr(feature = "serde", serde(default = "one"))]
+    pub snow_possible: f32,
+}
+
+#[cfg(feature = "serde")]
+fn one() -> f32 {
+    1.0
 }
 
 impl Default for Weather {
@@ -151,14 +161,16 @@ impl Default for Weather {
             visibility_m: t.visibility,
             storminess: t.storm,
             dust: t.dust,
+            snow_possible: 1.0,
         }
     }
 }
 
 impl Weather {
-    /// Fraction of precipitation falling as snow: 1 at ≤ −1 °C, 0 at ≥ 2 °C, linear between.
+    /// Fraction of precipitation falling as snow: 1 at ≤ −1 °C, 0 at ≥ 2 °C, linear between,
+    /// times [`snow_possible`](Self::snow_possible).
     pub fn snow_fraction(&self) -> f32 {
-        ((2.0 - self.temperature_c) / 3.0).clamp(0.0, 1.0)
+        ((2.0 - self.temperature_c) / 3.0).clamp(0.0, 1.0) * self.snow_possible
     }
 }
 
@@ -357,9 +369,12 @@ pub(crate) fn schedule(climate: &Climate, southern: bool, prev: WeatherPreset, i
     let doy = f32::from(date.day_of_year()) + hour / 24.0;
     let temperature = climate.base_temperature_c(doy, hour, southern);
     let summer = Season::of_month(date.month, southern) == Season::Summer;
+    // Out of the snow season (its whole day, the ramps included) the snow presets are gated as
+    // above 1 °C.
+    let snowless = climate.snow_season.is_some_and(|s| !s.contains(date));
 
     let gated = |p: WeatherPreset| match p {
-        WeatherPreset::Snow | WeatherPreset::Blizzard => temperature > 1.0,
+        WeatherPreset::Snow | WeatherPreset::Blizzard => temperature > 1.0 || snowless,
         WeatherPreset::Rain | WeatherPreset::Drizzle | WeatherPreset::Thunderstorm => {
             temperature < -1.0
         }
@@ -533,6 +548,9 @@ pub(crate) fn run_weather(
         visibility_m: blend.visibility,
         storminess: blend.storm,
         dust: blend.dust,
+        snow_possible: climate
+            .snow_possible(clock.date, clock.hour)
+            .max(blend.snow_cap),
     };
 }
 

@@ -8,7 +8,7 @@ pub(crate) mod weathering;
 
 use bevy::prelude::*;
 
-pub use model::{Climate, LAPSE_RATE_C_PER_M};
+pub use model::{Climate, LAPSE_RATE_C_PER_M, SnowSeason};
 pub use season::{Season, SeasonState};
 pub use weather::{Weather, WeatherChanged, WeatherDirector, WeatherPreset};
 pub(crate) use weather::{hash64, mix64};

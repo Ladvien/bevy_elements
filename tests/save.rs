@@ -1,5 +1,6 @@
 //! Saving and restoring the weather through `serde`: a restored director continues the same
-//! scheduler chain, forced preset and blend as the run it was saved from. Headless, no GPU.
+//! scheduler chain, forced preset and blend as the run it was saved from, and a restored
+//! snowpack the same snow and wetness. Headless, no GPU.
 
 use std::time::Duration;
 
@@ -28,7 +29,7 @@ fn run_for(app: &mut App, updates: usize) {
     }
 }
 
-/// The save file: everything the weather cannot re-derive.
+/// The save file: everything the weather and the ground cannot re-derive.
 fn save(app: &App) -> String {
     let w = app.world();
     serde_json::to_string(&(
@@ -36,17 +37,44 @@ fn save(app: &App) -> String {
         w.resource::<Climate>(),
         w.resource::<GeoLocation>(),
         w.resource::<WeatherDirector>(),
+        w.resource::<SurfaceWeathering>(),
     ))
     .unwrap()
 }
 
+type SaveFile = (
+    WorldClock,
+    Climate,
+    GeoLocation,
+    WeatherDirector,
+    SurfaceWeathering,
+);
+
 fn load(app: &mut App, file: &str) {
-    let (clock, climate, location, director): (WorldClock, Climate, GeoLocation, WeatherDirector) =
+    let (clock, climate, location, director, ground): SaveFile =
         serde_json::from_str(file).unwrap();
     app.insert_resource(clock)
         .insert_resource(climate)
         .insert_resource(location)
-        .insert_resource(director);
+        .insert_resource(director)
+        .insert_resource(ground);
+}
+
+/// Ten game hours of forced snow, then the scheduler's weather for `after_release` updates: a
+/// snowpack that settles and melts.
+fn snowed(after_release: usize) -> App {
+    let mut app = app();
+    run_for(&mut app, 20);
+    app.world_mut()
+        .resource_mut::<WeatherDirector>()
+        .force(WeatherPreset::Snow, Duration::from_secs(1800));
+    run_for(&mut app, 100);
+    app.world_mut()
+        .resource_mut::<WeatherDirector>()
+        .release(Duration::from_secs(3600));
+    run_for(&mut app, after_release);
+    assert!(app.world().resource::<SurfaceWeathering>().snow_depth_m > 0.01);
+    app
 }
 
 /// Steps both apps together and returns how many updates showed the same weather, and how many
@@ -116,4 +144,88 @@ fn a_director_saved_mid_force_restores_forced_at_the_same_blend() {
         restored.world().resource::<Weather>().precipitation_mm_h,
         25.0
     );
+}
+
+/// The published snow depth, m.
+fn depth(app: &App) -> f32 {
+    app.world().resource::<SurfaceWeathering>().snow_depth_m
+}
+
+#[test]
+fn a_restored_snowpack_continues_the_same_snow() {
+    let mut original = snowed(5);
+    let saved = *original.world().resource::<SurfaceWeathering>();
+    let file = save(&original);
+
+    let mut restored = app();
+    load(&mut restored, &file);
+    assert_eq!(depth(&restored), saved.snow_depth_m);
+    for i in 0..720 {
+        original.update();
+        restored.update();
+        let a = original.world().resource::<SurfaceWeathering>();
+        let b = restored.world().resource::<SurfaceWeathering>();
+        assert_eq!(
+            (a.snow_depth_m, a.snow_cover, a.wetness),
+            (b.snow_depth_m, b.snow_cover, b.wetness),
+            "update {i} after the load"
+        );
+    }
+    let end = depth(&original);
+    assert!(
+        end < saved.snow_depth_m,
+        "72 h after the save the pack never settled or melted"
+    );
+}
+
+#[test]
+fn a_snowpack_loaded_a_day_later_neither_melts_nor_grows() {
+    let original = snowed(40);
+    let saved = *original.world().resource::<SurfaceWeathering>();
+    let file = save(&original);
+    let a_day_later = |app: &mut App| {
+        let mut clock = app.world_mut().resource_mut::<WorldClock>();
+        clock.date = clock.date.add_days(1);
+    };
+
+    let mut later = app();
+    load(&mut later, &file);
+    a_day_later(&mut later);
+    later.update();
+    assert_eq!(depth(&later), saved.snow_depth_m);
+
+    // The same pack carried over without a save integrates the whole day in one step.
+    let mut carried = app();
+    load(&mut carried, &file);
+    carried.insert_resource(saved);
+    a_day_later(&mut carried);
+    carried.update();
+    let depth = depth(&carried);
+    assert!(
+        depth != saved.snow_depth_m,
+        "a 24 h step left the pack at {depth}"
+    );
+}
+
+#[test]
+fn files_from_before_the_snow_season_load() {
+    let mut climate = serde_json::to_value(Climate::alpine()).unwrap();
+    let fields = climate.as_object_mut().unwrap();
+    assert!(fields.remove("snow_season").is_some());
+    let climate: Climate = serde_json::from_value(climate).unwrap();
+    assert_eq!(climate.snow_season, None);
+
+    let mut weather = serde_json::to_value(Weather::default()).unwrap();
+    let fields = weather.as_object_mut().unwrap();
+    assert!(fields.remove("snow_possible").is_some());
+    let weather: Weather = serde_json::from_value(weather).unwrap();
+    assert_eq!(weather.snow_possible, 1.0);
+
+    // A season round-trips, wrapping the year.
+    let season = Climate::alpine().with_snow_season(SnowSeason {
+        first: (11, 14),
+        last: (3, 31),
+    });
+    let back: Climate = serde_json::from_str(&serde_json::to_string(&season).unwrap()).unwrap();
+    assert_eq!(back.snow_season, season.snow_season);
 }

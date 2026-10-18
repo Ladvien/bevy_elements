@@ -25,10 +25,23 @@ const DRY_RATE_H: f32 = 0.05;
 const FULL_COVER_DEPTH_M: f32 = 0.05;
 /// The longest clock jump integrated in one step, game hours; larger jumps are clamped.
 const MAX_STEP_H: f64 = 24.0;
+/// The furthest a loaded clock may be from the saved one for the first step after a load to
+/// integrate the gap, game hours; further, the pack re-arms on the loaded clock.
+const RESTORE_TOLERANCE_H: f64 = 1.0;
 
 /// How wet and snowy exposed ground is around the camera. Feeds foliage and any material that
 /// wants to look rained or snowed on.
+///
+/// With the `serde` feature it is part of a save, with the weather's ([`WeatherDirector`],
+/// [`WorldClock`], [`Climate`](crate::Climate), [`GeoLocation`](crate::GeoLocation)): insert the
+/// loaded copy and the snowpack and the wetness carry on. A load onto a clock within an hour of
+/// the saved one continues as if never saved; onto another clock the pack neither melts nor grows
+/// across the gap. With a terrain the ground-cover maps are re-seeded from the pack, times each
+/// cell's slope and shelter exposure (`docs/research/snow-season.md`).
+///
+/// [`WeatherDirector`]: crate::WeatherDirector
 #[derive(Resource, Clone, Copy, Debug, Default, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SurfaceWeathering {
     /// Surface wetness, 0 dry – 1 soaked.
     pub wetness: f32,
@@ -41,6 +54,14 @@ pub struct SurfaceWeathering {
     /// Bulk density of the snowpack, kg/m³.
     snow_density: f32,
     last_hours: Option<f64>,
+    /// Read back from a save and not yet stepped: never written, true when deserialized.
+    #[cfg_attr(feature = "serde", serde(skip_serializing, default = "restored"))]
+    restored: bool,
+}
+
+#[cfg(feature = "serde")]
+fn restored() -> bool {
+    true
 }
 
 impl SurfaceWeathering {
@@ -48,6 +69,35 @@ impl SurfaceWeathering {
     #[cfg(test)]
     pub(crate) fn snow_water_mm(&self) -> f32 {
         self.snow_water_mm
+    }
+
+    /// A pack as read back from a save: `snow_water_mm` at `density_kg_m3`, `wetness`.
+    #[cfg(test)]
+    pub(crate) fn restored(snow_water_mm: f32, density_kg_m3: f32, wetness: f32) -> Self {
+        let mut pack = Self {
+            wetness,
+            snow_water_mm,
+            snow_density: density_kg_m3,
+            restored: true,
+            ..Self::default()
+        };
+        pack.snow_depth_m = pack.pack_seed().x;
+        pack
+    }
+
+    /// Whether this was read back from a save and has not been stepped since.
+    pub(crate) fn is_restored(&self) -> bool {
+        self.restored
+    }
+
+    /// The point snowpack as the cover maps' seed: depth (m), SWE (m), wetness, 0.
+    pub(crate) fn pack_seed(&self) -> Vec4 {
+        let depth_m = if self.snow_water_mm > 0.0 {
+            self.snow_water_mm / self.snow_density.max(NEW_SNOW_DENSITY)
+        } else {
+            0.0
+        };
+        Vec4::new(depth_m, self.snow_water_mm * 1e-3, self.wetness, 0.0)
     }
 
     /// Advance by `hours` of game time under `weather`, with the sun `sun_factor` (0–1) above
@@ -105,9 +155,12 @@ pub(crate) fn update_weathering(
 ) {
     let now = clock.hours_since_2000();
     let hours = match ground.last_hours {
+        // A load onto a clock away from the saved one: re-arm, integrate nothing.
+        Some(last) if ground.restored && (now - last).abs() > RESTORE_TOLERANCE_H => 0.0,
         Some(last) => (now - last).clamp(0.0, MAX_STEP_H) as f32,
         None => 0.0,
     };
+    ground.restored = false;
     ground.last_hours = Some(now);
     let sun_factor = sun.altitude_deg.to_radians().sin().max(0.0);
     ground.step(&weather, sun_factor, hours);
