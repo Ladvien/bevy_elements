@@ -159,15 +159,15 @@ fn a_restored_snowpack_continues_the_same_snow() {
 
     let mut restored = app();
     load(&mut restored, &file);
-    assert_eq!(depth(&restored), saved.snow_depth_m);
+    // Issue #23: the whole pack compares equal, its private state (water equivalent, density,
+    // the hour it last stepped) with it.
+    assert_eq!(*restored.world().resource::<SurfaceWeathering>(), saved);
     for i in 0..720 {
         original.update();
         restored.update();
-        let a = original.world().resource::<SurfaceWeathering>();
-        let b = restored.world().resource::<SurfaceWeathering>();
         assert_eq!(
-            (a.snow_depth_m, a.snow_cover, a.wetness),
-            (b.snow_depth_m, b.snow_cover, b.wetness),
+            original.world().resource::<SurfaceWeathering>(),
+            restored.world().resource::<SurfaceWeathering>(),
             "update {i} after the load"
         );
     }

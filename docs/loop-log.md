@@ -1525,3 +1525,55 @@ Hillaire 2016 (Frostbite; clouds in every view including the environment map, eq
 3. **The water's body colour under a grey sky** (the storm pond's teal mid-distance `(160,189,197)`, pre-existing).
 4. **A bolt hidden by heavy rain at 1.5 km** in `storm`.
 5. **The anti-solar sky at sunset**, **rim sparkle**, **Bevy's perspective-only sky under an orthographic camera** (carried).
+
+## Iteration 26 — 2026-10-18 — a look for rain and snow under far-off cameras (issues #25, #23, #27)
+
+**Commits:** `0f8ead5` (research note `docs/research/precipitation-look.md`), the implementation with its tests, the examples, docs and images, this log. Merged through a pull request that closes #25, #23 and #27. **Sibling repos:** none. **Not released.** The GPU was taken through `gpu-tenant claim coding --who bevy_elements@big` (olmOCR's vLLM held 15.2 GB and distill 7.5 GB).
+
+### Candidates (open issues first)
+
+| Rank | Candidate | Class | Decision |
+|---|---|---|---|
+| 1 | #25: rain under an orthographic camera reads as sleet (streaks 63° from vertical at 35° pitch), snow as identical dots | 2 (looks wrong to the consumer) | **this iteration** |
+| 2 | #23: `SurfaceWeathering` has no `PartialEq`, so a game's save struct cannot derive it | 3 (API) | **this iteration** (small) |
+| 3 | #27: no forecast of the scheduler's coming presets | 3 (API) | **this iteration** (small) |
+| 4 | #26: trails on a game's own ground without the crate's `Terrain` | 3 (feature) | next iteration (a larger change: the trail window without terrain layers) |
+| 5 | The overcast dome is flat | 2 | carried |
+
+#25 beat #26 because every strategy or isometric consumer sees it in every wet preset; #23 and #27 are a few lines each with clear acceptance tests and rode along.
+
+### What changed
+
+- **`PrecipitationLook`** (`src/precipitation/look.rs`): fall and wind scales on the rain streak, a tint and opacity, a log-normal flake size (salt 5, Box–Muller, z clamped ±2) and a minimum flake width, packed into two `vec4`s of the draw's `DrawParams`; draw-only, defaults the identity. `readable()` (fall ×4, wind ×0.5, tint `(0.85, 0.9, 1.0, 0.7)`, σ 0.5, 1.5 px). CPU mirrors of the streak and the size factor carry the acceptance tests.
+- **`WeatherDirector::forecast`**: from the director's `last_hour` and `scheduled` (a fresh chain starts Clear at the clock's hour, a clock jump restarts it, as `run_weather` does), catches the chain up to the clock's hour and runs `schedule` on for the requested hours, without touching the director.
+- **`SurfaceWeathering: PartialEq`**: manual, every field but the transient `restored`; `tests/save.rs` now asserts whole-struct equality after a serde round trip.
+- **Examples:** `ELEMENTS_PRECIPITATION=readable` in the harness, `ELEMENTS_PITCH` in `isometric`; the game look brightens its streaks against its own key light.
+
+### Sources
+
+Tatarchuk 2006 (corpus `s2006-advances-materials-6`: artist-set rain direction and speed, random particle size), Lagarde 2012 (*Remember Me*: rain should not match reality in bright scenes; slant by art, not wind), Wang & Wade 2004, Garg & Nayar 2007, Tiira et al. 2016 (`10.5194/amt-9-4825-2016`, downloaded: exponential snow PSD), Langer et al. 2004, `view-anchor.md` Deviation 3.
+
+### Critique and verdicts (`/tmp/i26/critique.md`)
+
+| Round | Scene | Finding | Verdict |
+|---|---|---|---|
+| 1 | Thunderstorm, tint α 1.3 | an opaque white wall (153 DN vs 140) | FAIL |
+| 1 | Snow | a few 4–5× soft blobs (log-normal tail) | FAIL |
+| 2 | game look, α 0.7 | rain within ~8 DN of the sunlit grass, nearly invisible | NOT YET |
+| 3 | brighter crate tint | crate-lit town greyed into a veil; reverted, the game sets its own tint | NOT YET |
+| 4 | Rain / game Rain / Snow / game Snow / dusk at 35° | upright 15° streaks that read as rain; flakes of many sizes; town legible | GREAT |
+| 4 | Defaults | iso Rain and Snow mean colour within 0.02 DN of before; same dashes and dots | GREAT |
+
+### Verification
+
+- `look::tests`: streak angle 63.4° physical → 15.3° readable at 35° pitch; flake CV ≥ 0.3 with the mean within 5 %; the default is the identity. `weather::tests::the_forecast_is_the_weather_that_comes` (fresh chain and mid-chain under a forced Thunderstorm, director unchanged). `tests/save.rs` (5).
+- Full GPU suite, cargo test, clippy, doc, wasm, save: pass.
+- Bench (`bench_elements`, High, 3840 × 2160, Thunderstorm, P2 1695–1755 MHz, minimum, two runs each): `elements_precip_draw` 0.122 / 0.126 ms before, 0.123 / 0.115 ms readable.
+
+### Top 5 remaining items, ranked
+
+1. **#26: trails on a game's own ground** without the crate's `Terrain`.
+2. **The isometric town at night is black** (22 h, `Rain`: mean 1 DN, max 8, under both looks).
+3. **A 25 mm/h storm hides the whole town under an orthographic camera** (both looks; the storm's coverage and the linear fog from the nearest ground).
+4. **The overcast dome is flat** (Eddington's emergent radiance in `cloud_scatter`), carried.
+5. **Bright snow scenes under the metered exposure**, **the water's body colour under a grey sky**, **a bolt hidden by heavy rain**, carried.

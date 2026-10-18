@@ -64,6 +64,29 @@ fn restored() -> bool {
     true
 }
 
+/// The pack's state compares, the private water equivalent, density and last stepped hour
+/// included; whether a copy was just read back from a save (`restored`, transient bookkeeping
+/// that a round trip sets) does not, so a saved pack equals the one it was saved from (issue #23).
+impl PartialEq for SurfaceWeathering {
+    fn eq(&self, other: &Self) -> bool {
+        (
+            self.wetness,
+            self.snow_cover,
+            self.snow_depth_m,
+            self.snow_water_mm,
+            self.snow_density,
+            self.last_hours,
+        ) == (
+            other.wetness,
+            other.snow_cover,
+            other.snow_depth_m,
+            other.snow_water_mm,
+            other.snow_density,
+            other.last_hours,
+        )
+    }
+}
+
 impl SurfaceWeathering {
     /// Snow water equivalent of the point model, mm.
     #[cfg(test)]

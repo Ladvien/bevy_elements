@@ -183,6 +183,20 @@ fn build_a_shelter(mut commands: Commands) {
 
 The nearest 256 blockers to the camera are tested; any oriented box works (`GlobalTransform` rotation and scale apply). The far field is the fog volume's: `FogPlugin` splits the visibility's extinction `3.912 / visibility` into the precipitation's own (rain `2.12×10⁻⁴ R^0.68` m⁻¹, snow `4.917×10⁻³ S` m⁻¹, from measured visibility–rate relations) rendered as wind-slanted shafts, and the remaining haze, so `Weather::visibility_m` stays the single authority on how far you see. The particles need `WindPlugin` and an `ElementsCamera`; `PrecipitationState` exposes the GPU buffers. Rain lands on the terrain's surface plus the water standing on it, or on the plane y = 0 without a terrain.
 
+**A look for your camera.** The drops and flakes are physically sized, which reads well through a perspective camera at eye height. From far off (an orthographic, isometric or strategy camera) the same rain is short, wind-slanted dashes and the same snow a field of identical dots. `PrecipitationLook` restyles the draw without touching the simulation, the wetness, the splashes or the queries: `rain_fall_scale` and `rain_wind_scale` lengthen and straighten the streaks, `rain_tint` colours them and sets their opacity, `flake_size_spread` draws each flake at a log-normal size about its own, and `flake_min_half_width_px` sets the smallest flake. The default is the physical look; `PrecipitationLook::readable()` is the stylised one (fall ×4, wind ×0.5, a slightly bluer and fainter streak, σ 0.5 spread, 1.5 px flakes): under the isometric camera pitched 35° the `Rain` preset's streaks stand 15° from vertical instead of 63°. Under a game's own bright key light, raise `rain_tint` above 1 so the streaks stand out from the sunlit ground (the `isometric` example's game look uses `(2.4, 2.5, 2.8, 0.8)`). `docs/research/precipitation-look.md`; `ELEMENTS_PRECIPITATION=readable` in any example.
+
+```rust
+# use bevy::prelude::*;
+# use bevy_elements::*;
+fn strategy_view(mut commands: Commands) {
+    commands.insert_resource(PrecipitationLook::readable());
+}
+```
+
+![The isometric town in Rain and Snow at 35°: left, the physical look (wind-slanted dashes, identical dots); right, PrecipitationLook::readable() (upright streaks, flakes of many sizes)](docs/precipitation_look.png)
+
+![The isometric town in Rain, one second: physical on the left, readable() on the right](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/precipitation_look.gif)
+
 ### Weathered materials
 
 `WeatheredMaterial` is `ExtendedMaterial<StandardMaterial, WeatheredExtension>`: give any mesh one and it follows the weather. `WeatheredPlugin` writes `ElementsGlobals` every frame (wetness and snow cover from `SurfaceWeathering`, the rain intensity `min(1, R_liquid/20)`, the cloud shadow map, ripple and streak phases, the world units) into one 96-byte storage buffer all weathered materials bind (binding 101, fragment stage only: it leaves the fragment stage two of the eight storage buffers WebGPU guarantees). A wet surface loses up to half its albedo in proportion to its porosity (Lagarde's gloss-based estimate: rough surfaces soak, plastic, tile and metal do not) and its roughness falls toward 0.1; rain on a wall adds darker streaks that run down it; faces turn white under snow with the curve `snow · smoothstep(0.85 − 0.6 snow, +0.2, n.y)` that `bevy_flora` uses, snow albedo `SNOW_ALBEDO` and roughness `SNOW_ROUGHNESS`, so trees and buildings read as one snow. `WeatheredExtension::exposure` is 1 under open sky and 0 sheltered (no wetness, streaks or snow, only cloud shadow): it does not follow a `PrecipitationBlocker` by itself, set it from your own test.
@@ -386,6 +400,8 @@ fn seek_shelter(env: Environment) {
 
 **Saving the weather and the snowpack.** The weather's save state is `WorldClock`, `Climate`, `GeoLocation` and `WeatherDirector` (the scheduler's chain position, a forced preset and the blend in progress); `Weather` is recomputed from them each frame. The ground's is `SurfaceWeathering` (the snowpack and the wetness). With the `serde` feature all five serialize; insert the saved copies before the next `ElementsSystems::Weather` run and the weather and the snow continue exactly as saved, where a fresh director would restart the chain at `Clear` and a fresh `SurfaceWeathering` at bare, dry ground. A snowpack loaded onto a clock more than an hour from the one it was saved at neither melts nor grows across the gap. The ground-cover maps on a terrain are not saved: they are re-seeded from the loaded snowpack, times each cell's slope and shelter exposure, so roofs keep the ground under them bare; drifts re-form as it snows. The other GPU layers (water, terrain) are not part of it. `tests/save.rs` shows the round trip; `weathered_town` writes and loads a save with `ELEMENTS_SAVE` and `ELEMENTS_LOAD`.
 
+**A forecast.** `WeatherDirector::forecast(&climate, &location, &clock, hours)` returns the preset the scheduler will choose for each of the next `hours` game hours, by running the same seeded chain forward without changing anything: the weather then comes as forecast (with the same climate and location), whatever is forced meanwhile, since the chain keeps stepping underneath a force. A morning board can say that a storm comes this afternoon. `SurfaceWeathering` compares with `==` (its private snowpack state included), so a save that holds it can derive `PartialEq`.
+
 ## Plays well with
 
 - **`bevy_flora`** 0.46 (feature `flora`): add `ElementsFloraPlugin` next to `FloraPlugin`. It writes `FloraWind` (direction, strength = 10 m speed / 20 m/s, turbulence, gust strength, and every `WindGust` as a `GustFront`: speed and width in metres, which `FloraUnits` scales to the world, the origin in world units), `FloraSeason` (autumn, leaf fall, blossom, snow = `SurfaceWeathering::snow_cover`) and `FloraWetness`. Trees and their sway stay `bevy_flora`'s. A game on a git revision of `bevy_flora` patches it (`[patch.crates-io]`) so both crates use one copy.
@@ -412,7 +428,7 @@ Precipitation at High (150 000 particles), 3840 × 2160, the worst case of 25 mm
 | none | 0.028 ms | 0.126 ms | 0.021 ms | 0.175 ms |
 | 256 (the most uploaded) | 0.227 ms | 0.126 ms | 0.021 ms | 0.374 ms |
 
-The budget is 0.4 ms. The simulation tests every uploaded blocker for every particle, so its cost is the blocker count times the particle count.
+The budget is 0.4 ms. The simulation tests every uploaded blocker for every particle, so its cost is the blocker count times the particle count. `PrecipitationLook::readable()` costs nothing measurable: `elements_precip_draw` in a `Thunderstorm` read 0.123 and 0.115 ms against 0.122 and 0.126 ms at the defaults (two runs each, the GPU at 1695–1755 MHz).
 
 Clouds at 1920 × 1080, PartlyCloudy (the scene the clouds note fixes for the bench), minimum over the diagnostic history with the GPU at 1800 MHz; the 128³ + 32³ noise volumes are generated once at startup (0.201 ms):
 
@@ -496,10 +512,11 @@ Native (Vulkan, Metal, DX12) and wasm WebGPU. WebGL2 is unsupported: the simulat
 - [A game keeps its own look and lights](docs/research/integration.md) — Patry 2021 (art direction over a physical sky), Schneider & Vos 2015, Tatarchuk 2006; the camera's dressing flags, `CelestialSettings`, the public globals buffer.
 - [The snowpack in a save, and a snow season](docs/research/snow-season.md) — Jennings et al. 2018 (the rain–snow threshold varies from −0.4 to 2.4 °C), Patry 2021; `SnowSeason`, `Weather::snow_possible`, the restored pack and the seeded cover maps.
 - [Sky light and reflections under cloud](docs/research/sky-light.md) — Hillaire 2016 (clouds in every view, the environment map included), Lagarde & de Rousiers 2014 (the distant light probe, refreshed with the weather), Unreal's real-time sky light capture, Bauer 2019 (RDR2), Karis 2013 (split sum), Kittler & Darula 2014 (the graded overcast); the clouds' sky probe.
+- [A game's look for rain and snow](docs/research/precipitation-look.md) — Tatarchuk 2006 (artist-set rain direction and speed, random particle size), Lagarde 2012 (Remember Me: rain stronger than physics where it would vanish), Wang & Wade 2004, Garg & Nayar 2007, Tiira et al. 2016 (snowflake size distributions); `PrecipitationLook`, and the scheduler's forecast.
 
 ## Examples
 
-Run with `cargo run --release --example <name>`. Every example takes `ELEMENTS_FRAMES=N` (exit after N frames), `ELEMENTS_SHOT=/path.png` (screenshot on the last frame) and `ELEMENTS_UNITS=3.2808` (a world in feet: `ElementsUnits`, with the camera and its planes scaled). Keys: WASD + Q/E to fly (Shift ×5), right mouse to look, `[`/`]` time scale, `T` +1 hour, `1`–`0` force a preset, `R` release.
+Run with `cargo run --release --example <name>`. Every example takes `ELEMENTS_FRAMES=N` (exit after N frames), `ELEMENTS_SHOT=/path.png` (screenshot on the last frame), `ELEMENTS_UNITS=3.2808` (a world in feet: `ElementsUnits`, with the camera and its planes scaled) and `ELEMENTS_PRECIPITATION=readable` (`PrecipitationLook::readable()`). Keys: WASD + Q/E to fly (Shift ×5), right mouse to look, `[`/`]` time scale, `T` +1 hour, `1`–`0` force a preset, `R` release.
 
 | Example | Shows |
 |---|---|
@@ -513,7 +530,7 @@ Run with `cargo run --release --example <name>`. Every example takes `ELEMENTS_F
 | `rain` | Rain over a shelter with a blocker roof; `ELEMENTS_PRESET=Thunderstorm`, `ELEMENTS_HOUR=23` |
 | `snowfall` | The `Snow` preset (or `ELEMENTS_PRESET=Blizzard`); `ELEMENTS_HOUR` holds an hour, `ELEMENTS_GROW_HOURS` grows the snow before the first frame |
 | `weathered_town` | Buildings in `WeatheredMaterial` cycling Rain then Snow, a pavilion with a `PrecipitationBlocker` roof over a sheltered (`exposure` 0) box; `ELEMENTS_PRESET`, `ELEMENTS_HOUR`, `ELEMENTS_SCALE` (clock speed, default 300), the clock keeps running because wetness and snow only build with game time; `ELEMENTS_CALENDAR=november` (the scheduler's cool-temperate November from 1 November with a `SnowSeason` from 14 November; `ELEMENTS_SNOW_SEASON=off` drops it), `ELEMENTS_EV100` (a fixed exposure for time-lapse stills), and with `--features serde` `ELEMENTS_SAVE=path` (a save on the last frame) and `ELEMENTS_LOAD=path` |
-| `isometric` | A town under an orthographic camera 1500 m back and 30° down that follows a walker (`ElementsFocus::Entity`), cycling Rain, Thunderstorm, Snow and PartlyCloudy; `ELEMENTS_PRESET`, `ELEMENTS_HOUR`, `ELEMENTS_SCALE` (clock speed, default 30), `ELEMENTS_ZOOM` (view height, m, default 40), `ELEMENTS_LOOK=game` (the game's own key light, ambient and clear colour under `ElementsCamera::bare()` and `CelestialSettings` off, the crate's weather on top) |
+| `isometric` | A town under an orthographic camera 1500 m back and 30° down that follows a walker (`ElementsFocus::Entity`), cycling Rain, Thunderstorm, Snow and PartlyCloudy; `ELEMENTS_PRESET`, `ELEMENTS_HOUR`, `ELEMENTS_SCALE` (clock speed, default 30), `ELEMENTS_ZOOM` (view height, m, default 40), `ELEMENTS_PITCH` (degrees below the horizon, default 30), `ELEMENTS_PRECIPITATION=readable` (with `ELEMENTS_LOOK=game` the streaks are also brightened against the game's key light), `ELEMENTS_LOOK=game` (the game's own key light, ambient and clear colour under `ElementsCamera::bare()` and `CelestialSettings` off, the crate's weather on top) |
 | `flora_wind` | `bevy_flora` trees in this crate's wind, season and rain (`--features flora`) |
 | `flood` | A V-shaped valley, a 50 m³/s `WaterSource` and rain (`ELEMENTS_PRESET=Clear` for another sky), drawn by `WaterPlugin`; prints `Environment::water_depth` at a marker 100 m downstream every second; `G`/`H` double and halve the simulation speed |
 | `lake` | A 60 m³/s `WaterSource` fills a round basin and a system closes the tap when it is full: the water as a lake; `G`/`H` double and halve the simulation speed |

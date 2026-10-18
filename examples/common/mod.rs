@@ -110,6 +110,10 @@ impl Plugin for ExampleHarness {
                 units_per_metre: units(),
             });
         }
+        // `ELEMENTS_PRECIPITATION=readable`: the stylised rain and snow for far-off cameras.
+        if std::env::var("ELEMENTS_PRECIPITATION").as_deref() == Ok("readable") {
+            app.insert_resource(PrecipitationLook::readable());
+        }
         app.insert_resource(RunConfig {
             frames,
             shot,

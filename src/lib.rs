@@ -56,8 +56,8 @@ pub use wind::{
 
 // Precipitation.
 pub use precipitation::{
-    MAX_PRECIPITATION_BLOCKERS, PRECIPITATION_BOX_M, PrecipitationBlocker, PrecipitationPlugin,
-    PrecipitationState,
+    MAX_PRECIPITATION_BLOCKERS, PRECIPITATION_BOX_M, PrecipitationBlocker, PrecipitationLook,
+    PrecipitationPlugin, PrecipitationState,
 };
 
 // Fog.

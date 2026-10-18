@@ -49,6 +49,12 @@ struct DrawParams {
     // x: world units per metre. The particles are in metres; the view's matrices and depth are
     // in world units. yzw: unused.
     units: vec4<f32>,
+    // The game's look (`PrecipitationLook`, docs/research/precipitation-look.md), draw-only: x the
+    // rain streak's fall scale, y its wind scale, z the flakes' log-normal size spread σ, w the
+    // smallest flake half width, px.
+    look: vec4<f32>,
+    // rgb: multiplier on a rain streak's radiance. a: on its opacity.
+    tint: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -71,9 +77,9 @@ const DUST_ALPHA: f32 = 0.5;
 // A flake's image is its disc stretched by at most this many diameters along the relative
 // velocity (Deviation 17 of the research note): at most 2:1 head to tail.
 const SNOW_MAX_STRETCH: f32 = 1.0;
-// Half width, px, below which a flake's image does not shrink: a soft blob (a rain streak's is
-// half a pixel).
-const SNOW_MIN_HALF_WIDTH: f32 = 1.0;
+// Half width, px, below which a dust sprite's image does not shrink: a soft blob (a rain
+// streak's is half a pixel, a flake's `draw.look.w`).
+const DUST_MIN_HALF_WIDTH: f32 = 1.0;
 const SPLASH_ALPHA: f32 = 0.6;
 // Under an orthographic view (view-anchor.md Deviation 3): a rain streak is drawn over this many
 // exposures, so the short fall of one frame reads as a streak and not a dash, and at this
@@ -149,6 +155,16 @@ fn fog_transmittance(p: vec3<f32>) -> f32 {
     return exp(-draw.ambient.y * distance(p * draw.units.x, view.world_position) / draw.units.x);
 }
 
+/// A flake's drawn size factor `exp(σ z − σ²/2)`: a log-normal of mean 1 about its own size, `z`
+/// the standard normal Box–Muller makes of the particle's own hash (salt 5, used by no other
+/// draw), clamped to ±2 so no flake grows past e^{2σ} of its size into a blur. Exactly 1 at σ = 0.
+/// `look::flake_size_factor` mirrors it.
+fn flake_size_factor(index: u32, epoch: u32, sigma: f32) -> f32 {
+    let u = particle_rand(index, epoch, 5u);
+    let z = clamp(sqrt(-2.0 * log(u.x)) * cos(2.0 * PI * u.y), -2.0, 2.0);
+    return exp(sigma * z - 0.5 * sigma * sigma);
+}
+
 fn corner_of(vi: u32) -> u32 {
     var corners = array<u32, 6>(0u, 1u, 2u, 2u, 1u, 3u);
     return corners[vi];
@@ -192,6 +208,10 @@ fn particle_vertex(
     if kind == 0u && orthographic() {
         streak *= ORTHOGRAPHIC_STREAK_EXPOSURES;
     }
+    if kind == 0u {
+        // The game's look: the fall and the wind drift scaled apart (`look::styled_streak`).
+        streak = vec3<f32>(streak.x * draw.look.y, streak.y * draw.look.x, streak.z * draw.look.y);
+    }
     if kind != 0u {
         streak *= min(1.0, SNOW_MAX_STRETCH * diameter_m / max(length(streak), 1e-6));
     }
@@ -210,16 +230,21 @@ fn particle_vertex(
     }
     let z = 0.5 * (head.w + tail.w);
 
-    // Half width in px: the drop's own, but at least half a pixel (a flake's `SNOW_MIN_HALF_WIDTH`);
-    // opacity follows the true coverage, relative to that minimum, so a sub-pixel drop fades as
-    // 1/z (Garg & Nayar 2007, Eqs. 21–22). An orthographic view has no distance at which a drop
-    // shrinks: its pixel size is the zoom the game chose, and the coverage fade would hide the
-    // precipitation at every zoom a strategy view uses, so a flake keeps its minimum width at
-    // full opacity and a drop at `ORTHOGRAPHIC_RAIN_COVERAGE` (view-anchor.md Deviation 3).
-    let min_half_width = select(SNOW_MIN_HALF_WIDTH, 0.5, kind == 0u);
+    // Half width in px: the drop's own, but at least half a pixel (a flake's `draw.look.w`, a dust
+    // sprite's `DUST_MIN_HALF_WIDTH`); opacity follows the true coverage, relative to that minimum,
+    // so a sub-pixel drop fades as 1/z (Garg & Nayar 2007, Eqs. 21–22). An orthographic view has
+    // no distance at which a drop shrinks: its pixel size is the zoom the game chose, and the
+    // coverage fade would hide the precipitation at every zoom a strategy view uses, so a flake
+    // keeps its minimum width at full opacity and a drop at `ORTHOGRAPHIC_RAIN_COVERAGE`
+    // (view-anchor.md Deviation 3). A flake's drawn size then spreads about its own by the look's
+    // `flake_size_factor`.
+    let min_half_width = select(select(DUST_MIN_HALF_WIDTH, draw.look.w, kind == 1u), 0.5, kind == 0u);
     // The drop's diameter is in metres, `focal_px / z` is pixels per world unit.
     let true_half_width = 0.5 * diameter_m * u * focal_px / z;
-    let half_width = max(true_half_width, min_half_width);
+    var half_width = max(true_half_width, min_half_width);
+    if kind == 1u {
+        half_width *= flake_size_factor(ii, epoch, draw.look.z);
+    }
     var coverage = min(1.0, true_half_width / min_half_width);
     if orthographic() {
         coverage = select(1.0, ORTHOGRAPHIC_RAIN_COVERAGE, kind == 0u);
@@ -251,12 +276,12 @@ fn particle_vertex(
     var radiance: vec3<f32>;
     var opacity: f32;
     if kind == 0u {
-        radiance = vec3<f32>(sky / PI
+        radiance = draw.tint.rgb * (sky / PI
             + draw.sun.w * henyey_greenstein(dot(to_sun, ray), RAIN_PHASE_G)
             + draw.moon.w * henyey_greenstein(dot(to_moon, ray), RAIN_PHASE_G));
         // Tatarchuk §3.6.2: rain turns more transparent under a flash.
         let flash_share = flash / max(sky, 1e-6);
-        opacity = min(draw.rain.y * coverage, 0.9) * (1.0 - 0.5 * flash_share);
+        opacity = min(draw.rain.y * coverage * draw.tint.a, 0.9) * (1.0 - 0.5 * flash_share);
     } else {
         // A flake or a dust sprite scatters diffusely, with its own albedo.
         let albedo = select(draw.dust.xyz, vec3<f32>(draw.snow.x), kind == 1u);
