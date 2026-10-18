@@ -931,3 +931,57 @@ Daytime regression check (MAE against before, same frames): every noon and terra
 3. **Flat terrain shading** (runner-up): `hills` reads uniform green at noon, `mountains` pale at 16 h.
 4. **Night thunderstorm rain** (`storm.png`): flash-lit streaks read as white static over a black sky.
 5. **Save/restore of the GPU layers** (carried) and the cosmetic set (`STRIKE_LEAD`, sparse roof splashes, nadir foam, flood marker, erosion faceting, status-line clipping, the composite's pillar edge step).
+
+## Iteration 13 — 2026-10-17 — clouds take the colour of the light that fills them
+
+**Commits:** `9ec2c62` (research note, `clouds.md` Deviation 30), `8de42a5` (implementation + `tests/gpu_cloud_ambient.rs`; the note's Deviation 30 and Validation 22 rewritten to the shipped model), `d3af2cf` (README, CHANGELOG, regenerated stills), this log. Merged through a pull request. **Sibling repos:** none. **Not released.**
+
+### What changed, and why it ranked first
+
+The clouds' ambient (the diffuse light on their shaded sides) was `vec3(ambient)`, a neutral grey scalar whatever the sky, so after sunset every cloud was grey cardboard against a violet or navy sky (civil twilight base (57, 57, 59) under a violet sky; nautical twilight (76, 77, 77) against navy (49, 52, 68)). Backlog item 1 of iteration 12. The ambient now takes the chromaticity of the diffuse light it stands for: the clear sky's irradiance from the camera's atmosphere environment map (16 Fibonacci directions over the upper hemisphere, divided by the cloud factor the sun's light carries so the sky above the layer is undimmed, plus the night-sky background) plus the share of the light's beam the cloud above the sample has scattered, $E_\odot \hat l_y (1 - e^{-\tau_l})$. Its luminance is unchanged.
+
+Round 1 (sky colour alone) gave royal-blue night clouds in a brown-black sky: the cube held a moonlit atmosphere negligible next to the airglow floor; adding the floor fixed it. Round 2 passed the twilight frames but the GPU veil test failed (far-row tint 0.249 vs 0.126) and the horizon capture showed why: the noon `Overcast` deck turned periwinkle above a white band, because deep in a thick deck only the ambient is left. Round 3 adds the scattered sun, the physical reason behind Hillaire's "slightly blue" clouds and his artists' desaturation knob, which the model therefore does not need.
+
+### Candidates ranked
+
+| # | Candidate | Category | Note |
+|---|---|---|---|
+| 1 | **Grey cloud ambient against coloured twilight skies** | 1 (wrong colour for the light) | picked |
+| 2 | View-independent exposure cap (anti-solar sky darker than its clouds at −8°) | 2 | runner-up, owns the nautical contrast |
+| 3 | `tt_mtn_pc_aerial` 2-px dark line at y ≈ 298 | 1 (cosmetic) | |
+| 4 | Overcast at −4° a featureless flat deck | 2 | |
+| 5 | Rain at noon: a uniform near-sky wall | 2 | |
+
+### Sources
+
+Hillaire 2016 §5.5.1 (ambient from Frostbite's sky probe; desaturation because clouds came out slightly blue; single-colour ambient listed as the first thing to improve), Schneider & Vos 2015 (`s2015-advances-ppt-944-mb-pdf-5-mb-2`, ll. 1218–1240: ambient from the sky by time of day), Bevy 0.20 `atmosphere/environment.wesl` (the cube is `sample_sky_view_lut`, absolute radiance before exposure).
+
+### Critique and verdicts (`/tmp/i13/critique.md`; before `/tmp/i13/before/`, after `/tmp/i13/after/`, horizon `/tmp/i13/hz/`)
+
+| Feature | Evidence | Verdict |
+|---|---|---|
+| Civil twilight (−4.2°), PartlyCloudy and Overcast | `wt_*_sun_19.2`, `wt_Overcast_away_19.2` | GREAT: violet-grey base (62, 55, 62), rose-grey deck (136, 126, 135) |
+| Nautical twilight (−8.1°) away from the sun | `wt_PartlyCloudy_away_19.6` | GREAT: mauve (81, 74, 83) from the glow that lights it; its brightness against the navy sky is the runner-up's |
+| Golden hour (+1.8°) | `wt_PartlyCloudy_sun_18.6` | GREAT: warm taupe body (74, 59, 56) under the orange rim |
+| Noon PartlyCloudy, Overcast, Snow, horizon | `r3_day.png`, `hz/sheet3.png` | unchanged neutral decks (round 2's blue overcast fixed) |
+| Night (crescent moon) | `wt_*_21.2` | the night sky's hue (14, 11, 9) |
+| Continuity | dusk lapse 19:00 → 21:48 (2026-06-15), 20 consecutive frames at 20:30 | monotone through the sun→moon handover, ≤ 1 DN a frame |
+
+### Verification
+
+- New test `tests/gpu_cloud_ambient.rs::the_deck_takes_the_colour_of_its_light`: dusk red/green 1.26 vs 1.02 neutral; noon blue/red 1.05× neutral, bounded to (1.0, 1.1) (the sky-colour-only build gave 1.27×); fails on `162c33b` (identical decks with and without the map). Validation 20 (veil) holds: far-row tint differences ≤ 0.036.
+- Gates: `cargo build --release`, `cargo test` (0 failures), `cargo build --examples --all-features`, clippy `-D warnings`, `cargo doc` `-D warnings`, wasm32 — clean. GPU, one process per file/module: every `tests/gpu_*.rs` file and lib `clouds` (10), `terrain` (8), `cover` (7), `dust` (6), `voxel` (1), `the_horizon_sky` — all pass.
+- Performance (`bench_elements`, `ELEMENTS_QUALITY=low ELEMENTS_TERRAIN=none ELEMENTS_PRESET=PartlyCloudy`, 1920×1080, P2 at 1740–1860 MHz logged in the same shell, two alternating rounds): `elements_clouds_march` min 0.190 / 0.184 ms before, 0.184 / 0.189 ms after; total 0.598 / 0.587 against 0.573 / 0.590 ms. No measurable cost. (The shared card still holds ~22 GB for other tenants; High/4K benches do not fit.)
+- Stills: `docs/cloud_sunset.png`, `twilight.png`, `belt_of_venus.png`, `sunset.png` regenerated at their recovered poses (the base build reproduces the old stills to MAE ≤ 0.0008); `tour.gif` (noon) unchanged by this iteration.
+
+### Next feature (user direction, 2026-10-17)
+
+Asked to review the crate for the single feature most useful to game developers: **interactive ground trails** — feet, wheels and bodies pressing tracks into snow, sand and mud that new snowfall, wind and time erase. Every interaction the crate offers runs one way (environment → game: `Environment`, `WeatheredMaterial`, `PrecipitationBlocker` shelter); nothing a character does marks the world, and the terrain's 4 m cells cannot hold a footprint. Literature pulled for it: Sumner, O'Brien & Hodgins 1999 (arXiv 2302.08683), Alvarado et al. 2022 (`10.3389/frvir.2022.801856`), Su et al. 2023 (`10.1145/3610548.3618159`), Goswami 2024 survey (`10.1111/cgf.15059`), Hanák 2021 (MUNI thesis, surveys AC III, Batman, Rise of the Tomb Raider, HZD Frozen Wilds, TLOU II), Svensson 2019 (Umeå thesis), Barré-Brisebois 2014 (GDC), CRREL Report 90-9 (shallow-snow sinkage), Wong's Bekker table via NASA TM-20250006958, Tatarchuk 2006 POM (`s2006-advances-materials-10`).
+
+### Top 5 remaining items, ranked
+
+1. **Interactive ground trails** (the next iteration, above).
+2. **A view-dependent exposure cap** (carried): meter the brightest sky in the frame.
+3. **Flat terrain shading** (carried).
+4. **Night thunderstorm rain** reads as white static (carried).
+5. **Save/restore of the GPU layers** and the cosmetic set (the aerial's 2-px line at y ≈ 298, the composite's pillar edge step, `STRIKE_LEAD`, sparse roof splashes).
