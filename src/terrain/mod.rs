@@ -662,6 +662,7 @@ fn ensure_terrain(
                 cells: cells_handle,
                 cover: NO_TERRAIN,
                 cloud_shadow: None,
+                trail: None,
             },
         });
         // Hidden until the first selection puts a patch in a slot.

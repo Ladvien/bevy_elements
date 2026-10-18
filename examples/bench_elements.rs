@@ -17,7 +17,9 @@
 //! `none` is the flat test scene with neither, and `lake` a 256 m plain with a round basin that a
 //! 200 m³/s source fills, viewed from 45 m up so the water covers half the frame
 //! (`main_transparent_pass_3d` then holds both water passes; `ELEMENTS_WATER=off` leaves the
-//! water rendering out to subtract it). `dunes` runs the aeolian transport
+//! water rendering out to subtract it). `ELEMENTS_IMPRINTS=16` drives that many wheel imprints
+//! round the camera so `elements_trails` stamps every frame; `ELEMENTS_TRAILS=off` leaves the
+//! trails out (their parallax in `main_opaque_pass_3d`). `dunes` runs the aeolian transport
 //! (`elements_aeolian_*`, 20 steps a second) in a forced `DustStorm`, unless `ELEMENTS_PRESET`
 //! says otherwise. Bevy's main and depth passes the scene is drawn in
 //! are printed on their own line.
@@ -43,7 +45,7 @@ const WARMUP_FRAMES: u32 = 240;
 const AEOLIAN_FRAME_SHARE: f64 = 20.0 / 60.0;
 
 /// The crate's GPU passes, by diagnostic span name.
-const PASSES: [&str; 20] = [
+const PASSES: [&str; 21] = [
     "elements_wind",
     "elements_fog",
     "elements_clouds_noise",
@@ -64,6 +66,7 @@ const PASSES: [&str; 20] = [
     "elements_aeolian_avalanche",
     "elements_terrain",
     "elements_water_normals",
+    "elements_trails",
 ];
 
 /// Bevy's own passes the terrain is drawn in, printed on a separate line.
@@ -88,10 +91,16 @@ fn main() {
         _ => ElementsQuality::High,
     };
     // `ELEMENTS_WATER=off` leaves the water rendering out, for the cost of the rest of the scene.
+    // `ELEMENTS_TRAILS=off` leaves the trails out, for the cost of their parallax in the scene.
     let elements = if std::env::var("ELEMENTS_WATER").as_deref() == Ok("off") {
         ElementsPlugins.build().disable::<WaterPlugin>()
     } else {
         ElementsPlugins.build()
+    };
+    let elements = if std::env::var("ELEMENTS_TRAILS").as_deref() == Ok("off") {
+        elements.disable::<TrailsPlugin>()
+    } else {
+        elements
     };
     App::new()
         .add_plugins((
@@ -119,7 +128,7 @@ fn main() {
                 .with_time_scale(60.0),
         )
         .add_systems(Startup, setup)
-        .add_systems(Update, report)
+        .add_systems(Update, (report, drive_imprints))
         .run();
 }
 
@@ -253,6 +262,42 @@ fn setup(
                 angle.sin() * radius,
             ),
         ));
+    }
+    // Imprints circling the camera at 4 m/s: each carves its swept path every frame.
+    let imprints: usize = std::env::var("ELEMENTS_IMPRINTS")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0);
+    for i in 0..imprints {
+        commands.spawn((
+            BenchImprint(i as f32),
+            Imprint::new(Vec2::new(0.1, 0.16), 3400.0),
+            Transform::from_xyz(0.0, -1000.0, 0.0),
+        ));
+    }
+}
+
+/// An imprint of the bench, by index.
+#[derive(Component)]
+struct BenchImprint(f32);
+
+/// Every bench imprint on its own circle round the camera's XZ, on the ground.
+fn drive_imprints(
+    env: Environment,
+    time: Res<Time<Virtual>>,
+    mut imprints: Query<(&BenchImprint, &mut Transform)>,
+) {
+    let t = time.elapsed_secs();
+    for (imprint, mut transform) in &mut imprints {
+        let radius = 3.0 + 0.3 * imprint.0;
+        let a = imprint.0 * 2.399_963 + 4.0 * t / radius;
+        let xz = Vec2::new(a.cos(), a.sin()) * radius;
+        let Some(ground) = env.terrain_height(xz) else {
+            continue;
+        };
+        let y = ground + env.snow_depth(xz).unwrap_or(0.0) - 0.05;
+        *transform = Transform::from_xyz(xz.x, y, xz.y)
+            .looking_to(Vec3::new(-a.sin(), 0.0, a.cos()), Vec3::Y);
     }
 }
 

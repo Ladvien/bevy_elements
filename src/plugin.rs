@@ -24,6 +24,7 @@ use crate::lightning::LightningPlugin;
 use crate::precipitation::PrecipitationPlugin;
 use crate::query::EnvironmentSnapshot;
 use crate::terrain::TerrainPlugin;
+use crate::trails::TrailsPlugin;
 use crate::weathered::WeatheredPlugin;
 use crate::wind::{WindPlugin, WindState};
 
@@ -49,6 +50,7 @@ impl PluginGroup for ElementsPlugins {
             .add(WaterPlugin)
             .add(GroundCoverPlugin)
             .add(DustPlugin)
+            .add(TrailsPlugin)
             .add(FogPlugin)
             .add(CloudPlugin)
             .add(LightningPlugin)
@@ -188,6 +190,17 @@ impl ElementsQuality {
             Self::Ultra => 300_000,
         }
     }
+
+    /// The trail field's window: texels a side and the texel edge (m). Rise of the Tomb Raider's
+    /// 1024² × 4 cm is the reference (`docs/research/trails.md`).
+    pub fn trail_window(self) -> (u32, f32) {
+        match self {
+            Self::Low => (512, 0.08),
+            Self::Medium => (1024, 0.06),
+            Self::High => (1024, 0.05),
+            Self::Ultra => (2048, 0.03),
+        }
+    }
 }
 
 /// The camera the camera-relative simulations follow this frame.
@@ -254,6 +267,9 @@ impl Plugin for ElementsGpuCorePlugin {
         // The terrain grid's placement, imported by wind, precipitation, cover and water
         // shaders whether or not `TerrainPlugin` is added.
         load_shader_library!(app, "terrain/common.wesl");
+        // The trail field's sampling and parallax, imported by the terrain and ground materials
+        // whether or not `TrailsPlugin` is added.
+        load_shader_library!(app, "trails/surface.wesl");
         app.add_plugins(ReadbackPlugin).add_observer(dress_camera);
     }
 }

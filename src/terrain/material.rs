@@ -14,6 +14,8 @@ use super::lod::{LodConfig, MAX_LEVELS};
 use super::{TerrainParamsGpu, TerrainState};
 use crate::clouds::CloudShadows;
 use crate::cover::{CoverState, WetnessSettings};
+use crate::trails::TrailState;
+use crate::trails::model::MARCH_BOUND_M;
 use crate::weathered::ElementsGlobals;
 
 /// A one-cell `terrain_cells` stand-in for shaders that bind the terrain before one exists. Its
@@ -51,6 +53,12 @@ pub struct TerrainMaterialParams {
     pub(crate) cover: Vec4,
     /// Phase of each of the four ripple layers, 0–1 (zero while it does not rain).
     pub(crate) ripple: Vec4,
+    /// The trail field's window: x texel edge (m), y texels a side, z 1 when the field is bound,
+    /// w the parallax march's bound on |h| (m).
+    pub(crate) trail: Vec4,
+    /// x: the share of the light on a horizontal surface carried by the sun or moon's beam, which
+    /// a trail's self-shadow removes.
+    pub(crate) trail_light: Vec4,
 }
 
 /// The extension that turns a `StandardMaterial` into the terrain's displaced, layer-blended
@@ -68,6 +76,10 @@ pub struct TerrainExtension {
     #[texture(103)]
     #[sampler(104)]
     pub(crate) cloud_shadow: Option<Handle<Image>>,
+    /// The trail field (`TrailState::field`), sampled by world XZ.
+    #[texture(105)]
+    #[sampler(106)]
+    pub(crate) trail: Option<Handle<Image>>,
 }
 
 const RENDER_SHADER: &str = "embedded://bevy_elements/terrain/render.wesl";
@@ -116,6 +128,10 @@ pub struct GroundParams {
     /// x: `column_gate_m`, the depth below the column top where snow, wetness and puddles stop
     /// (m); `NO_COLUMN_GATE` for none.
     pub(crate) gate: Vec4,
+    /// As `TerrainMaterialParams::trail`.
+    pub(crate) trail: Vec4,
+    /// As `TerrainMaterialParams::trail_light`.
+    pub(crate) trail_light: Vec4,
 }
 
 /// `GroundParams::gate.x` for a ground that is not gated by depth below the column top.
@@ -131,6 +147,8 @@ impl Default for GroundParams {
             cover: Vec4::ZERO,
             ripple: Vec4::ZERO,
             gate: Vec4::new(NO_COLUMN_GATE, 0.0, 0.0, 0.0),
+            trail: Vec4::ZERO,
+            trail_light: Vec4::ZERO,
         }
     }
 }
@@ -156,6 +174,10 @@ pub struct GroundExtension {
     #[texture(103)]
     #[sampler(104)]
     pub(crate) cloud_shadow: Option<Handle<Image>>,
+    /// The trail field (`TrailState::field`), sampled by world XZ.
+    #[texture(105)]
+    #[sampler(106)]
+    pub(crate) trail: Option<Handle<Image>>,
 }
 
 impl Default for GroundExtension {
@@ -165,6 +187,7 @@ impl Default for GroundExtension {
             terrain: NO_TERRAIN,
             cover: NO_TERRAIN,
             cloud_shadow: None,
+            trail: None,
         }
     }
 }
@@ -256,6 +279,19 @@ fn cover_inputs(
     )
 }
 
+/// The trail part of both uniforms: the window (texel edge, texels a side, 1 when bound, the
+/// march's bound on |h|), the light's direct share, and the field.
+fn trail_inputs(trails: Option<&TrailState>, live: bool) -> (Vec4, Vec4, Option<Handle<Image>>) {
+    match trails {
+        Some(t) if live => (
+            Vec4::new(t.texel_m, t.texels as f32, 1.0, MARCH_BOUND_M),
+            Vec4::new(t.direct_share, 0.0, 0.0, 0.0),
+            Some(t.field.clone()),
+        ),
+        _ => (Vec4::ZERO, Vec4::ZERO, None),
+    }
+}
+
 /// Keep every terrain and ground material's uniform, buffer and shadow map current. Writes an
 /// asset only when something changed, so a still scene re-prepares nothing.
 #[allow(clippy::too_many_arguments)]
@@ -269,6 +305,7 @@ pub(super) fn update_materials(
     mut terrain_materials: ResMut<Assets<TerrainMaterial>>,
     mut ground_materials: ResMut<Assets<GroundMaterial>>,
     water: Option<Res<crate::hydrology::WaterSettings>>,
+    trails: Option<Res<TrailState>>,
 ) {
     let (shadow, light, map) = shadow_inputs(shadows.as_deref());
     let absorption = water.map_or(Vec4::ZERO, |w| w.absorption.extend(w.refractive_index));
@@ -284,6 +321,7 @@ pub(super) fn update_materials(
         wetness.as_deref(),
         globals.as_deref(),
     );
+    let (trail_window, trail_light, field) = trail_inputs(trails.as_deref(), live);
 
     if let (Some(state), Some(config)) = (state.as_ref(), runtime.lod.as_ref()) {
         let (lod, top) = lod_uniform(config);
@@ -296,6 +334,8 @@ pub(super) fn update_materials(
             absorption,
             cover: cover_params,
             ripple,
+            trail: trail_window,
+            trail_light,
         };
         let ids: Vec<_> = terrain_materials.iter().map(|(id, _)| id).collect();
         for id in ids {
@@ -306,13 +346,15 @@ pub(super) fn update_materials(
             if (e.params != params
                 || e.cells != state.cells
                 || e.cover != cover_cells
-                || e.cloud_shadow != map)
+                || e.cloud_shadow != map
+                || e.trail != field)
                 && let Some(mut material) = terrain_materials.get_mut(id)
             {
                 material.extension.params = params;
                 material.extension.cells = state.cells.clone();
                 material.extension.cover = cover_cells.clone();
                 material.extension.cloud_shadow = map.clone();
+                material.extension.trail = field.clone();
             }
         }
     }
@@ -325,6 +367,8 @@ pub(super) fn update_materials(
         cover: cover_params,
         ripple,
         gate: GroundParams::default().gate,
+        trail: trail_window,
+        trail_light,
     };
     let ids: Vec<_> = ground_materials.iter().map(|(id, _)| id).collect();
     for id in ids {
@@ -340,13 +384,15 @@ pub(super) fn update_materials(
         if (e.params != params
             || e.terrain != cells
             || e.cover != cover_cells
-            || e.cloud_shadow != map)
+            || e.cloud_shadow != map
+            || e.trail != field)
             && let Some(mut material) = ground_materials.get_mut(id)
         {
             material.extension.params = params;
             material.extension.terrain = cells.clone();
             material.extension.cover = cover_cells.clone();
             material.extension.cloud_shadow = map.clone();
+            material.extension.trail = field.clone();
         }
     }
 }
