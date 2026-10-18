@@ -454,18 +454,18 @@ fn precipitation_map(
     }
 }
 
-/// The cameras whose distance fog the crate drives, with what fixes their falloff.
+/// The cameras whose distance fog the crate may drive, with what fixes their falloff.
 type FogCameras<'w, 's> = Query<
     'w,
     's,
     (
         Entity,
+        &'static ElementsCamera,
         &'static mut DistanceFog,
-        &'static Exposure,
+        Option<&'static Exposure>,
         Option<&'static Projection>,
         &'static GlobalTransform,
     ),
-    With<ElementsCamera>,
 >;
 
 fn update_distance_fog(
@@ -485,8 +485,12 @@ fn update_distance_fog(
         cloud_light(weather.cloud_cover, shadows.as_deref()),
     ) / std::f32::consts::PI;
     let hue = fog_hue(sun.altitude_deg, weather.dust);
-    for (entity, mut fog, exposure, projection, transform) in &mut cameras {
-        let brightness = luminance * exposure.exposure();
+    for (entity, dressing, mut fog, exposure, projection, transform) in &mut cameras {
+        if !dressing.distance_fog {
+            continue;
+        }
+        let exposure = exposure.copied().unwrap_or_default().exposure();
+        let brightness = luminance * exposure;
         let c = hue * brightness;
         fog.color = Color::linear_rgb(c.x, c.y, c.z);
         fog.falloff = match projection {

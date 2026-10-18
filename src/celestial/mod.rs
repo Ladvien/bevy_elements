@@ -73,6 +73,11 @@ pub(crate) struct CelestialFrame {
     pub moon_angular_diameter_deg: f32,
     /// Illuminance of the moon outside the atmosphere, lx.
     pub moon_lux: f32,
+    /// Illuminance the sun's light carries (the clear light through twilight and the cloud's
+    /// mean beam), lx: what the crate's `Sun` light is set to, computed with or without it.
+    pub sun_light_lux: f32,
+    /// Illuminance the moon's light carries, lx: what the crate's `Moon` light is set to.
+    pub moon_light_lux: f32,
 }
 
 impl Default for CelestialFrame {
@@ -82,6 +87,32 @@ impl Default for CelestialFrame {
             ecliptic_north: Vec3::Y,
             moon_angular_diameter_deg: 0.5,
             moon_lux: 0.0,
+            sun_light_lux: 0.0,
+            moon_light_lux: 0.0,
+        }
+    }
+}
+
+/// What [`CelestialPlugin`] puts in the world. Insert it first to override; both default on.
+///
+/// [`SunState`] (the sun and moon, their altitudes, the moon's phase) is kept current either way,
+/// so a game that lights its scene itself still has the sun for `SurfaceWeathering`'s drying and
+/// `Environment::is_daylight` (`docs/research/integration.md`).
+#[derive(Resource, Clone, Copy, Debug, Reflect)]
+pub struct CelestialSettings {
+    /// Spawn the [`Sun`] and [`Moon`] `DirectionalLight`s and drive every light carrying those
+    /// markers (direction, illuminance, shadows, cascades). Off: no light is spawned and none is
+    /// touched, a game's own `Sun`-marked light included.
+    pub lights: bool,
+    /// Spawn the moon disc and the star field.
+    pub sky: bool,
+}
+
+impl Default for CelestialSettings {
+    fn default() -> Self {
+        Self {
+            lights: true,
+            sky: true,
         }
     }
 }
@@ -92,12 +123,14 @@ impl Default for CelestialFrame {
 /// in [`ElementsSystems::Celestial`]; keeps [`SunState`] current; drives `Exposure` on every
 /// [`ElementsCamera`] with `auto_exposure` set. The sun keeps lighting the atmosphere below the
 /// horizon through twilight, to −18°; a camera that kept Bevy's default clear colour is cleared
-/// to the night sky's faint background instead.
+/// to the night sky's faint background instead. [`CelestialSettings`] turns the lights and the
+/// moon disc and stars off.
 pub struct CelestialPlugin;
 
 impl Plugin for CelestialPlugin {
     fn build(&self, app: &mut App) {
         ensure_gpu_core(app);
+        app.init_resource::<CelestialSettings>();
         stars::plugin(app);
         moon::plugin(app);
         app.init_resource::<CelestialFrame>()
@@ -106,6 +139,7 @@ impl Plugin for CelestialPlugin {
                 Update,
                 (
                     update_sky,
+                    drive_lights,
                     update_ambient,
                     auto_exposure,
                     sky_background,
@@ -204,7 +238,10 @@ fn orthographic_cascades(focus_depth_m: f32) -> CascadeShadowConfig {
     .build()
 }
 
-fn spawn_lights(mut commands: Commands) {
+fn spawn_lights(mut commands: Commands, settings: Res<CelestialSettings>) {
+    if !settings.lights {
+        return;
+    }
     commands.spawn((
         Name::new("Sun"),
         Sun,
@@ -238,10 +275,14 @@ type CelestialCascades<'w, 's> =
 /// Give the sun and the moon cascades that reach the scene: the perspective ones, or under an
 /// orthographic followed camera one cascade around its focus.
 fn fit_shadow_cascades(
+    settings: Res<CelestialSettings>,
     view: Res<ElementsView>,
     cameras: Query<(&Projection, &GlobalTransform)>,
     mut lights: CelestialCascades,
 ) {
+    if !settings.lights {
+        return;
+    }
     let orthographic =
         view.entity
             .and_then(|e| cameras.get(e).ok())
@@ -389,7 +430,6 @@ pub(crate) fn update_sky(
     shadows: Option<Res<CloudShadows>>,
     mut state: ResMut<SunState>,
     mut frame: ResMut<CelestialFrame>,
-    mut lights: Query<(&mut Transform, &mut DirectionalLight, Has<Sun>, Has<Moon>)>,
 ) {
     use astro::*;
     let jd = clock.julian_day(location.utc_offset_hours);
@@ -435,28 +475,48 @@ pub(crate) fn update_sky(
         (0..3).map(|k| pole_enu[2][k] * pole[k]).sum(),
     ]);
     let moon_lux = (FULL_MOON_LUX * moon_phase_factor(i)) as f32;
+    let cloud = cloud_light(weather.cloud_cover, shadows.as_deref());
+    let altitude = sun_alt as f32;
+    let sun_light_lux =
+        lux::RAW_SUNLIGHT * twilight_factor(altitude) * sun_cloud_factor(&state, cloud);
+    let moon_light_lux = if state.moon_altitude_deg > MOON_OFF_DEG {
+        moon_lux * cloud.direct
+    } else {
+        0.0
+    };
     *frame = CelestialFrame {
         j2000_to_world: Mat3::from_cols(col(0), col(1), col(2)),
         ecliptic_north: pole_world.normalize_or(Vec3::Y),
         moon_angular_diameter_deg: moon_angular_diameter(observer_distance) as f32,
         moon_lux,
+        sun_light_lux,
+        moon_light_lux,
     };
+}
 
-    let cloud = cloud_light(weather.cloud_cover, shadows.as_deref());
+/// Point the [`Sun`] and [`Moon`] lights at their bodies and give them [`update_sky`]'s
+/// illuminance and shadows; nothing with [`CelestialSettings::lights`] off.
+fn drive_lights(
+    settings: Res<CelestialSettings>,
+    state: Res<SunState>,
+    frame: Res<CelestialFrame>,
+    mut lights: Query<(&mut Transform, &mut DirectionalLight, Has<Sun>, Has<Moon>)>,
+) {
+    if !settings.lights {
+        return;
+    }
     for (mut transform, mut light, is_sun, is_moon) in &mut lights {
         if is_sun {
-            *transform = light_transform(sun_dir);
-            light.illuminance = lux::RAW_SUNLIGHT
-                * twilight_factor(state.altitude_deg)
-                * sun_cloud_factor(&state, cloud);
+            *transform = light_transform(state.direction);
+            light.illuminance = frame.sun_light_lux;
             set_shadows(&mut light, state.altitude_deg > SUN_SHADOWS_ABOVE_DEG);
         } else if is_moon {
-            *transform = light_transform(moon_dir);
-            let up = state.moon_altitude_deg > MOON_OFF_DEG;
-            light.illuminance = if up { moon_lux * cloud.direct } else { 0.0 };
+            *transform = light_transform(state.moon_direction);
+            light.illuminance = frame.moon_light_lux;
             set_shadows(
                 &mut light,
-                up && state.altitude_deg < MOON_SHADOWS_BELOW_SUN_DEG,
+                state.moon_altitude_deg > MOON_OFF_DEG
+                    && state.altitude_deg < MOON_SHADOWS_BELOW_SUN_DEG,
             );
         }
     }
@@ -612,7 +672,7 @@ const LUMINANCE_WEIGHTS: Vec3 = Vec3::new(0.2126, 0.7152, 0.0722);
 /// `NdotV`, `s = 0.468 − 1.04 · 0.015 = 0.452`, not the Lambertian 1. The ambient light is
 /// scaled up by `1/s` so a horizontal surface receives the illuminance `π L` that
 /// [`cloud_ambient`] computed.
-const BEVY_AMBIENT_DIFFUSE_SCALE: f32 = 0.452;
+pub(crate) const BEVY_AMBIENT_DIFFUSE_SCALE: f32 = 0.452;
 
 /// Give every [`ElementsCamera`] the cloud-scattered light as its `AmbientLight`: Bevy's
 /// per-camera ambient is a uniform sky radiance in cd/m² that casts no shadow, which is what
@@ -622,13 +682,16 @@ fn update_ambient(
     state: Res<SunState>,
     frame: Res<CelestialFrame>,
     shadows: Option<Res<CloudShadows>>,
-    mut cameras: Query<&mut AmbientLight, With<ElementsCamera>>,
+    mut cameras: Query<(&ElementsCamera, &mut AmbientLight)>,
 ) {
     let cloud = cloud_light(weather.cloud_cover, shadows.as_deref());
     let (colour, radiance) = cloud_ambient(&state, frame.moon_lux, cloud);
     let brightness = radiance / BEVY_AMBIENT_DIFFUSE_SCALE;
     let colour = Color::linear_rgb(colour.x, colour.y, colour.z);
-    for mut ambient in &mut cameras {
+    for (dressing, mut ambient) in &mut cameras {
+        if !dressing.ambient {
+            continue;
+        }
         if ambient.brightness != brightness || ambient.color != colour {
             ambient.brightness = brightness;
             ambient.color = colour;
@@ -713,9 +776,9 @@ pub(crate) const NIGHT_SKY_LUMINANCE: f32 = ILLUMINANCE_FLOOR_LUX / std::f32::co
 /// Clear every [`SkyBackground`] camera to the night sky's background radiance at its exposure.
 /// The clear colour is written to the target before the sky and is never exposed, so it is
 /// given in display units; Bevy's atmosphere then draws over it with its transmittance.
-fn sky_background(mut cameras: Query<(&mut Camera, &Exposure), With<SkyBackground>>) {
+fn sky_background(mut cameras: Query<(&mut Camera, Option<&Exposure>), With<SkyBackground>>) {
     for (mut camera, exposure) in &mut cameras {
-        let v = NIGHT_SKY_LUMINANCE * exposure.exposure();
+        let v = NIGHT_SKY_LUMINANCE * exposure.copied().unwrap_or_default().exposure();
         let colour = Color::linear_rgb(v, v, v);
         if !matches!(camera.clear_color, ClearColorConfig::Custom(c) if c == colour) {
             camera.clear_color = ClearColorConfig::Custom(colour);
@@ -839,6 +902,7 @@ mod tests {
         });
         world.insert_resource(SunState::default());
         world.insert_resource(CelestialFrame::default());
+        world.insert_resource(CelestialSettings::default());
         if let Some(shadows) = shadows {
             world.insert_resource(shadows);
         }
@@ -849,6 +913,7 @@ mod tests {
             .spawn((Moon, DirectionalLight::default(), Transform::default()))
             .id();
         assert!(world.run_system_once(update_sky).is_ok());
+        assert!(world.run_system_once(drive_lights).is_ok());
         let state = *world.resource::<SunState>();
         let frame = *world.resource::<CelestialFrame>();
         let lux_of = |entity| {

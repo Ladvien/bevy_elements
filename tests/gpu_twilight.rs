@@ -50,7 +50,10 @@ fn sky(date: CivilDate, hour: f64, auto_exposure: bool) -> App {
                 commands.spawn((
                     Camera3d::default(),
                     RenderTarget::Image(handle.into()),
-                    ElementsCamera { auto_exposure },
+                    ElementsCamera {
+                        auto_exposure,
+                        ..default()
+                    },
                     Tonemapping::None,
                     DebandDither::Disabled,
                     Hdr,

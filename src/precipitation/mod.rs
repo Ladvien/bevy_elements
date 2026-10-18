@@ -13,6 +13,8 @@ mod gpu;
 pub(crate) mod model;
 
 use bevy::asset::embedded_asset;
+use bevy::color::Luminance;
+use bevy::ecs::system::SystemParam;
 use bevy::light::DirectionalLight;
 use bevy::prelude::*;
 use bevy::render::RenderApp;
@@ -23,7 +25,8 @@ use bevy::shader::load_shader_library;
 
 use crate::LightningFlash;
 use crate::celestial::{
-    CelestialFrame, Moon, Sun, SunState, cloud_light, scene_illuminance, sun_disc_visible,
+    BEVY_AMBIENT_DIFFUSE_SCALE, CelestialFrame, CelestialSettings, Moon, Sun, SunState,
+    cloud_light, scene_illuminance, sun_disc_visible,
 };
 use crate::climate::Weather;
 use crate::clouds::CloudShadows;
@@ -31,6 +34,7 @@ use crate::fog::extinction_for_visibility;
 use crate::gpu::grid::storage_buffer;
 use crate::plugin::{
     ElementsCamera, ElementsQuality, ElementsSystems, ElementsView, ensure_gpu_core,
+    needs_depth_prepass,
 };
 use crate::terrain::{NO_TERRAIN, TerrainParamsGpu, TerrainState};
 use crate::wind::{WindFieldParams, WindState};
@@ -241,6 +245,7 @@ pub struct PrecipitationPlugin;
 impl Plugin for PrecipitationPlugin {
     fn build(&self, app: &mut App) {
         ensure_gpu_core(app);
+        needs_depth_prepass(app);
         load_shader_library!(app, "common.wesl");
         embedded_asset!(app, "precip.wesl");
         embedded_asset!(app, "draw.wesl");
@@ -330,6 +335,100 @@ pub(crate) fn box_half_edge(view: Option<(&Projection, &GlobalTransform)>) -> f3
     (0.5 * footprint).clamp(base, MAX_ORTHOGRAPHIC_HALF_EDGE_M)
 }
 
+/// The lights marked `Sun` or `Moon`, each with whether it is the sun.
+type MarkedLights<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static DirectionalLight,
+        &'static GlobalTransform,
+        Has<Sun>,
+    ),
+    Or<(With<Sun>, With<Moon>)>,
+>;
+
+/// What lights the particles: the sun and moon, the lights marked `Sun` and `Moon`, and the
+/// followed camera's own ambient.
+#[derive(SystemParam)]
+struct ParticleLight<'w, 's> {
+    sun: Res<'w, SunState>,
+    frame: Res<'w, CelestialFrame>,
+    celestial: Option<Res<'w, CelestialSettings>>,
+    lights: MarkedLights<'w, 's>,
+    dressings: Query<'w, 's, (&'static ElementsCamera, Option<&'static AmbientLight>)>,
+}
+
+/// The particles' light: the sun's direction and illuminance, the moon's, and the sky's.
+struct DrawLight {
+    sun_dir: Vec3,
+    e_sun: f32,
+    moon_dir: Vec3,
+    e_moon: f32,
+    e_sky: f32,
+}
+
+impl ParticleLight<'_, '_> {
+    /// Light the particles with what the scene is lit with. The direct part is the light marked
+    /// `Sun` (and `Moon`): the crate's, which carries the beam `E · T̄` (only the visible part of
+    /// the sun's disc lights anything on the ground, though the sun lights the sky through
+    /// twilight), or a game's own (`CelestialSettings::lights` off), in its direction and at its
+    /// illuminance; without one, the light `update_sky` computes. The sky part is the rest of the
+    /// scene illuminance (the sky and the cloud-scattered diffuse light) or, on a camera whose
+    /// ambient the game keeps (`ElementsCamera::ambient` off), that `AmbientLight`
+    /// (`docs/research/integration.md`).
+    fn draw_light(
+        &self,
+        view: &ElementsView,
+        weather: &Weather,
+        shadows: Option<&CloudShadows>,
+    ) -> DrawLight {
+        let (sun, frame) = (&*self.sun, &*self.frame);
+        let crate_lights = self.celestial.as_ref().is_none_or(|c| c.lights);
+        let marked = |want_sun: bool| {
+            self.lights
+                .iter()
+                .find(|(_, _, is_sun)| *is_sun == want_sun)
+                .map(|(light, transform, _)| (*transform.back(), light.illuminance))
+        };
+        let disc = sun_disc_visible(sun.altitude_deg);
+        let (sun_dir, e_sun) = match marked(true) {
+            Some((dir, lux)) if crate_lights => (dir, lux * disc),
+            Some(own) => own,
+            None => (sun.direction, frame.sun_light_lux * disc),
+        };
+        let (moon_dir, e_moon) =
+            marked(false).unwrap_or((sun.moon_direction, frame.moon_light_lux));
+        let game_ambient = view
+            .entity
+            .and_then(|e| self.dressings.get(e).ok())
+            .and_then(|(dressing, ambient)| ambient.filter(|_| !dressing.ambient));
+        let e_sky = match game_ambient {
+            Some(ambient) => {
+                std::f32::consts::PI
+                    * BEVY_AMBIENT_DIFFUSE_SCALE
+                    * ambient.brightness
+                    * ambient.color.luminance()
+            }
+            None => {
+                scene_illuminance(
+                    sun,
+                    frame.moon_lux,
+                    cloud_light(weather.cloud_cover, shadows),
+                ) - e_sun * sun_dir.y.max(0.0)
+                    - e_moon * moon_dir.y.max(0.0)
+            }
+        }
+        .max(0.0005);
+        DrawLight {
+            sun_dir,
+            e_sun,
+            moon_dir,
+            e_moon,
+            e_sky,
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn update_precipitation(
     time: Res<Time<Virtual>>,
@@ -337,9 +436,7 @@ fn update_precipitation(
     cameras: Query<(&Projection, &GlobalTransform)>,
     weather: Res<Weather>,
     wind: Res<WindState>,
-    sun: Res<SunState>,
-    frame: Res<CelestialFrame>,
-    lights: Query<(&DirectionalLight, Has<Sun>, Has<Moon>)>,
+    light: ParticleLight,
     blockers: Query<(Entity, &PrecipitationBlocker, &GlobalTransform)>,
     mut runtime: ResMut<PrecipitationRuntime>,
     gpu: Option<ResMut<PrecipitationGpu>>,
@@ -433,35 +530,12 @@ fn update_precipitation(
         selected
     };
 
-    // Light the particles with what the scene is lit with: the lights' own illuminance for the
-    // direct part (the beam, `E · T̄`), and the rest of the scene illuminance (the sky and the
-    // cloud-scattered diffuse light) as sky light. The sun keeps lighting the sky through
-    // twilight, but only the visible part of its disc lights anything on the ground.
-    let direct = |sun_light: bool| {
-        lights
-            .iter()
-            .filter(|(_, is_sun, is_moon)| if sun_light { *is_sun } else { *is_moon })
-            .map(|(light, _, _)| light.illuminance)
-            .sum::<f32>()
-    };
-    let (e_sun, e_moon) = (
-        direct(true) * sun_disc_visible(sun.altitude_deg),
-        direct(false),
-    );
-    let total = scene_illuminance(
-        &sun,
-        frame.moon_lux,
-        cloud_light(weather.cloud_cover, shadows.as_deref()),
-    );
-    let e_sky = (total
-        - e_sun * sun.altitude_deg.to_radians().sin().max(0.0)
-        - e_moon * sun.moon_altitude_deg.to_radians().sin().max(0.0))
-    .max(0.0005);
+    let lit = light.draw_light(&view, &weather, shadows.as_deref());
     gpu.draw = DrawParams {
-        sun: sun.direction.extend(e_sun),
-        moon: sun.moon_direction.extend(e_moon),
+        sun: lit.sun_dir.extend(lit.e_sun),
+        moon: lit.moon_dir.extend(lit.e_moon),
         ambient: Vec4::new(
-            e_sky,
+            lit.e_sky,
             extinction_for_visibility(weather.visibility_m),
             SOFT_FADE_M,
             SPLASH_SOFT_FADE_M,

@@ -2,9 +2,9 @@
 //! quality knob.
 
 use bevy::app::PluginGroupBuilder;
-use bevy::camera::Exposure;
 use bevy::camera::Hdr;
 use bevy::core_pipeline::prepass::DepthPrepass;
+use bevy::ecs::system::SystemParam;
 use bevy::light::atmosphere::ScatteringMedium;
 use bevy::light::{Atmosphere, AtmosphereEnvironmentMapLight, VolumetricFog};
 use bevy::pbr::{AtmosphereSettings, DistanceFog};
@@ -87,25 +87,68 @@ pub enum ElementsSystems {
 
 /// Marks the camera the environment follows and renders for.
 ///
-/// Adding it inserts, where absent: `AtmosphereSettings`, `AtmosphereEnvironmentMapLight`,
-/// `DepthPrepass`, `VolumetricFog`, `DistanceFog` and `Exposure`, and spawns one Earth
-/// `Atmosphere` if the world has none. It always sets `Msaa::Off` (a `Camera3d` requires `Msaa`,
-/// so there is no "absent" to fill): the cloud pass reads the non-multisampled depth prepass.
+/// Adding it dresses the camera for the crate's physical look, each part a flag that defaults
+/// on (`docs/research/integration.md`): `atmosphere` (`AtmosphereSettings`,
+/// `AtmosphereEnvironmentMapLight`, one Earth `Atmosphere` in the world, and the night sky's glow
+/// as the clear colour of a camera that kept Bevy's default), `distance_fog` (a `DistanceFog` the
+/// crate drives from the visibility), `volumetric_fog` (`VolumetricFog`: the ground fog and the
+/// light shafts), `ambient` (an `AmbientLight` the crate drives with the cloud-scattered sky light)
+/// and `msaa_off` (`Msaa::Off`). A component the camera already has is kept; turning a flag off at
+/// runtime removes only what the crate inserted, and stops the crate driving the game's own.
+/// `DepthPrepass` is inserted while a plugin that reads the depth prepass (clouds, precipitation,
+/// water) is added. Bevy gives every `Camera3d` an `Exposure`; `auto_exposure` decides whether the
+/// crate drives it.
+///
+/// Without `atmosphere` the sky is the game's and the cloud layer is not drawn on that camera
+/// (it needs the atmosphere's lookup tables), but the cloud shadows still fall; without
+/// `msaa_off` the cloud and precipitation passes skip the camera, which they read single-sampled.
+///
 /// With more than one active `ElementsCamera` the one with the lowest `Camera::order` is followed
 /// and a warning is logged once; inactive cameras (`Camera::is_active == false`) are ignored. With
 /// none, the camera-relative simulations (wind, fog volume, clouds) idle while the clock, weather
 /// and gameplay queries keep running.
-#[derive(Component, Clone, Copy, Debug, Reflect)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Reflect)]
 #[require(Hdr)]
 pub struct ElementsCamera {
-    /// Drive `Exposure::ev100` from the sun, moon and sky illuminance. Default `true`.
+    /// Drive the camera's `Exposure` from the sun, moon and sky illuminance. Default `true`.
     pub auto_exposure: bool,
+    /// Bevy's physical atmosphere: the sky, its light and the aerial perspective. Default `true`.
+    pub atmosphere: bool,
+    /// A `DistanceFog` driven by the weather's visibility. Default `true`.
+    pub distance_fog: bool,
+    /// `VolumetricFog`, which draws the ground fog volume and the light shafts. Default `true`.
+    pub volumetric_fog: bool,
+    /// An `AmbientLight` driven with the cloud-scattered sky light. Default `true`.
+    pub ambient: bool,
+    /// `Msaa::Off`. Default `true`.
+    pub msaa_off: bool,
 }
 
 impl Default for ElementsCamera {
     fn default() -> Self {
         Self {
             auto_exposure: true,
+            atmosphere: true,
+            distance_fog: true,
+            volumetric_fog: true,
+            ambient: true,
+            msaa_off: true,
+        }
+    }
+}
+
+impl ElementsCamera {
+    /// The weather on the game's own look: every part of the dressing off, so the crate inserts
+    /// and drives nothing on the camera but the `DepthPrepass` its passes read (and keeps the
+    /// game's MSAA, which the cloud and precipitation passes then skip).
+    pub fn bare() -> Self {
+        Self {
+            auto_exposure: false,
+            atmosphere: false,
+            distance_fog: false,
+            volumetric_fog: false,
+            ambient: false,
+            msaa_off: false,
         }
     }
 }
@@ -302,7 +345,10 @@ impl Plugin for ElementsGpuCorePlugin {
         // The trail field's sampling and parallax, imported by the terrain and ground materials
         // whether or not `TrailsPlugin` is added.
         load_shader_library!(app, "trails/surface.wesl");
-        app.add_plugins(ReadbackPlugin).add_observer(dress_camera);
+        app.init_resource::<CameraNeeds>()
+            .add_plugins(ReadbackPlugin)
+            .add_observer(dress_camera)
+            .add_systems(Update, redress_cameras.in_set(ElementsSystems::Clock));
     }
 }
 
@@ -320,56 +366,187 @@ pub(crate) fn ensure_gpu_core(app: &mut App) {
     }
 }
 
+/// What the domains added to the app need on every [`ElementsCamera`], and whether the crate has
+/// spawned the world's `Atmosphere`.
+#[derive(Resource, Default, Clone, Copy, Debug)]
+pub(crate) struct CameraNeeds {
+    /// A plugin that reads the depth prepass is added (clouds, precipitation, water).
+    pub depth_prepass: bool,
+    atmosphere_spawned: bool,
+}
+
+/// Record that a plugin reads the depth prepass, so every [`ElementsCamera`] gets a
+/// `DepthPrepass`.
+pub(crate) fn needs_depth_prepass(app: &mut App) {
+    app.world_mut()
+        .get_resource_or_init::<CameraNeeds>()
+        .depth_prepass = true;
+}
+
+/// What the crate put on an [`ElementsCamera`], so turning a flag off removes only that.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ElementsDressing {
+    atmosphere: bool,
+    sky_background: bool,
+    distance_fog: bool,
+    volumetric_fog: bool,
+    ambient: bool,
+    msaa: bool,
+    depth_prepass: bool,
+}
+
+type DressParts = (
+    &'static ElementsCamera,
+    Option<&'static mut ElementsDressing>,
+    &'static mut Camera,
+    Has<AtmosphereSettings>,
+    Has<DistanceFog>,
+    Has<VolumetricFog>,
+    Has<AmbientLight>,
+    Has<DepthPrepass>,
+);
+
+/// Dresses an [`ElementsCamera`] for its flags.
+#[derive(SystemParam)]
+struct Dresser<'w, 's> {
+    commands: Commands<'w, 's>,
+    quality: Res<'w, ElementsQuality>,
+    needs: ResMut<'w, CameraNeeds>,
+    atmospheres: Query<'w, 's, (), With<Atmosphere>>,
+    media: ResMut<'w, Assets<ScatteringMedium>>,
+    cameras: Query<'w, 's, DressParts>,
+}
+
+/// Insert `make()` when wanted and absent (and record it as the crate's); remove it when not
+/// wanted and the crate inserted it. A component the game put there is never removed.
+fn toggle<B: Bundle>(
+    entity: &mut EntityCommands,
+    want: bool,
+    present: bool,
+    ours: &mut bool,
+    make: impl FnOnce() -> B,
+) {
+    if want && !present {
+        entity.insert(make());
+        *ours = true;
+    } else if !want && *ours {
+        entity.remove::<B>();
+        *ours = false;
+    }
+}
+
+impl Dresser<'_, '_> {
+    fn dress(&mut self, entity: Entity) {
+        let fog_steps = self.quality.fog_steps();
+        let depth_prepass = self.needs.depth_prepass;
+        let Ok((want, done, mut camera, atmosphere, fog, volumetric, ambient, prepass)) =
+            self.cameras.get_mut(entity)
+        else {
+            return;
+        };
+        let want = *want;
+        let mut ours = done.as_deref().copied().unwrap_or_default();
+        let mut e = self.commands.entity(entity);
+        toggle(
+            &mut e,
+            want.atmosphere,
+            atmosphere,
+            &mut ours.atmosphere,
+            || {
+                (
+                    AtmosphereSettings::default(),
+                    AtmosphereEnvironmentMapLight::default(),
+                )
+            },
+        );
+        toggle(
+            &mut e,
+            depth_prepass,
+            prepass,
+            &mut ours.depth_prepass,
+            || DepthPrepass,
+        );
+        toggle(
+            &mut e,
+            want.volumetric_fog,
+            volumetric,
+            &mut ours.volumetric_fog,
+            || VolumetricFog {
+                ambient_intensity: 0.0,
+                step_count: fog_steps,
+                ..default()
+            },
+        );
+        toggle(
+            &mut e,
+            want.distance_fog,
+            fog,
+            &mut ours.distance_fog,
+            DistanceFog::default,
+        );
+        // Sky light comes from the atmosphere's environment map; Bevy's default ambient is a
+        // constant 80 cd/m² that the night exposure would lift to white. Starts dark; the
+        // celestial systems drive it with the cloud-scattered diffuse light.
+        toggle(&mut e, want.ambient, ambient, &mut ours.ambient, || {
+            AmbientLight {
+                brightness: 0.0,
+                ..default()
+            }
+        });
+        // The cloud and precipitation passes read the depth prepass as single-sampled, and
+        // `Camera` requires a default `Msaa::Sample4`, so there is no "absent" to fill.
+        if want.msaa_off {
+            e.insert(Msaa::Off);
+            ours.msaa = true;
+        } else if ours.msaa {
+            e.insert(Msaa::default());
+            ours.msaa = false;
+        }
+        // Behind the atmosphere is the night sky's own faint glow, not Bevy's default
+        // `ClearColor` (sRGB 43, 44, 47), which is written before the sky, never exposed, and
+        // showed through the atmosphere as a constant brown night sky. A camera that kept Bevy's
+        // default gets `SkyBackground`, and the celestial systems set its clear colour each frame.
+        if want.atmosphere && matches!(camera.clear_color, ClearColorConfig::Default) {
+            camera.clear_color = ClearColorConfig::Custom(Color::BLACK);
+            e.insert(SkyBackground);
+            ours.sky_background = true;
+        } else if !want.atmosphere && ours.sky_background {
+            camera.clear_color = ClearColorConfig::Default;
+            e.remove::<SkyBackground>();
+            ours.sky_background = false;
+        }
+        match done {
+            Some(mut done) => {
+                if *done != ours {
+                    *done = ours;
+                }
+            }
+            None => {
+                e.insert(ours);
+            }
+        }
+        if want.atmosphere && self.atmospheres.is_empty() && !self.needs.atmosphere_spawned {
+            let medium = self.media.add(ScatteringMedium::default());
+            self.commands
+                .spawn((Name::new("Elements atmosphere"), Atmosphere::earth(medium)));
+            self.needs.atmosphere_spawned = true;
+        }
+    }
+}
+
 /// On an [`ElementsCamera`] whose clear colour the crate owns (it kept Bevy's default): the
 /// celestial systems clear it to the night sky's background radiance at the camera's exposure.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub(crate) struct SkyBackground;
 
-fn dress_camera(
-    add: On<Add<ElementsCamera>>,
-    mut commands: Commands,
-    quality: Res<ElementsQuality>,
-    atmospheres: Query<(), With<Atmosphere>>,
-    mut media: ResMut<Assets<ScatteringMedium>>,
-    mut cameras: Query<&mut Camera>,
-) {
-    commands.entity(add.entity).insert_if_new((
-        AtmosphereSettings::default(),
-        AtmosphereEnvironmentMapLight::default(),
-        DepthPrepass,
-        // (`Msaa::Off` is inserted below: `Camera` requires `Msaa`, so it is never absent here.)
-        VolumetricFog {
-            ambient_intensity: 0.0,
-            step_count: quality.fog_steps(),
-            ..default()
-        },
-        DistanceFog::default(),
-        Exposure::SUNLIGHT,
-        // Sky light comes from the atmosphere's environment map; Bevy's default ambient is a
-        // constant 80 cd/m² that the night exposure would lift to white. Starts dark; the
-        // celestial systems drive it with the cloud-scattered diffuse light.
-        AmbientLight {
-            brightness: 0.0,
-            ..default()
-        },
-    ));
-    // The cloud and precipitation passes read the depth prepass as single-sampled, and `Camera`
-    // requires a default `Msaa::Sample4`, so `insert_if_new` would never replace it. A game that
-    // wants MSAA inserts `Msaa` after spawning the camera.
-    commands.entity(add.entity).insert(Msaa::Off);
-    // Behind the atmosphere is the night sky's own faint glow, not Bevy's default `ClearColor`
-    // (sRGB 43, 44, 47), which is written before the sky, never exposed, and showed through the
-    // atmosphere as a constant brown night sky. A camera that kept Bevy's default gets
-    // `SkyBackground`, and the celestial systems set its clear colour each frame.
-    if let Ok(mut camera) = cameras.get_mut(add.entity)
-        && matches!(camera.clear_color, ClearColorConfig::Default)
-    {
-        camera.clear_color = ClearColorConfig::Custom(Color::BLACK);
-        commands.entity(add.entity).insert(SkyBackground);
-    }
-    if atmospheres.is_empty() {
-        let medium = media.add(ScatteringMedium::default());
-        commands.spawn((Name::new("Elements atmosphere"), Atmosphere::earth(medium)));
+fn dress_camera(add: On<Add<ElementsCamera>>, mut dresser: Dresser) {
+    dresser.dress(add.entity);
+}
+
+/// Dress again a camera whose flags changed: a game can toggle the physical sky at runtime.
+fn redress_cameras(changed: Query<Entity, Changed<ElementsCamera>>, mut dresser: Dresser) {
+    for entity in &changed {
+        dresser.dress(entity);
     }
 }
 

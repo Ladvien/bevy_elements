@@ -34,7 +34,7 @@ use bevy::transform::TransformSystems;
 
 use super::water_gpu;
 use crate::clouds::CloudShadows;
-use crate::plugin::{ElementsView, ensure_gpu_core};
+use crate::plugin::{ElementsView, ensure_gpu_core, needs_depth_prepass};
 use crate::terrain::lod::MAX_LEVELS;
 use crate::terrain::{
     NO_TERRAIN, TerrainParamsGpu, TerrainRuntime, TerrainState, assign_slots, lod_uniform,
@@ -252,6 +252,7 @@ pub struct WaterPlugin;
 impl Plugin for WaterPlugin {
     fn build(&self, app: &mut App) {
         ensure_gpu_core(app);
+        needs_depth_prepass(app);
         embedded_asset!(app, "water.wesl");
         embedded_asset!(app, "water_normals.wesl");
         app.add_plugins(MaterialPlugin::<WaterMaterial>::default())

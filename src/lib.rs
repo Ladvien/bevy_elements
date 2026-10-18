@@ -37,7 +37,8 @@ pub use query::{Environment, EnvironmentSnapshot};
 
 // Celestial: clock, location, sun, moon, exposure; `astro` holds the ephemeris functions.
 pub use celestial::{
-    CelestialPlugin, CivilDate, GeoLocation, Moon, Sun, SunState, WorldClock, astro,
+    CelestialPlugin, CelestialSettings, CivilDate, GeoLocation, Moon, Sun, SunState, WorldClock,
+    astro,
 };
 
 // Climate, seasons, weather.
@@ -108,8 +109,8 @@ pub use flora::{ElementsFloraPlugin, FLORA_FULL_WIND_MS};
 
 // Weathered materials.
 pub use weathered::{
-    ElementsGlobals, SNOW_ALBEDO, SNOW_ROUGHNESS, WeatheredExtension, WeatheredMaterial,
-    WeatheredPlugin,
+    ELEMENTS_GLOBALS_BUFFER, ElementsGlobals, SNOW_ALBEDO, SNOW_ROUGHNESS, WeatheredExtension,
+    WeatheredMaterial, WeatheredPlugin,
 };
 
 // Volumetric snow on `bevy_isomesh` voxel volumes.

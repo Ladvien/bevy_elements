@@ -31,10 +31,19 @@ pub const SNOW_ALBEDO: LinearRgba = LinearRgba::new(0.80, 0.83, 0.88, 1.0);
 /// `docs/research/snow-cover.md`).
 pub const SNOW_ROUGHNESS: f32 = 0.9;
 
-/// The shared buffer every weathered material binds. Its asset is inserted and rewritten by
-/// [`WeatheredPlugin`]; the handle is a fixed id so a material can name it before the plugin has
-/// run.
-pub(crate) const GLOBALS_BUFFER: Handle<ShaderBuffer> =
+/// The crate's globals as a GPU storage buffer, for a material or pass of your own: the 80-byte
+/// [`ElementsGlobals`] (wetness and snow cover of exposed ground, the rain intensity, the mean
+/// cloud transmittance, the cloud shadow map's placement, the ripple and streak phases, the wind
+/// and the light direction), laid out as the WGSL `bevy_elements::surface_cover::ElementsGlobals`
+/// (five `vec4<f32>`; the field comments there give each component).
+///
+/// [`WeatheredPlugin`] (in `ElementsPlugins`) creates the asset and rewrites it whenever a value
+/// changes, after [`ElementsSystems::Simulation`]; the handle is a fixed id, so a material can
+/// name it before the plugin has run. Bind it read-only as a storage buffer at any free slot of
+/// your own `AsBindGroup` (`#[storage(N, read_only)] globals: Handle<ShaderBuffer>` set to this)
+/// and import the struct; the cloud shadow map is [`CloudShadows::map`]
+/// (`docs/research/integration.md`).
+pub const ELEMENTS_GLOBALS_BUFFER: Handle<ShaderBuffer> =
     uuid_handle!("6b0e2d51-7c1f-4f0d-8a53-2e9a41c7d0b8");
 
 /// `vec4<f32>`s of the GPU buffer (`ElementsGlobals` of `surface_cover.wesl`).
@@ -194,7 +203,7 @@ impl WeatheredExtension {
     pub fn with_exposure(exposure: f32) -> Self {
         Self {
             exposure,
-            globals: GLOBALS_BUFFER,
+            globals: ELEMENTS_GLOBALS_BUFFER,
             cloud_shadow: None,
         }
     }
@@ -275,8 +284,8 @@ fn update_globals(
         globals.set_if_neq(next);
         return;
     };
-    if (globals.set_if_neq(next) || !buffers.contains(GLOBALS_BUFFER.id()))
-        && let Err(error) = buffers.insert(GLOBALS_BUFFER.id(), globals_buffer(&next))
+    if (globals.set_if_neq(next) || !buffers.contains(ELEMENTS_GLOBALS_BUFFER.id()))
+        && let Err(error) = buffers.insert(ELEMENTS_GLOBALS_BUFFER.id(), globals_buffer(&next))
     {
         error!("could not write the weathered materials' globals buffer: {error}");
     }
