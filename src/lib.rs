@@ -17,6 +17,7 @@ mod plugin;
 mod precipitation;
 mod query;
 mod terrain;
+mod trails;
 #[cfg(feature = "isomesh")]
 mod voxel;
 mod weathered;
@@ -90,6 +91,9 @@ pub use hydrology::{
 
 // Ground cover: snow and wetness maps.
 pub use cover::{CoverState, CoverStats, GroundCoverPlugin, SnowSettings, WetnessSettings};
+
+// Trails: footprints, ruts and tracks in snow, sand and mud.
+pub use trails::{Imprint, TrailSettings, TrailState, TrailsPlugin};
 
 // `bevy_flora` integration.
 #[cfg(feature = "flora")]

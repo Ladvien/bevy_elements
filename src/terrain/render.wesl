@@ -10,6 +10,7 @@ import bevy_elements::grid::{GridParams, grid_taps};
 import bevy_elements::noise::{perlin3_d, fbm3};
 import bevy_elements::terrain::common::TerrainParams;
 import bevy_elements::surface_cover::{weather_surface, ripple_weights, ripple_offset};
+import bevy_elements::trails::surface::{TrailHit, trail_fade, trail_march, trail_none};
 import bevy_pbr::render::{
     mesh_functions,
     mesh_view_bindings::{view, lights},
@@ -47,6 +48,11 @@ struct TerrainMaterialParams {
     cover: vec4<f32>,
     // Phase of each of the four ripple layers, 0–1.
     ripple: vec4<f32>,
+    // x: texel edge (m), y: texels a side, z: 1 when the trail field is bound, w: the parallax
+    // march's bound on |h| (m).
+    trail: vec4<f32>,
+    // x: the beam's share of the light on a horizontal surface.
+    trail_light: vec4<f32>,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> material: TerrainMaterialParams;
@@ -56,6 +62,8 @@ struct TerrainMaterialParams {
 @group(constants::MATERIAL_BIND_GROUP) @binding(102) var<storage, read> cover_cells: array<vec4<f32>>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(103) var cloud_map: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(104) var cloud_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(105) var trail_field: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(106) var trail_sampler: sampler;
 
 struct TerrainVertex {
     @builtin(instance_index) instance_index: u32,
@@ -211,6 +219,37 @@ fn bed_transmittance(depth: f32) -> vec3<f32> {
     return exp(-material.absorption.xyz * depth / mu_r);
 }
 
+// Compacted snow's albedo relative to fresh snow on a trench floor ([INFERENCE], trails.md
+// Deviation 1).
+const COMPACTED_SNOW_TINT: vec3<f32> = vec3<f32>(0.86, 0.91, 0.97);
+
+// The direction toward the brightest directional light (the sun, else the moon); straight up
+// without one.
+fn brightest_light() -> vec3<f32> {
+    var brightest = 0.0;
+    var l = vec3<f32>(0.0, 1.0, 0.0);
+    for (var i = 0u; i < lights.n_directional_lights; i += 1u) {
+        let c = lights.directional_lights[i].color;
+        let luminance = c.r + c.g + c.b;
+        if luminance > brightest {
+            brightest = luminance;
+            l = lights.directional_lights[i].direction_to_light;
+        }
+    }
+    return l;
+}
+
+// The trail field at the fragment `p` on ground of slope `g` (∂y/∂x, ∂y/∂z): a flat no-op
+// outside the window or without trails.
+fn trail_at(p: vec3<f32>, g: vec2<f32>) -> TrailHit {
+    let eye = view.world_position;
+    let fade = trail_fade(p.xz, eye.xz, material.trail);
+    if fade <= 0.0 {
+        return trail_none(p.xz);
+    }
+    return trail_march(trail_field, trail_sampler, material.trail, p, eye, g, brightest_light(), fade);
+}
+
 @if(!PREPASS_PIPELINE || DEFERRED_PREPASS)
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
@@ -230,21 +269,30 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         mix(unpack2x16float(bitcast<u32>(c01.w)), unpack2x16float(bitcast<u32>(c11.w)), t.w.x),
         t.w.y,
     );
-    var n = normalize(vec3<f32>(-g.x, 1.0, -g.y));
+    // Trails (docs/research/trails.md): the field's parallax hit is the visible point, and its
+    // slope tilts the ground's normal.
+    let trail = trail_at(p, g);
+    let pv = vec3<f32>(trail.xz.x, p.y + trail.h + dot(g, trail.xz - p.xz), trail.xz.y);
+    let depth = max(-trail.h, 0.0);
+    let pressed = smoothstep(0.005, 0.04, depth);
+    var n = normalize(vec3<f32>(-(g.x + trail.grad.x), 1.0, -(g.y + trail.grad.y)));
 
     // Slope angle and the mask detail: four fBm octaves from 48 m down to 6 m, contrast-scaled
     // into [0, 1] and overlaid on the masks (Andersson 5.2.3), so the transitions are irregular
     // rather than iso-slope lines.
-    let alpha = degrees(acos(clamp(n.y, -1.0, 1.0)));
+    // The slope is the terrain's: a footprint's wall is not a cliff.
+    let alpha = degrees(atan(length(g)));
     let detail = clamp(0.5 + 0.75 * fbm3(p / 48.0, 4u), 0.0, 1.0);
     let w = layer_weights(alpha, sediment, detail);
     var albedo = w.x * ROCK + w.y * SAND + w.z * SOIL + w.w * GRASS;
+    // A trench through grass or soil shows the soil (sand stays sand; rock takes no imprint).
+    albedo = mix(albedo, SOIL, smoothstep(0.01, 0.05, depth) * (w.z + w.w));
     let rough = mix(0.9, 0.95, w.z);
 
-    // Detail: 3D noise at the world position (a procedural function has no projection axis).
-    let dist = distance(view.world_position, p);
-    albedo = albedo * (1.0 + 0.25 * fbm3(p * 0.8, 3u) * (1.0 - smoothstep(40.0, 120.0, dist)));
-    let grad = perlin3_d(p * 0.8).yzw * 0.8;
+    // Detail: 3D noise at the visible position (a procedural function has no projection axis).
+    let dist = distance(view.world_position, pv);
+    albedo = albedo * (1.0 + 0.25 * fbm3(pv * 0.8, 3u) * (1.0 - smoothstep(40.0, 120.0, dist)));
+    let grad = perlin3_d(pv * 0.8).yzw * 0.8;
     let bump = 0.04 * (1.0 - smoothstep(0.0, 60.0, dist));
     n = normalize(n - bump * (grad - dot(grad, n) * n));
 
@@ -261,11 +309,15 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         let k11 = cover_cells[t.i11];
         let cover = mix(mix(k00.xy, k10.xy, t.w.x), mix(k01.xy, k11.xy, t.w.x), t.w.y);
         let water = mix(mix(c00.z, c10.z, t.w.x), mix(c01.z, c11.z, t.w.x), t.w.y);
-        snow_cover = smoothstep(0.0, 0.05, cover.x);
+        // A trench pressed to the bottom of the snow shows the ground under it.
+        snow_cover = smoothstep(0.0, 0.05, cover.x) * (1.0 - smoothstep(cover.x - 0.02, cover.x, depth));
         wet = cover.y;
         puddle = smoothstep(material.cover.z, material.cover.w, water);
+        // Ruts in saturated ground hold water on their floors (not their walls).
+        let level = 1.0 - smoothstep(0.3, 0.8, length(trail.grad));
+        puddle = max(puddle, smoothstep(0.6, 1.0, wet) * smoothstep(0.01, 0.04, depth) * level * (1.0 - snow_cover));
         if puddle > 0.0 && material.cover.y > 0.0 {
-            ripple = ripple_offset(p.xz, material.ripple, ripple_weights(material.cover.y));
+            ripple = ripple_offset(pv.xz, material.ripple, ripple_weights(material.cover.y));
         }
     }
     let surface = weather_surface(
@@ -273,18 +325,27 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     );
     albedo = surface.base_color;
     n = surface.normal;
+    // Compacted snow on a trench floor: smoother, and bluish where the light reaches it through
+    // the snow walls (Barré-Brisebois 2014's transition tint; trails.md Deviation 1).
+    let packed = snow_cover * pressed;
+    albedo = albedo * mix(vec3<f32>(1.0), COMPACTED_SNOW_TINT, packed);
+    let rough_out = mix(surface.roughness, surface.roughness * 0.75, packed);
 
     pbr_input.material.base_color = vec4<f32>(albedo, 1.0);
-    pbr_input.material.perceptual_roughness = surface.roughness;
+    pbr_input.material.perceptual_roughness = rough_out;
     pbr_input.material.metallic = surface.metallic;
     pbr_input.material.reflectance = surface.reflectance;
     pbr_input.world_normal = n;
     pbr_input.N = n;
+    pbr_input.world_position = vec4<f32>(pv, 1.0);
+    pbr_input.diffuse_occlusion = pbr_input.diffuse_occlusion * trail.open;
 
     let ratio = vec3<f32>(cloud_shadow_ratio(p)) * bed_transmittance(water_depth);
+    // The trail's self-shadow removes the beam's share of the light inside its trenches.
+    let trail_shade = 1.0 - material.trail_light.x * (1.0 - trail.lit);
 @if(PREPASS_PIPELINE) {
     // Deferred: the lighting runs later, so the shadow scales the albedo instead.
-    pbr_input.material.base_color = vec4<f32>(albedo * ratio, 1.0);
+    pbr_input.material.base_color = vec4<f32>(albedo * ratio * trail_shade, 1.0);
     return deferred_output(in, pbr_input);
 }
 @if(!PREPASS_PIPELINE) {
@@ -305,7 +366,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         ),
         out.color.a,
     );
-    out.color = vec4<f32>(out.color.rgb * ratio, out.color.a);
+    out.color = vec4<f32>(out.color.rgb * ratio * trail_shade, out.color.a);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;
 }
