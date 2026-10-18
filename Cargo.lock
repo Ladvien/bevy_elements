@@ -938,9 +938,9 @@ dependencies = [
 
 [[package]]
 name = "bevy_flora"
-version = "0.30.0"
+version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b73b7366f8573f2ac1990a5bba0d61910ec79308f278b64da02e29fc2cb040f0"
+checksum = "3f9a235b7f0d7cf637dd2e077517267409b2540032d038cc8130d6ce7a1646af"
 dependencies = [
  "bevy",
 ]

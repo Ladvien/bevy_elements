@@ -1375,3 +1375,22 @@ Jennings et al. 2018 (`10.1038/s41467-018-03629-7`, read from the PDF: the 50 % 
 3. **Wet ground reflects the sun under overcast** (Bevy's environment map is the clear sky; visible in every wet noon capture).
 4. **The anti-solar sky at sunset**, **rim sparkle** (carried).
 5. **Bevy's perspective-only sky under an orthographic camera** (carried).
+
+## Iteration 22 — 2026-10-18 — the `flora` feature on bevy_flora 0.46 (issue #12)
+
+**Commits:** the dependency bump with README / CHANGELOG / still, this log. Merged through a pull request; closes #12. **Sibling repos:** none (bevy_flora 0.46.0 is published). **Not released.**
+
+A game on bevy_flora 0.46 built two copies with the `flora` feature (pinned to 0.30), and `ElementsFloraPlugin` wrote resources its trees did not read. 0.46 pins Bevy 0.20, so the bump keeps pin parity. Its `FloraWind`, `GustFront`, `FloraSeason` and `FloraWetness` keep the fields this crate writes; `GustFront` speed and width are now metres under `FloraUnits` (bevy_flora's `units.rs`: fields that size the simulation in metres, positions in world units), which is what `WindGust` carries, so `src/flora.rs` needs no change. No research note: no system changed, and bevy_flora's own units documentation is the source.
+
+### Verification
+
+- Builds and `cargo clippy --all-targets --all-features -D warnings`, `cargo doc`, the examples and the wasm32 library with `flora`; `flora::tests` (2) pass.
+- Visual (`/tmp/i22`): `flora_wind` under forced Rain at 15.8 m/s: autumn colour, wet bark; the amplified difference between frames a quarter-second apart outlines every leaf and branch of the near tree (the crowns sway and flutter: the wind reaches the trees). The pale discs at the horizon are the scene's white spheres in fog, as in the 0.30 still. `docs/flora_wind.png` re-captured. GREAT for what this changes (the wiring); the scene itself is unchanged.
+
+### Top 5 remaining items, ranked
+
+1. **#8 world-units scale** (a `FloraUnits`-style `ElementsUnits`; then `ElementsFloraPlugin` maps it onto `FloraUnits`).
+2. **#13 isomesh with many volumes and a game-owned ground**.
+3. **Wet ground reflects the sun under overcast**.
+4. **The anti-solar sky at sunset**, **rim sparkle** (carried).
+5. **Bevy's perspective-only sky under an orthographic camera** (carried).
