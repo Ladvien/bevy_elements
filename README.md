@@ -84,6 +84,16 @@ Everything runs in `Update` in the chained sets `ElementsSystems::{Clock, Weathe
 
 `ElementsCamera` marks the camera the environment follows. Adding it inserts, where absent: `AtmosphereSettings`, `AtmosphereEnvironmentMapLight`, `DepthPrepass`, `VolumetricFog`, `DistanceFog`, `Exposure`, and a zero per-camera `AmbientLight` (sky light comes from the atmosphere's environment map), and it spawns one Earth `Atmosphere` if there is none. It sets `Msaa::Off` (the depth prepass and the precipitation pass read the depth texture single-sampled; insert `Msaa` after spawning the camera to override). A camera that kept Bevy's default clear colour is cleared every frame to the night sky's own faint glow at its exposure (the space behind the atmosphere); one that set its own `ClearColorConfig` keeps it. With `auto_exposure` (the default) the exposure follows the sun, sky and moon: illuminance-metered like Ghost of Tsushima, mapped with Ward's contrast-based scale factor over Larson et al.'s rod-and-cone thresholds, so a moonlit scene stays dark instead of being exposed up to daylight; around sunset it is capped by the sky toward the sun, so the golden hour and the twilight glow keep their colour instead of turning white. `ElementsQuality` (`Low`, `Medium`, `High`, `Ultra`) sets every resolution and step count.
 
+#### A focus, and isometric cameras
+
+The camera-relative domains (the rain and snow box, the wind window and its gusts, the ground fog, the strikes and the thunder distance, the cloud weather and shadow maps, the trails and waves windows, the surface weathering's mean) centre on the camera. Put `ElementsFocus` on the camera to centre them on something else: `ElementsFocus::Entity(player)` follows that entity's transform, `ElementsFocus::Point(p)` a point you move yourself. A third-person camera puts it on the character; an isometric or top-down game, whose camera stands far back from what it shows, on the player or on the point the camera looks at.
+
+Orthographic cameras (`Projection::Orthographic`) work: the clouds are marched along the view's parallel rays, starting on the plane through the focus (so the camera's stand-off is not air and a camera high above a low deck is not inside it: looking down, the clouds show as their shadows), and the bolt keeps two pixels of core at every distance. For an orthographic followed camera the crate also adapts what Bevy measures from the camera's translation: the distance fog becomes linear from the nearest ground the view shows (`orthographic_fog_falloff`), the sun and moon shadows one cascade around the focus, the rain box grows to cover the view's footprint (up to 240 m across) and its drops are drawn without the distance fade (a drop is a twentieth of a pixel at a strategy zoom), and the ground-fog volume is off (every orthographic ray would cross the whole layer at one slant). A perspective camera is unchanged. `docs/research/view-anchor.md`; the `isometric` example.
+
+![An isometric town 1500 m from its camera, which follows the walker: rain, snow, fog and a partly cloudy afternoon](docs/isometric.png)
+
+![The isometric town through Rain, Thunderstorm, Snow and a partly cloudy afternoon, the camera following the walker](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/isometric.gif)
+
 ![Twilight toward the sun, the sun 8° below the horizon: the orange glow under a violet sky, clouds and posts in silhouette](docs/twilight.png) ![The same evening away from the sun, 5° below: the pink Belt of Venus over the blue Earth's shadow](docs/belt_of_venus.png)
 
 ### Clock, sun, moon and stars
@@ -96,7 +106,7 @@ Everything runs in `Update` in the chained sets `ElementsSystems::{Clock, Weathe
 
 ### Wind
 
-`WindState` has the prevailing wind, the 10 m speed, the gust factor, the wind at the camera and the simulated field: a `rgba16float` 3D texture, toroidally addressed, around the camera (64 × 16 × 64 cells of 4 m at High). Shaders sample it with the supported WGSL import:
+`WindState` has the prevailing wind, the 10 m speed, the gust factor, the wind at the focus (`at_focus`; the camera without an `ElementsFocus`) and the simulated field: a `rgba16float` 3D texture, toroidally addressed, around the focus (64 × 16 × 64 cells of 4 m at High). Shaders sample it with the supported WGSL import:
 
 ```wgsl
 import bevy_elements::wind::{WindFieldParams, elements_wind};
@@ -452,6 +462,7 @@ Native (Vulkan, Metal, DX12) and wasm WebGPU. WebGL2 is unsupported: the simulat
 - [Erosion](docs/research/erosion.md) — Mei et al. 2007, Jákó 2011, Musgrave et al. 1989, Krištof et al. 2009, Jain et al. 2024, Galin et al. 2019.
 - [Water rendering](docs/research/water-rendering.md) — Vlachos 2010 (Portal 2 water flow), Chentanez & Müller 2010, Mei et al. 2007, Jákó & Tóth 2011, Pope & Fry 1997, Real-Time Rendering.
 - [Voxel snow](docs/research/voxel-snow.md) — the column-top terrain `VoxelGround` feeds the snow maps, the snow slab of `SnowyField` over isomesh's signed distance fields, per-column sample-and-hold swaps and the chunks they dirty; Festenberg & Gumhold 2011, Lorensen & Cline 1987, Tereshin et al. 2021.
+- [A focus and orthographic cameras](docs/research/view-anchor.md) — Marschner & Shirley (orthographic rays), Real-Time Rendering, Puig-Centelles et al. 2009 and 2011 (the rain container around what the observer sees), Losasso & Hoppe 2004, Tatarchuk 2006.
 
 ## Examples
 
@@ -469,6 +480,7 @@ Run with `cargo run --release --example <name>`. Every example takes `ELEMENTS_F
 | `rain` | Rain over a shelter with a blocker roof; `ELEMENTS_PRESET=Thunderstorm`, `ELEMENTS_HOUR=23` |
 | `snowfall` | The `Snow` preset (or `ELEMENTS_PRESET=Blizzard`); `ELEMENTS_HOUR` holds an hour, `ELEMENTS_GROW_HOURS` grows the snow before the first frame |
 | `weathered_town` | Buildings in `WeatheredMaterial` cycling Rain then Snow, a pavilion with a `PrecipitationBlocker` roof over a sheltered (`exposure` 0) box; `ELEMENTS_PRESET`, `ELEMENTS_HOUR`, `ELEMENTS_SCALE` (clock speed, default 300), the clock keeps running because wetness and snow only build with game time |
+| `isometric` | A town under an orthographic camera 1500 m back and 30° down that follows a walker (`ElementsFocus::Entity`), cycling Rain, Thunderstorm, Snow and PartlyCloudy; `ELEMENTS_PRESET`, `ELEMENTS_HOUR`, `ELEMENTS_SCALE` (clock speed, default 30), `ELEMENTS_ZOOM` (view height, m, default 40) |
 | `flora_wind` | `bevy_flora` trees in this crate's wind, season and rain (`--features flora`) |
 | `flood` | A V-shaped valley, a 50 m³/s `WaterSource` and rain (`ELEMENTS_PRESET=Clear` for another sky), drawn by `WaterPlugin`; prints `Environment::water_depth` at a marker 100 m downstream every second; `G`/`H` double and halve the simulation speed |
 | `lake` | A 60 m³/s `WaterSource` fills a round basin and a system closes the tap when it is full: the water as a lake; `G`/`H` double and halve the simulation speed |
