@@ -1432,3 +1432,38 @@ This crate's `voxel-snow.md`, `snow-cover.md` (Fearing 2000's shed angles) and `
 3. **Bright snow scenes**: the illuminance-metered exposure renders a sunlit snowfield and the stone on it pale (`voxel_walls`).
 4. **The anti-solar sky at sunset**, **rim sparkle** (carried).
 5. **Bevy's perspective-only sky under an orthographic camera** (carried).
+
+## Iteration 24 — 2026-10-18 — a world-units scale (issue #8)
+
+**Commits:** `0717357` (research note `docs/research/units.md`), `9628f11` (the core: `ElementsUnits`, the metre-frame view, the atmosphere scale), the boundary conversions with tests, the examples' `ELEMENTS_UNITS`, README / CHANGELOG / AGENTS / still, this log. Merged through a pull request; closes #8. **Sibling repos:** none. **Not released.**
+
+### What changed, and why it ranked first
+
+The last open issue, and the one that blocked a foot-unit game outright (every metre size 3.28× too small, the sky's aerial perspective 3.28× too strong). `ElementsUnits { units_per_metre }` keeps the crate simulating in metres in a frame of world ÷ u and converts at the boundaries only: the followed view (one place every camera-relative domain reads), each `Transform` read (`to_metres`), what the crate writes into Bevy's world (the spawned `Atmosphere`'s scale, `DistanceFog`, the ground-fog volume, cascades, the bolt and its light at intensity × u², terrain and water patches and bounds), the public positions, and the 13 shaders that take world positions from Bevy (a `units` factor in each pass's own uniform; `ElementsGlobals` 80 → 96 B). Two parallel slices did the ~120 CPU and 13 shader boundaries against a written contract (`/tmp/i24/contract.md`, from an inventory of both sides).
+
+### Sources
+
+Gregory 2018 (MKS simulations, the world unit the game's choice; corpus), Lagarde & de Rousiers 2014 §4.1–4.2 (homogeneous distance units, `E = I/d²`, 1 unit = 1 m; the author's PDF), Bevy 0.20's `world_to_atmosphere` (the entity's scale), bevy_flora's `FloraUnits` rule.
+
+### Critique and verdicts (`/tmp/i24/critique.md`)
+
+| Scene | Metres vs feet | Verdict |
+|---|---|---|
+| Hills, partly cloudy | RMSE 0.26 %, ×20 diff: random pollen only | GREAT |
+| Hills, rain | RMSE 1.0 %, random drops only | GREAT |
+| Cumulus at 16:00 | RMSE 0.33 %, same clouds and haze | GREAT |
+| Scripted strike | Same flash glow; bolt hidden by rain on main too | GREAT for the change |
+
+### Verification
+
+- `tests/gpu_units.rs` `a_world_in_feet_answers_as_the_same_world_in_metres` (hills, wind, overcast; heights within 2.3e-5 m, wind within 0.12 %, the same cloud shadows); `tests/lightning.rs` `a_strike_in_a_world_of_feet_is_a_thousand_metres_off`; `precipitation::tests::the_rain_box_is_sixty_metres_in_a_world_of_feet`; unit tests in fog, celestial, clouds (view ray), query (terrain height in feet).
+- The full GPU suite at the default 1.0 (every converted shader is a no-op there) and all gates.
+- Found during capture: `common::camera` bundling a `Projection` panicked `storm`; the planes are scaled by a system instead.
+
+### Top 5 remaining items, ranked
+
+1. **Wet ground reflects the sun under overcast**.
+2. **Bright snow scenes** (the illuminance-metered exposure on a sunlit snowfield).
+3. **A bolt hidden by heavy rain at 1.5 km** in `storm` (the scene or the bolt's brightness against the rain veil).
+4. **The anti-solar sky at sunset**, **rim sparkle** (carried).
+5. **Bevy's perspective-only sky under an orthographic camera** (carried).
