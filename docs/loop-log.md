@@ -1577,3 +1577,58 @@ Tatarchuk 2006 (corpus `s2006-advances-materials-6`: artist-set rain direction a
 3. **A 25 mm/h storm hides the whole town under an orthographic camera** (both looks; the storm's coverage and the linear fog from the nearest ground).
 4. **The overcast dome is flat** (Eddington's emergent radiance in `cloud_scatter`), carried.
 5. **Bright snow scenes under the metered exposure**, **the water's body colour under a grey sky**, **a bolt hidden by heavy rain**, carried.
+
+## Iteration 27 — 2026-10-18 — trails on a game's own ground (issue #26)
+
+**Commits:** `c81ac03` (research note `docs/research/trails-game-ground.md`), the implementation with its tests, the examples, docs and images, this log. Merged through a pull request that closes #26. **Sibling repos:** none (`TrailGround` takes `bevy_flora`'s `FloraGround` shape by convention, not by dependency). **Not released.** The GPU was taken through `gpu-tenant claim coding --who bevy_elements@big`; olmOCR's vLLM reloaded during the lease and left 0.9 GB, so the llama-swap models were evicted again as a grant does (logged on the board).
+
+### Candidates (open issues first)
+
+| Rank | Candidate | Class | Decision |
+|---|---|---|---|
+| 1 | #26: trails need the crate's `Terrain`; a game with its own ground (Sanctuary) gets none, no query, and the materials fade every trail under a camera that stands back from its focus | 3 (missing feature) + 1 (a wrong result: the fade by the camera) | **this iteration** |
+| 2 | The isometric town at night is black | 1 | carried |
+| 3 | A 25 mm/h storm hides the town under an orthographic camera | 2 | carried |
+| 4 | The overcast dome is flat | 2 | carried |
+| 5 | Bright snow scenes under the metered exposure | 2 | carried |
+
+#26 beat the black night because it is the only open issue, a consumer's blocked gameplay decision (prints at dawn show where flankers went), and it carried a real bug: every trail under the isometric camera was faded out.
+
+### What changed
+
+- **`TrailGround`** (world XZ → world height, soil or `with_sand()`): the kernels take a uniform ground from `SurfaceWeathering` (snow depth and density, wetness), the contact is tested on the CPU against the game's height, and the terrain and cover bindings hold placeholders; `TrailGpu` owns the handles it binds, so the render world no longer needs `TerrainGpu` or `CoverGpu`.
+- **`WeatheredExtension::with_trails()`**: the same parallax march as `GroundExtension` (shared `trails::surface`), the window, its centre, the beam's share and the snow depth from two new `vec4`s in `ElementsGlobals` (96 → 128 B, rewritten in place, so the moving centre re-prepares nothing), the field at bindings 104/105, no storage buffer.
+- **The window centre is published** (`TrailState::centre`) and every material fades by it, not by the eye: the fix for the focus.
+- **`Environment::trail_depth`**: a fifth kernel (`trail_readback`, its own layout and pass) writes the deepest point per 2 × 2 texels with the window origin in a header; `TrailSnapshot` places it.
+- **`TrailSettings::texel_m`**, **`SurfaceWeathering::with_snowpack`** (replacing the crate's test-only constructor).
+- Examples: the `isometric` walker presses prints into the town's own ground (8 cm texels, `ELEMENTS_SNOWPACK`, `ELEMENTS_TRAIL_TEXEL`); `trails` with `ELEMENTS_TERRAIN=mesh` (a game's hilly mesh, no terrain); `bench_elements` with `ELEMENTS_TERRAIN=game`.
+
+### Sources
+
+Barré-Brisebois 2014 (GDC, *Deformable Snow Rendering in Batman: Arkham Origins*: "we don't have terrain", snow surfaces a game marks, replenish while snowing; slides read as text), Tran 2018 (Kodeco, a world-space trail map projected onto the ground material), Gawron 2018 and `roymasad/Unreal-Snow-Deformation` (surfaces opt in), Hanák 2021 (RotTR's window, TLOU2's parallax prints on any mesh), Tatarchuk 2006 (`s2006-advances-materials-10`), Alvarado et al. 2022 (`10.48550_arxiv.2209.10215`), CRREL 90-9, `bevy_flora` 0.46 `FloraGround`. `distill_search` through the MCP bridge returned 404; `hs distill search` worked.
+
+### Critique and verdicts (`/tmp/i27/critique.md`)
+
+| Scene | Evidence | Verdict |
+|---|---|---|
+| Game mesh, snow, 2–20 m | `r2/ms3.png` | GREAT: crisp pockets, sky-blue far walls, sunlit lips; equal to the terrain path |
+| Game mesh, sand 18.3 h / mud | `r2/sd3.png`, `r2/z_mud.png` | GREAT (trail); the example's mud art is a plain wet colour |
+| Isometric, 17.3 h, against the light | `r3/e1.png`, `r3/e3.png`, `final/iso_eve.png` | GREAT: the walker's whole loop a dotted ellipse of shadowed prints at 1× |
+| Isometric, dawn behind the camera / noon | `r1/z6_both.png`, `r3/n1b.png` | faint, by physics (down-sun, tonemapper shoulder); Deviation 6 |
+| Terrain path | `r2/terrain_snow.png` vs `before/trails_snow.png`; `gpu_trails` 4/4 | unchanged |
+
+Found and fixed in review: mesh mode forcing Clear before the harness grew the snow; the weathered snow bared everywhere when a game pins `snow_cover` without a depth (`gpu_weathered` caught it).
+
+### Verification
+
+- `tests/gpu_trail_ground.rs` (4): 20 m walk, `trail_depth` 0.0700 m at all 39 points, `Some(0)` beside, `None` outside, no `Terrain`; contact on a 10 % slope (0.0690 m on the ground, 0 from 0.3 m above); 5 cm more snow 6.90 → 1.90 cm; a weathered plane draws the print (129, 166, 214) against (234, 231, 231) only `with_trails()`. `trails::tests` (readback decode, a moved window refused).
+- Full GPU suite, cargo test, clippy, doc, wasm, save: pass.
+- Bench (`bench_elements`, High, 1080p, P2 1755–1800 MHz, minimum): `elements_trails` hills 0.119–0.121 ms (before 0.119), game ground 0.112–0.116 ms; `elements_trails_readback` 0.024–0.026 ms on its 4 Hz ticks; `main_opaque_pass_3d` with the ruts filling much of the frame on a weathered plane 0.413 ms against 0.226–0.236 ms off.
+
+### Top 5 remaining items, ranked
+
+1. **The isometric town at night is black** (22 h, `Rain`: mean 1 DN), carried.
+2. **A 25 mm/h storm hides the whole town under an orthographic camera**, carried.
+3. **Bright snow scenes under the metered exposure**: snow at 236 DN sits in the tonemapper's shoulder, which also hides prints at noon (`trails-game-ground.md` Deviation 6), and house shadows on snow read a saturated sky blue.
+4. **The overcast dome is flat** (Eddington's emergent radiance in `cloud_scatter`), carried.
+5. **A compacted-ground material stage for `WeatheredMaterial`** (Barré-Brisebois's two stages: a trench floor through grass shows soil on the terrain, the game's colour on a mesh), and **the water's body colour under a grey sky**, carried.
