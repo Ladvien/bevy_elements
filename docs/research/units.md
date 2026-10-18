@@ -30,7 +30,7 @@ A game whose world unit is not the metre (Sanctuary's is the foot, 3.2808 units 
 | `ElementsUnits::units_per_metre` | 1.0 | issue #8; FloraUnits |
 | Foot | 3.2808 | 1 ft = 0.3048 m (exact) |
 | Point light intensity in world units | `I · u²` | Lagarde & de Rousiers 2014 eq. 13 |
-| Atmosphere entity scale | `u` | Bevy 0.20 `world_to_atmosphere` |
+| Atmosphere entity transform | translation `(0, −R·u, 0)`, scale `u` | Bevy 0.20 `world_to_atmosphere`; `Atmosphere` docs (`bevy_light-0.20.0/src/atmosphere.rs:25-70`) |
 
 ## GPU mapping
 
@@ -51,7 +51,7 @@ The same scene built in feet (every `Transform` and the camera multiplied by 3.2
 
 ## Deviations from this plan
 
-(none yet)
+1. **Correction, iteration 25: the atmosphere's translation is the planet's centre.** This note read only the scale in `world_to_atmosphere`. Bevy's `Atmosphere` documents its entity's `GlobalTransform` as the planet's centre and, when that transform is still default on add, moves it `inner_radius` below the origin. The spawn here gave the entity a `Transform::from_scale(u)`, and transform propagation wrote that transform's identity translation back over Bevy's placement, so the planet's centre sat at the world origin and the camera inside the planet: in the `waves` example under Clear the sky became a beige dome of radial streaks and the pond reflected it (an app whose propagation ran after the hook; others kept Bevy's placement, which is why the iteration-24 captures looked right). The crate's atmosphere `Transform` is now `(0, −R·u, 0)` with scale `u` (`plugin::planet_transform`), at spawn and when the units change; `plugin::tests::the_crate_atmosphere_centres_the_planet_below_the_origin` fails on the old transform. `docs/research/sky-light.md` Deviation 6.
 
 ## Pending index
 

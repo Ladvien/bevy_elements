@@ -344,7 +344,7 @@ impl ElementsUnits {
 /// Says once that the units are not usable, and keeps the crate's atmosphere in metres.
 fn apply_units(
     units: Res<ElementsUnits>,
-    mut atmospheres: Query<&mut Transform, With<ElementsAtmosphere>>,
+    mut atmospheres: Query<(&mut Transform, &Atmosphere), With<ElementsAtmosphere>>,
     mut warned: Local<bool>,
 ) {
     if !units.is_changed() {
@@ -355,12 +355,22 @@ fn apply_units(
         warn!("ElementsUnits::units_per_metre is {u}: reading it as 1.0");
         *warned = true;
     }
-    for mut transform in &mut atmospheres {
-        transform.scale = Vec3::splat(units.per_metre());
+    for (mut transform, atmosphere) in &mut atmospheres {
+        *transform = planet_transform(atmosphere, units.per_metre());
     }
 }
 
-/// The `Atmosphere` the crate spawned: scaled by [`ElementsUnits`] so Bevy's sky is in metres.
+/// The transform of the crate's `Atmosphere`: Bevy reads its `GlobalTransform` as the planet's
+/// centre and scale, so the centre lies `inner_radius` metres below the world origin (Bevy's own
+/// default, which a `Transform` would otherwise overwrite with the origin) and the planet is
+/// scaled to the world units.
+fn planet_transform(atmosphere: &Atmosphere, units: f32) -> Transform {
+    Transform::from_translation(Vec3::NEG_Y * (atmosphere.inner_radius * units))
+        .with_scale(Vec3::splat(units))
+}
+
+/// The `Atmosphere` the crate spawned: its planet centred below the origin and scaled by
+/// [`ElementsUnits`], so Bevy's sky is in metres.
 #[derive(Component, Clone, Copy, Debug)]
 pub(crate) struct ElementsAtmosphere;
 
@@ -623,11 +633,13 @@ impl Dresser<'_, '_> {
         }
         if want.atmosphere && self.atmospheres.is_empty() && !self.needs.atmosphere_spawned {
             let medium = self.media.add(ScatteringMedium::default());
+            let atmosphere = Atmosphere::earth(medium);
+            let transform = planet_transform(&atmosphere, self.units.per_metre());
             self.commands.spawn((
                 Name::new("Elements atmosphere"),
-                Atmosphere::earth(medium),
+                atmosphere,
                 ElementsAtmosphere,
-                Transform::from_scale(Vec3::splat(self.units.per_metre())),
+                transform,
             ));
             self.needs.atmosphere_spawned = true;
         }
@@ -776,5 +788,44 @@ mod tests {
         app.world_mut().entity_mut(camera).remove::<ElementsFocus>();
         app.update();
         assert_eq!(app.world().resource::<ElementsView>().position, eye);
+    }
+
+    /// Bevy reads the atmosphere's `GlobalTransform` as the planet's centre: the crate's
+    /// atmosphere keeps it `inner_radius` metres below the origin, in world units, after the
+    /// transforms propagate and when the units change. With the centre at the origin the camera
+    /// stands inside the planet and the sky is garbage (iteration 24's regression).
+    #[test]
+    fn the_crate_atmosphere_centres_the_planet_below_the_origin() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::transform::TransformPlugin,
+            ElementsCorePlugin,
+        ))
+        .init_resource::<CameraNeeds>()
+        .insert_resource(Assets::<ScatteringMedium>::default())
+        .add_observer(dress_camera);
+        app.world_mut()
+            .spawn((Camera3d::default(), ElementsCamera::default()));
+        let centre = |app: &mut App| {
+            let mut atmospheres = app
+                .world_mut()
+                .query_filtered::<(&GlobalTransform, &Atmosphere), With<ElementsAtmosphere>>();
+            let (global, atmosphere) = atmospheres.single(app.world()).map_or_else(
+                |e| panic!("one crate atmosphere: {e}"),
+                |(g, a)| (*g, a.inner_radius),
+            );
+            let (scale, _, translation) = global.to_scale_rotation_translation();
+            (translation, scale, atmosphere)
+        };
+        for u in [1.0_f32, 3.2808] {
+            app.insert_resource(ElementsUnits { units_per_metre: u });
+            for _ in 0..3 {
+                app.update();
+            }
+            let (translation, scale, radius) = centre(&mut app);
+            assert_eq!(translation, Vec3::NEG_Y * (radius * u), "units {u}");
+            assert_eq!(scale, Vec3::splat(u), "units {u}");
+        }
     }
 }
