@@ -1329,3 +1329,49 @@ Patry 2021 (corpus `s2021-advances-pdf-66-mb`: physically based lighting that "c
 3. **#12 bevy_flora 0.46**, **#13 isomesh with many volumes and a game-owned ground**.
 4. **Wet surfaces reflect a clear sky under overcast** (carried).
 5. **The anti-solar sky at sunset**, **rim sparkle**, **Bevy's perspective-only sky under an orthographic camera** (carried).
+
+## Iteration 21 — 2026-10-18 — the snowpack survives a save, and a snow season (issues #14, #15)
+
+**Commits:** `175fc8b` (research note `docs/research/snow-season.md`), the implementation with tests, `weathered_town`'s November calendar and save/load, the README / CHANGELOG / still / GIF, this log. Merged through a pull request; closes #14, #15. **Sibling repos:** none. **Not released.**
+
+### What changed, and why it ranked here
+
+#8 (a units scale) was ranked first but touches every render shader and transform boundary; #14 and #15 share the snowpack and are what a game with a calendar and saves hits first (Sanctuary's lying snow vanished on load, and a cold autumn night snowed before its "snow from 14 November"). `Climate::snow_season: Option<SnowSeason>` gates the snow presets out of season and carries `Weather::snow_possible` into every reader of the rain–snow split, the GPU kernels included (`snow_fraction_at(t, possible)`), ramping over the hour outside each boundary. `SurfaceWeathering` serializes; a restored pack integrates only when the loaded clock is within an hour of the save, and with a terrain re-seeds the cover maps through a one-off `cover_seed` kernel (point pack × each cell's slope and shelter exposure), dropping a readback in flight across it.
+
+### Candidates ranked
+
+| # | Candidate | Category | Note |
+|---|---|---|---|
+| 1 | **#14 + #15: the snowpack in a save, a snow season** | 3 (adoption) | picked |
+| 2 | #8 world-units scale | 3 | next (wide) |
+| 3 | #12 bevy_flora 0.46, #13 isomesh many volumes | 3 | queued |
+| 4 | Wet ground reflects the sun under overcast | 2 | carried; seen in this iteration's 11:00 captures |
+
+### Sources
+
+Jennings et al. 2018 (`10.1038/s41467-018-03629-7`, read from the PDF: the 50 % rain–snow threshold averages 1.0 °C and spans −0.4 to 2.4 °C, the transition 2.6–4.6 °C wide, so a physical ramp cannot keep snow out of a near-freezing fortnight: the season is an authored override); Patry 2021 (art knobs per weather state); the repo's climate-weather, snow-cover and wetness notes. Brown & Mote 2009 not retrievable (Pending index).
+
+### Critique and verdicts (`/tmp/i21/critique.md`)
+
+| Feature | Evidence | Verdict |
+|---|---|---|
+| Daily stills with auto exposure at 21600× | round 1 | FAIL (blown out; added `ELEMENTS_EV100`) |
+| 11:00 stills | round 2 | NOT YET (pre-existing wet-ground sun glare in frame; tofu labels) |
+| 15:30 stills: 9 Nov differs, 14 Nov identical | `docs/snow_season.png` | GREAT |
+| Daily flip-book, flakes vs rain on 2 Nov | `docs/snow_season.gif` | GREAT |
+| Save at 15 Nov, load on a fresh app | `/tmp/i21/save/pair.png` | GREAT |
+
+### Verification
+
+- New tests: `tests/snow_season.rs` (no Snow or Blizzard and no lying snow 1–13 November in the cool-temperate climate with seed 1, the same precipitation as without the season, all of it rain; 40 days from 14 November identical to no season; a −3 °C Rain hour is rain outside and snow inside; forced Snow snows outside; the boundary ramps over 23:00–24:00), `tests/save.rs` (`a_restored_snowpack_continues_the_same_snow` 720 updates identical; `a_snowpack_loaded_a_day_later_neither_melts_nor_grows`, against a carried copy that integrates the day; `files_from_before_the_snow_season_load`), `climate::model` `a_snow_season_wraps_the_year_and_ramps_outside_it`, `cover::gpu_tests::gpu_a_restored_snowpack_seeds_the_maps` (open cells at 0.1 m and 20 mm SWE, wetness 0.6, the 100 cells under the roof bare and dry).
+- Found by a test: the first seed request was an `Arc<AtomicU64>` bump, which the render world saw before the frame's parameters were extracted; the render frame in flight ran the seed with the previous, empty pack and marked it done (the map stayed bare, `seeded` caught up). The request is now a plain extracted field beside `params.seed`; atomics only report back. Recorded in `AGENTS.md`.
+- Gates: build, `cargo test`, examples, clippy `-D warnings`, `cargo doc` `-D warnings`, wasm32, rustfmt on the changed files, `tests/save.rs`, every GPU file and lib module.
+- Performance: one multiply per cell in three kernels; the seed is one 8×8 dispatch per load. Not re-benchmarked.
+
+### Top 5 remaining items, ranked
+
+1. **#8 world-units scale**.
+2. **#12 bevy_flora 0.46**, **#13 isomesh with many volumes and a game-owned ground**.
+3. **Wet ground reflects the sun under overcast** (Bevy's environment map is the clear sky; visible in every wet noon capture).
+4. **The anti-solar sky at sunset**, **rim sparkle** (carried).
+5. **Bevy's perspective-only sky under an orthographic camera** (carried).
