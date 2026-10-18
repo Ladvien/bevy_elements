@@ -14,7 +14,9 @@
 //! `ELEMENTS_PRESET=Blizzard` for the wind that drifts), the wetness update with the cover pack and
 //! readback (`elements_wetness`) and the shelter mask (`elements_shelter`, once per change of the
 //! blockers) run at most 20 times a second;
-//! `none` is the flat test scene with neither, and `lake` a 256 m plain with a round basin that a
+//! `none` is the flat test scene with neither, `game` a game's own flat ground (a plane in
+//! `WeatheredMaterial` drawing trails, a `TrailGround`, 30 cm of snow from
+//! `SurfaceWeathering::with_snowpack`, the camera 6 m up looking at the imprints), and `lake` a 256 m plain with a round basin that a
 //! 200 m³/s source fills, viewed from 45 m up so the water covers half the frame
 //! (`main_transparent_pass_3d` then holds both water passes; `ELEMENTS_WATER=off` leaves the
 //! water rendering out to subtract it). `ELEMENTS_IMPRINTS=16` drives that many wheel imprints
@@ -47,7 +49,7 @@ const WARMUP_FRAMES: u32 = 240;
 const AEOLIAN_FRAME_SHARE: f64 = 20.0 / 60.0;
 
 /// The crate's GPU passes, by diagnostic span name.
-const PASSES: [&str; 25] = [
+const PASSES: [&str; 26] = [
     "elements_wind",
     "elements_fog",
     "elements_clouds_noise",
@@ -70,6 +72,7 @@ const PASSES: [&str; 25] = [
     "elements_terrain",
     "elements_water_normals",
     "elements_trails",
+    "elements_trails_readback",
     "elements_waves_force",
     "elements_waves_step",
     "elements_waves_publish",
@@ -180,10 +183,12 @@ fn setup(
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut weathered: ResMut<Assets<WeatheredMaterial>>,
     mut director: ResMut<WeatherDirector>,
     quality: Res<ElementsQuality>,
 ) {
     let lake = std::env::var("ELEMENTS_TERRAIN").as_deref() == Ok("lake");
+    let game = std::env::var("ELEMENTS_TERRAIN").as_deref() == Ok("game");
     let bodies = std::env::var("ELEMENTS_CONTACTS").is_ok();
     let eye = commands
         .spawn(if lake && bodies {
@@ -193,6 +198,9 @@ fn setup(
         } else if lake {
             // The lake fills half the frame.
             camera(Vec3::new(-75.0, 45.0, 0.0), Vec3::new(0.0, 0.0, 0.0))
+        } else if game {
+            // Over the imprints' circles, which fill the lower half of the frame.
+            camera(Vec3::new(0.0, 6.0, -10.0), Vec3::new(0.0, 0.0, 0.0))
         } else {
             camera(
                 Vec3::new(0.0, 30.0, 0.0),
@@ -219,8 +227,23 @@ fn setup(
             Transform::from_xyz(0.0, 2.0, 0.0),
         ));
     }
+    if game {
+        commands.insert_resource(TrailGround::flat(0.0));
+        commands.insert_resource(SurfaceWeathering::with_snowpack(0.3, 100.0, 0.0));
+        commands.spawn((
+            Mesh3d(meshes.add(Plane3d::default().mesh().size(400.0, 400.0))),
+            MeshMaterial3d(weathered.add(WeatheredMaterial {
+                base: StandardMaterial {
+                    base_color: Color::srgb(0.30, 0.34, 0.22),
+                    perceptual_roughness: 0.9,
+                    ..default()
+                },
+                extension: WeatheredExtension::default().with_trails(),
+            })),
+        ));
+    }
     let terrain = match std::env::var("ELEMENTS_TERRAIN").as_deref() {
-        Ok("lake") => None,
+        Ok("lake") | Ok("game") => None,
         Ok("none") => None,
         Ok("mountains") => Some(ProceduralTerrain::mountains(42)),
         Ok("dunes") => Some(ProceduralTerrain::dunes(42)),
@@ -241,7 +264,7 @@ fn setup(
                 Transform::from_xyz(100.0, 0.0, 100.0),
             ));
         }
-        None if lake => {}
+        None if lake || game => {}
         None => test_scene(&mut commands, &mut meshes, &mut materials),
     }
     // PartlyCloudy is the clouds note's bench scene; `ELEMENTS_PRESET=Thunderstorm` saturates the
@@ -313,6 +336,8 @@ struct BenchImprint(f32);
 /// Every bench imprint on its own circle round the camera's XZ, on the ground.
 fn drive_imprints(
     env: Environment,
+    game: Option<Res<TrailGround>>,
+    snow: Option<Res<SurfaceWeathering>>,
     time: Res<Time<Virtual>>,
     mut imprints: Query<(&BenchImprint, &mut Transform)>,
 ) {
@@ -321,10 +346,17 @@ fn drive_imprints(
         let radius = 3.0 + 0.3 * imprint.0;
         let a = imprint.0 * 2.399_963 + 4.0 * t / radius;
         let xz = Vec2::new(a.cos(), a.sin()) * radius;
-        let Some(ground) = env.terrain_height(xz) else {
+        // The surface: a game's ground with the point snowpack, or the terrain as read back.
+        let surface = match &game {
+            Some(g) => Some(g.height(xz) + snow.as_ref().map_or(0.0, |s| s.snow_depth_m)),
+            None => env
+                .terrain_height(xz)
+                .map(|h| h + env.snow_depth(xz).unwrap_or(0.0)),
+        };
+        let Some(surface) = surface else {
             continue;
         };
-        let y = ground + env.snow_depth(xz).unwrap_or(0.0) - 0.05;
+        let y = surface - 0.05;
         *transform = Transform::from_xyz(xz.x, y, xz.y)
             .looking_to(Vec3::new(-a.sin(), 0.0, a.cos()), Vec3::Y);
     }

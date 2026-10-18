@@ -47,7 +47,7 @@ The issue's dawn: under the isometric camera at 35°, after a night of a walker 
 
 ## Validation targets
 
-1. **Acceptance (GPU, `tests/gpu_trails.rs`).** No `Terrain` entity; `TrailGround::flat(0.0)`; `SurfaceWeathering::with_snowpack(0.10, 150, 0)`; an `Imprint` (walker sole, 760 N) moved 20 m along the ground: `Environment::trail_depth > 0.05` every 0.5 m along its path; no `Terrain` entity at the end.
+1. **Acceptance (GPU, `tests/gpu_trail_ground.rs`).** No `Terrain` entity; `TrailGround::flat(0.0)`; `SurfaceWeathering::with_snowpack(0.10, 150, 0)`; an `Imprint` (walker sole, 760 N) moved 20 m along the ground: `Environment::trail_depth > 0.05` every 0.5 m along its path; no `Terrain` entity at the end.
 2. **Contact on a sloped game ground (GPU).** `TrailGround::new(|xz| 0.1 · x)`: a sole that follows the slope presses; the same sole 0.3 m above it presses nothing.
 3. **New snow fills a print on game ground (GPU).** Raising the inserted pack from 10 to 15 cm shallows a trench by 5 cm (±0.5 cm).
 4. **The query (GPU and CPU).** `None` before the first readback and outside the window; `Some(0.0)` on untouched ground inside it; the readback's header places a moved window correctly (decode unit test).
@@ -58,7 +58,16 @@ The issue's dawn: under the isometric camera at 35°, after a night of a walker 
 
 ## Deviations from this plan
 
-(none yet)
+Each found in the capture review (`/tmp/i27/critique.md`, rounds `r1`–`r3`), a GPU test or the bench:
+
+1. **Measured (`tests/gpu_trail_ground.rs`):** `trail_depth` 0.0700 m at every one of 39 points along the 20 m path (the model's 0.07), `Some(0.0)` beside it, `None` 200 m away, no `Terrain` (Validation 1); on the 10 % slope the sole on the ground presses 0.0690 m and the one 0.3 m above it nothing (Validation 2); 5 cm more snow shallows a 6.90 cm print to 1.90 cm (Validation 3); the weathered plane `with_trails()` draws the print (129, 166, 214) against flat snow (234, 231, 231), and without it the same print is invisible, (234, 231, 231) on both (Validation 6).
+2. **Snow is bared only where the ground is pressed.** As first written, `1 − smoothstep(d − 0.02, d, pressed)` is 0 at `pressed = 0` when the snow depth `d` is 0, so a `WeatheredMaterial` whose game pinned only `snow_cover` (the `gpu_weathered` rig) lost all its snow; the reveal now applies only where `pressed > 0`.
+3. **The readback kernel costs 0.024–0.026 ms on its ticks** (`elements_trails_readback`, its own pass, High's 512² cells of 2 × 2 texels, 1920 × 1080, P2 at 1755–1800 MHz), against the plan's 0.02 ms: 1 M reads of the state. At the 4 Hz readback it is 0.0017 ms a frame at 60 fps; not worth a coarser cell.
+4. **`elements_trails` on game ground 0.112–0.116 ms** with 16 wheels, against 0.119–0.121 ms on the hills terrain in the same session (and the 0.119 ms `trails.md` measured): no map lookups. The terrain path is unchanged.
+5. **The weathered material's march, measured where it matters:** `bench_elements ELEMENTS_TERRAIN=game ELEMENTS_IMPRINTS=16`, the camera 6 m above the wheels' rings so the trails fill much of the lower half of the 1080p frame: `main_opaque_pass_3d` 0.413 ms with trails, 0.226–0.236 ms with `ELEMENTS_TRAILS=off`, so about 0.18 ms for a frame full of ruts (`trails.md`'s 0.003 ms was the terrain seen from 30 m with the trails a sliver of the frame). Pixels whose ray meets no trail still skip the march.
+6. **From a strategy view the prints read at a low sun seen against the light, and fade at noon or down-sun.** Under the isometric camera (from the south-east, 35° down, 40 m tall) at 7.5 h with the sun behind it, each print shows its sunlit far wall and hides its shadow (opposition), legible only at 6×; at noon (55°) they are lost in the tonemapper's shoulder over snow at 236 DN. At 17.3 h, the sun 10° in the west ahead of the camera, the walker's loop is a legible dotted ellipse of blue-shadowed prints at 1×. Real footprints seen from 40 m behave the same; the example's captures and the GIF use the evening. [INFERENCE: brightening the compacted floor's tint or the ambient term to force noon legibility would change the terrain's look too, and no source supports it.]
+7. **The isometric example widens its window to 8 cm texels** (`TrailSettings::texel_m`): at the default 5 cm (51 m) the far side of the walker's 28 m loop faded out; 8 cm (82 m) keeps the loop while each 10 × 26 cm print stays a distinct left/right pair at 4× (`r3/e3.png`).
+8. **The `trails` example's mesh mode settles after a second.** A game's ground is known at once, so the example forced its after-growth weather (`Clear`) on the first frame, before the harness had grown 24 h of `Snow`: the mesh stayed bare. It now waits 60 frames (growth of up to two days).
 
 ## Pending index
 

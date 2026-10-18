@@ -11,13 +11,18 @@
 //! that many metres above the ground (default `0,2.2,-11`), `ELEMENTS_LOOK=x,z` aims it (default
 //! the centre), `ELEMENTS_PRESET` replaces the weather after the ground is grown (e.g. `Snow` to
 //! watch new snow fill the tracks, with `ELEMENTS_SCALE=600` for ten game minutes a second).
-//! `ELEMENTS_FRAMES` and `ELEMENTS_SHOT` work as in the other examples.
+//! `ELEMENTS_TERRAIN=mesh` replaces the crate's terrain with a game's own: a hilly mesh in
+//! `WeatheredMaterial` (`with_trails()`), described to the trails by a `TrailGround` of the same
+//! height function, its snow and wetness `SurfaceWeathering`'s, no `Terrain` spawned
+//! (`docs/research/trails-game-ground.md`). `ELEMENTS_FRAMES` and `ELEMENTS_SHOT` work as in the
+//! other examples.
 
 mod common;
 
 use std::f32::consts::TAU;
 use std::time::Duration;
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_elements::*;
 use common::{ExampleHarness, camera};
@@ -48,6 +53,50 @@ enum Ground {
 struct Scene {
     ground: Ground,
     preset: Option<WeatherPreset>,
+    /// The ground is a game's own mesh, not the crate's terrain.
+    mesh: bool,
+}
+
+/// The game's own ground under `ELEMENTS_TERRAIN=mesh`: gentle hills, world height at world XZ.
+fn hills(xz: Vec2) -> f32 {
+    1.6 * (0.07 * xz.x).sin() * (0.05 * xz.y).cos() + 0.5 * (0.19 * xz.x + 0.13 * xz.y).sin()
+}
+
+/// A grid mesh of `hills` over `extent` metres, a vertex every `step` metres, with analytic
+/// normals.
+fn hills_mesh(extent: f32, step: f32) -> Mesh {
+    let n = (extent / step) as u32 + 1;
+    let mut positions = Vec::with_capacity((n * n) as usize);
+    let mut normals = Vec::with_capacity((n * n) as usize);
+    let mut uvs = Vec::with_capacity((n * n) as usize);
+    let e = 0.05;
+    for j in 0..n {
+        for i in 0..n {
+            let xz = Vec2::new(i as f32, j as f32) * step - Vec2::splat(0.5 * extent);
+            let y = hills(xz);
+            let dx = (hills(xz + Vec2::X * e) - hills(xz - Vec2::X * e)) / (2.0 * e);
+            let dz = (hills(xz + Vec2::Y * e) - hills(xz - Vec2::Y * e)) / (2.0 * e);
+            positions.push([xz.x, y, xz.y]);
+            normals.push(Vec3::new(-dx, 1.0, -dz).normalize().to_array());
+            uvs.push([xz.x, xz.y]);
+        }
+    }
+    let mut indices = Vec::with_capacity(((n - 1) * (n - 1) * 6) as usize);
+    for j in 0..n - 1 {
+        for i in 0..n - 1 {
+            let a = j * n + i;
+            let (b, c, d) = (a + 1, a + n, a + n + 1);
+            indices.extend_from_slice(&[a, c, b, b, c, d]);
+        }
+    }
+    Mesh::new(
+        bevy::mesh::PrimitiveTopology::TriangleList,
+        bevy::asset::RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_indices(bevy::mesh::Indices::U32(indices))
 }
 
 /// A foot of the walker: left (-1) or right (+1).
@@ -83,6 +132,7 @@ fn main() {
         Ok("mud") => Ground::Mud,
         _ => Ground::Snow,
     };
+    let mesh = std::env::var("ELEMENTS_TERRAIN").is_ok_and(|v| v.eq_ignore_ascii_case("mesh"));
     let preset = std::env::var("ELEMENTS_PRESET").ok().and_then(|name| {
         WeatherPreset::ALL
             .into_iter()
@@ -97,8 +147,16 @@ fn main() {
     let clock = WorldClock::new(date)
         .at_hour(f64::from(env_f32("ELEMENTS_HOUR", 10.5)))
         .with_time_scale(env_f32("ELEMENTS_SCALE", 1.0));
-    App::new()
-        .add_plugins((DefaultPlugins, ElementsPlugins, ExampleHarness))
+    let mut app = App::new();
+    if mesh {
+        let trail_ground = TrailGround::new(hills);
+        app.insert_resource(if ground == Ground::Sand {
+            trail_ground.with_sand()
+        } else {
+            trail_ground
+        });
+    }
+    app.add_plugins((DefaultPlugins, ElementsPlugins, ExampleHarness))
         .insert_resource(clock)
         .insert_resource(if ground == Ground::Sand {
             Climate::desert()
@@ -109,7 +167,11 @@ fn main() {
             enabled: false,
             ..default()
         })
-        .insert_resource(Scene { ground, preset })
+        .insert_resource(Scene {
+            ground,
+            preset,
+            mesh,
+        })
         .add_systems(Startup, setup)
         .add_systems(
             Update,
@@ -124,11 +186,32 @@ fn setup(
     mut director: ResMut<WeatherDirector>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut weathered: ResMut<Assets<WeatheredMaterial>>,
 ) {
-    commands.spawn(Terrain::procedural(match scene.ground {
-        Ground::Sand => ProceduralTerrain::dunes(7),
-        _ => ProceduralTerrain::hills(42),
-    }));
+    if scene.mesh {
+        // The game's own ground: grass, soil or sand that draws the trails pressed into it.
+        let color = match scene.ground {
+            Ground::Snow => Color::srgb(0.30, 0.34, 0.22),
+            Ground::Sand => Color::srgb(0.72, 0.62, 0.45),
+            Ground::Mud => Color::srgb(0.30, 0.25, 0.18),
+        };
+        commands.spawn((
+            Mesh3d(meshes.add(hills_mesh(160.0, 0.5))),
+            MeshMaterial3d(weathered.add(WeatheredMaterial {
+                base: StandardMaterial {
+                    base_color: color,
+                    perceptual_roughness: 0.9,
+                    ..default()
+                },
+                extension: WeatheredExtension::default().with_trails(),
+            })),
+        ));
+    } else {
+        commands.spawn(Terrain::procedural(match scene.ground {
+            Ground::Sand => ProceduralTerrain::dunes(7),
+            _ => ProceduralTerrain::hills(42),
+        }));
+    }
     // The ground is grown under its weather (`ELEMENTS_GROW_HOURS` in the harness), then the
     // sky clears in `settle_weather`.
     director.force(
@@ -187,25 +270,47 @@ struct EyeHeight(f32);
 #[derive(Component)]
 struct Aim(Vec2);
 
-/// The surface's world height (terrain plus snow) at XZ, once read back.
-fn surface(env: &Environment, xz: Vec2) -> Option<f32> {
-    Some(env.terrain_height(xz)? + env.snow_depth(xz).unwrap_or(0.0))
+/// The undisturbed ground the feet and wheels stand on.
+#[derive(SystemParam)]
+struct Surface<'w> {
+    env: Environment<'w>,
+    game: Option<Res<'w, TrailGround>>,
+    snow: Option<Res<'w, SurfaceWeathering>>,
+}
+
+impl Surface<'_> {
+    /// The surface's world height (ground plus snow) at XZ: the game's ground, or the terrain
+    /// once read back.
+    fn at(&self, xz: Vec2) -> Option<f32> {
+        match &self.game {
+            Some(g) => Some(g.height(xz) + self.snow.as_ref().map_or(0.0, |s| s.snow_depth_m)),
+            None => Some(self.env.terrain_height(xz)? + self.env.snow_depth(xz).unwrap_or(0.0)),
+        }
+    }
 }
 
 /// Once the ground is grown: the camera settles, and the sky clears (or turns to
 /// `ELEMENTS_PRESET`).
 fn settle_weather(
     mut commands: Commands,
-    env: Environment,
+    surface: Surface,
     scene: Res<Scene>,
     mut director: ResMut<WeatherDirector>,
     mut cameras: Query<(Entity, &mut Transform, &EyeHeight, &Aim)>,
     mut done: Local<bool>,
+    mut frames: Local<u32>,
 ) {
+    // A game's ground is known at once, but the harness grows the weather over its first frames
+    // (one an hour, `ELEMENTS_GROW_HOURS`): settle after a second, past any growth of up to two
+    // days. The terrain is settled once read back, which comes later.
+    *frames += 1;
+    if scene.mesh && *frames < 60 {
+        return;
+    }
     for (entity, mut transform, eye, aim) in &mut cameras {
         let (Some(here), Some(there)) = (
-            surface(&env, transform.translation.xz()),
-            surface(&env, aim.0),
+            surface.at(transform.translation.xz()),
+            surface.at(aim.0),
         ) else {
             continue;
         };
@@ -229,7 +334,7 @@ fn on_circle(radius: f32, s: f32) -> (Vec2, Vec2) {
 /// The walker: each foot is planted for a step and swings through the next; a planted foot sits
 /// 5 cm below the surface the readback reports, so it is in contact whatever the readback's lag.
 fn walk(
-    env: Environment,
+    surface: Surface,
     time: Res<Time<Virtual>>,
     mut feet: Query<(&Foot, &mut Transform), Without<Walker>>,
     mut body: Query<&mut Transform, With<Walker>>,
@@ -237,7 +342,7 @@ fn walk(
     let t = time.elapsed_secs();
     let s = WALK_SPEED_MS * t;
     let (centre, _) = on_circle(WALK_RADIUS_M, s);
-    if let (Ok(mut b), Some(y)) = (body.single_mut(), surface(&env, centre)) {
+    if let (Ok(mut b), Some(y)) = (body.single_mut(), surface.at(centre)) {
         b.translation = Vec3::new(centre.x, y + 0.85, centre.y);
     }
     let step = WALK_SPEED_MS * STEP_S;
@@ -259,7 +364,7 @@ fn walk(
         };
         let side = Vec2::new(along.y, -along.x) * foot.0 * STEP_WIDTH_M;
         let xz = at + side;
-        let Some(y) = surface(&env, xz) else {
+        let Some(y) = surface.at(xz) else {
             continue;
         };
         let lift = if planted {
@@ -274,7 +379,7 @@ fn walk(
 
 /// The vehicle: four wheels on a circle, each pressing where it is.
 fn drive(
-    env: Environment,
+    surface: Surface,
     time: Res<Time<Virtual>>,
     mut wheels: Query<(&Wheel, &mut Transform), Without<Vehicle>>,
     mut body: Query<&mut Transform, With<Vehicle>>,
@@ -282,13 +387,13 @@ fn drive(
     let s = DRIVE_SPEED_MS * time.elapsed_secs();
     let (centre, along) = on_circle(DRIVE_RADIUS_M, s);
     let side = Vec2::new(along.y, -along.x);
-    if let (Ok(mut b), Some(y)) = (body.single_mut(), surface(&env, centre)) {
+    if let (Ok(mut b), Some(y)) = (body.single_mut(), surface.at(centre)) {
         *b = Transform::from_xyz(centre.x, y + 0.85, centre.y)
             .looking_to(Vec3::new(along.x, 0.0, along.y), Vec3::Y);
     }
     for (wheel, mut transform) in &mut wheels {
         let xz = centre + along * wheel.0 * 0.5 * WHEELBASE_M + side * wheel.1 * 0.5 * TRACK_M;
-        let Some(y) = surface(&env, xz) else {
+        let Some(y) = surface.at(xz) else {
             continue;
         };
         *transform = Transform::from_xyz(xz.x, y - 0.05, xz.y)
