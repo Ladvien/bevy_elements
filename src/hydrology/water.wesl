@@ -28,7 +28,7 @@ struct WaterParams {
     lod: array<vec4<f32>, 16>,
     // x: coarsest level.
     top: vec4<f32>,
-    // xy: cloud shadow map origin (world XZ), z: its extent, w: camera transmittance.
+    // xy: cloud shadow map origin (world XZ), z: its extent, w: the lights' mean transmittance.
     shadow: vec4<f32>,
     // xyz: unit direction toward the light the map was made for. w: 1 when a map is bound.
     light: vec4<f32>,
@@ -170,7 +170,7 @@ fn edge_alpha(depth: f32) -> f32 {
     return smoothstep(DISCARD_DEPTH, FADE_DEPTH, depth);
 }
 
-// Cloud shadow scale ρ = (0.25 + 0.75 T_px) / (0.25 + 0.75 T_cam) at a world position, as the
+// Cloud shadow scale ρ = (0.25 + 0.75 T_px) / (0.25 + 0.75 T̄) at a world position, as the
 // terrain's fragment computes it.
 fn cloud_shadow_ratio(p: vec3<f32>) -> f32 {
     let l = water.light.xyz;
@@ -182,8 +182,8 @@ fn cloud_shadow_ratio(p: vec3<f32>) -> f32 {
         }
     }
     let here = 0.25 + 0.75 * t;
-    let camera = max(0.25 + 0.75 * water.shadow.w, 0.01);
-    return clamp(here / camera, 0.0, 4.0);
+    let lights = max(0.25 + 0.75 * water.shadow.w, 0.01);
+    return clamp(here / lights, 0.0, 4.0);
 }
 
 struct Flow {

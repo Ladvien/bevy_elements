@@ -153,8 +153,8 @@ pub(crate) fn weather_surface(
     s
 }
 
-pub(crate) fn cloud_shadow_ratio(t: f32, camera_transmittance: f32) -> f32 {
+pub(crate) fn cloud_shadow_ratio(t: f32, mean_transmittance: f32) -> f32 {
     let here = 0.25 + 0.75 * t;
-    let camera = (0.25 + 0.75 * camera_transmittance).max(0.01);
-    (here / camera).clamp(0.0, 4.0)
+    let lights = (0.25 + 0.75 * mean_transmittance).max(0.01);
+    (here / lights).clamp(0.0, 4.0)
 }

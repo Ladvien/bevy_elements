@@ -41,7 +41,7 @@ pub struct TerrainMaterialParams {
     pub(crate) lod: [Vec4; MAX_LEVELS],
     /// x: coarsest level.
     pub(crate) top: Vec4,
-    /// Cloud shadow map origin xy, extent, camera transmittance.
+    /// Cloud shadow map origin xy, extent, the lights' mean transmittance.
     pub(crate) shadow: Vec4,
     /// Unit direction toward the light; w = 1 with a map.
     pub(crate) light: Vec4,
@@ -115,7 +115,7 @@ pub type TerrainMaterial = ExtendedMaterial<StandardMaterial, TerrainExtension>;
 #[reflect(opaque)]
 pub struct GroundParams {
     pub(crate) terrain: TerrainParamsGpu,
-    /// Cloud shadow map origin xy, extent, camera transmittance.
+    /// Cloud shadow map origin xy, extent, the lights' mean transmittance.
     pub(crate) shadow: Vec4,
     /// Unit direction toward the light; w = 1 with a map.
     pub(crate) light: Vec4,
@@ -218,12 +218,12 @@ impl MaterialExtension for GroundExtension {
 /// The ground material for a consumer's mesh: see [`GroundExtension`].
 pub type GroundMaterial = ExtendedMaterial<StandardMaterial, GroundExtension>;
 
-/// The cloud shadow part of both uniforms: map origin and extent, the camera's transmittance, the
-/// light direction, and the map handle.
+/// The cloud shadow part of both uniforms: map origin and extent, the mean transmittance the
+/// lights carry, the light direction, and the map handle.
 pub(crate) fn shadow_inputs(shadows: Option<&CloudShadows>) -> (Vec4, Vec4, Option<Handle<Image>>) {
     match shadows {
         Some(s) => (
-            Vec4::new(s.origin.x, s.origin.y, s.extent, s.camera_transmittance),
+            Vec4::new(s.origin.x, s.origin.y, s.extent, s.mean_transmittance),
             s.light_direction.extend(1.0),
             Some(s.map.clone()),
         ),

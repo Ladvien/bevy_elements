@@ -66,7 +66,6 @@ struct CloudPipelines {
     threshold: Kernel,
     weather: Kernel,
     shadow: Kernel,
-    shadow_camera: Kernel,
     march: Kernel,
     resolve: Kernel,
     composite: CachedRenderPipelineId,
@@ -188,7 +187,6 @@ fn init_pipelines(
                 sampler(SamplerBindingType::Filtering),
                 texture_storage_2d(TextureFormat::Rgba16Float, write),
                 storage_buffer_sized(false, None),
-                storage_buffer_sized(false, None),
             ),
         ),
     );
@@ -300,8 +298,7 @@ fn init_pipelines(
         field: kernel(weather.clone(), "cloud_field", &weather_layout),
         threshold: kernel(weather.clone(), "cloud_threshold", &weather_layout),
         weather: kernel(weather, "cloud_weather", &weather_layout),
-        shadow: kernel(shadow.clone(), "cloud_shadow", &shadow_layout),
-        shadow_camera: kernel(shadow, "cloud_shadow_camera", &shadow_layout),
+        shadow: kernel(shadow, "cloud_shadow", &shadow_layout),
         march: kernel(march, "cloud_march", &march_layout),
         resolve: kernel(resolve, "cloud_resolve", &resolve_layout),
         composite,
@@ -342,10 +339,9 @@ fn prepare_global(
         commands.remove_resource::<CloudGlobalGroups>();
         return;
     };
-    let (Some(histogram), Some(threshold), Some(camera_t), Some(shadow_coarse)) = (
+    let (Some(histogram), Some(threshold), Some(shadow_coarse)) = (
         buffer(&cloud.histogram),
         buffer(&cloud.threshold),
-        buffer(&cloud.camera_t),
         buffer(&cloud.shadow_coarse),
     ) else {
         commands.remove_resource::<CloudGlobalGroups>();
@@ -370,7 +366,6 @@ fn prepare_global(
             &base.texture_view,
             &pipelines.repeat,
             &shadow.texture_view,
-            camera_t,
             shadow_coarse,
         )),
     );
@@ -540,10 +535,7 @@ fn dispatch_global(
     ) else {
         return;
     };
-    let (Some(shadow), Some(shadow_camera)) = (
-        ready(&cache, &pipelines.shadow),
-        ready(&cache, &pipelines.shadow_camera),
-    ) else {
+    let Some(shadow) = ready(&cache, &pipelines.shadow) else {
         return;
     };
     {
@@ -578,8 +570,6 @@ fn dispatch_global(
         let n = groups(super::SHADOW_TEXELS, WG2);
         pass.set_pipeline(shadow);
         pass.dispatch_workgroups(n, n, 1);
-        pass.set_pipeline(shadow_camera);
-        pass.dispatch_workgroups(1, 1, 1);
         span.end(&mut pass);
     }
     cloud.live.store(true, Ordering::Relaxed);

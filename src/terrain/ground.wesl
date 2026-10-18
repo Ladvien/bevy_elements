@@ -16,7 +16,7 @@ import bevy_pbr::render::{
 
 struct GroundParams {
     terrain: TerrainParams,
-    // xy: cloud shadow map origin (world XZ), z: its extent, w: camera transmittance.
+    // xy: cloud shadow map origin (world XZ), z: its extent, w: the lights' mean transmittance.
     shadow: vec4<f32>,
     // xyz: unit direction toward the light the map was made for. w: 1 when a map is bound.
     light: vec4<f32>,
@@ -125,8 +125,8 @@ fn cloud_shadow_ratio(p: vec3<f32>) -> f32 {
         }
     }
     let here = 0.25 + 0.75 * t;
-    let camera = max(0.25 + 0.75 * ground.shadow.w, 0.01);
-    return here / camera;
+    let lights = max(0.25 + 0.75 * ground.shadow.w, 0.01);
+    return here / lights;
 }
 
 // Compacted snow's albedo relative to fresh snow on a trench floor ([INFERENCE], trails.md

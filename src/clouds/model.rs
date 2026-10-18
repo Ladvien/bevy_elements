@@ -699,6 +699,11 @@ pub(crate) fn march(scene: &Scene, medium: &impl Medium) -> Marched {
         transmittance *= step_t;
         t += dt;
     }
+    // An exhausted march is opaque (march.wesl; broken-cloud-light.md, Model 4).
+    if transmittance < MIN_TRANSMITTANCE {
+        radiance /= 1.0 - transmittance;
+        transmittance = 0.0;
+    }
     Marched {
         radiance,
         transmittance,
@@ -1182,18 +1187,24 @@ mod tests {
         }
     }
 
+    /// Validation 3 of `broken-cloud-light.md`: a column the march gives up on hides what is
+    /// behind it (the sun disc is 10⁵ times the sky), and its radiance is what it integrated,
+    /// renormalised by at most `1/0.99`.
     #[test]
-    fn an_opaque_column_ends_finite_below_the_early_exit() {
+    fn an_opaque_column_hides_what_is_behind_it() {
         for steps in [32, 64, 96] {
             let m = column(0.05, 1000.0, steps);
-            assert!(m.transmittance.is_finite() && m.radiance.is_finite());
-            assert!(
-                (0.0..=0.01).contains(&m.transmittance),
-                "T {}",
-                m.transmittance
-            );
-            assert!(m.radiance >= 0.0);
+            assert!(m.radiance.is_finite());
+            assert_eq!(m.transmittance, 0.0);
+            assert!(m.radiance > 0.0);
         }
+        // A thin column the march finishes keeps its transmittance.
+        let thin = column(0.0004, 1000.0, 64);
+        assert!(
+            (thin.transmittance - (-0.4f64).exp()).abs() < 0.02,
+            "T {}",
+            thin.transmittance
+        );
     }
 
     /// Vertical optical depth of the default stratus layer (1500–2300 m, kind 0, cover 1) averaged

@@ -334,7 +334,7 @@ fn the_globals_pack_as_the_shader_struct() {
         wetness: 0.1,
         snow_cover: 0.2,
         rain_intensity: 0.3,
-        camera_transmittance: 0.4,
+        mean_transmittance: 0.4,
         shadow_origin: Vec2::new(5.0, 6.0),
         shadow_extent: 7.0,
         shadow_enabled: true,
@@ -357,9 +357,9 @@ fn the_globals_pack_as_the_shader_struct() {
     let body = &source[source.find("struct ElementsGlobals").expect("the struct")..];
     let body = &body[..body.find("\n}").expect("its end")];
     assert_eq!(body.matches("vec4<f32>,").count(), 5, "five vec4 fields");
-    // Without clouds the camera's transmittance is 1 and no map is bound.
+    // Without clouds the mean transmittance is 1 and no map is bound.
     let none = ElementsGlobals::gather(None, &Weather::default(), None, 0.0);
-    assert_eq!(none.camera_transmittance, 1.0);
+    assert_eq!(none.mean_transmittance, 1.0);
     assert!(!none.shadow_enabled);
 }
 

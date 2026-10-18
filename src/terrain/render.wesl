@@ -37,7 +37,7 @@ struct TerrainMaterialParams {
     lod: array<vec4<f32>, 16>,
     // x: coarsest level.
     top: vec4<f32>,
-    // xy: cloud shadow map origin (world XZ), z: its extent, w: camera transmittance.
+    // xy: cloud shadow map origin (world XZ), z: its extent, w: the lights' mean transmittance.
     shadow: vec4<f32>,
     // xyz: unit direction toward the light the map was made for. w: 1 when a map is bound.
     light: vec4<f32>,
@@ -183,13 +183,13 @@ fn cloud_deck(p: vec3<f32>) -> f32 {
     return t;
 }
 
-// Cloud shadow scale ρ = (0.25 + 0.75 T_px) / (0.25 + 0.75 T_cam) at a world position, the same
-// formula the weathered materials use (`surface_cover.wesl::cloud_shadow_ratio`; clouds.md,
-// "Cloud shadow map").
+// Cloud shadow scale ρ = (0.25 + 0.75 T_px) / (0.25 + 0.75 T̄) at a world position, `T̄` the
+// mean transmittance the lights carry; the same formula the weathered materials use
+// (`surface_cover.wesl::cloud_shadow_ratio`; broken-cloud-light.md, Model 2).
 fn cloud_shadow_ratio(p: vec3<f32>) -> f32 {
     let here = 0.25 + 0.75 * cloud_deck(p);
-    let camera = max(0.25 + 0.75 * material.shadow.w, 0.01);
-    return clamp(here / camera, 0.0, 4.0);
+    let lights = max(0.25 + 0.75 * material.shadow.w, 0.01);
+    return clamp(here / lights, 0.0, 4.0);
 }
 
 // The light's way down to the bed through `depth` metres of water, per channel (water-rendering.md,

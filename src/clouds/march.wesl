@@ -336,6 +336,14 @@ fn cloud_march(@builtin(global_invocation_id) id: vec3<u32>) {
         transmittance *= step_t;
         t += dt;
     }
+    // A march that stopped on its transmittance floor met an opaque cloud: the rest of the
+    // column is assumed to scatter like what was met, and nothing behind shows through — the
+    // sun disc is 10⁵ times the sky, so its last 1 % would still burn white in the cloud
+    // (Schneider & Vos 2015: alpha 1 at the exit; broken-cloud-light.md, Model 4).
+    if transmittance < MIN_TRANSMITTANCE {
+        radiance /= 1.0 - transmittance;
+        transmittance = 0.0;
+    }
 
     if depth_weight <= 0.0 {
         textureStore(march_out, vec2<i32>(id.xy), far_veil(uv, dir, shell, o_r));

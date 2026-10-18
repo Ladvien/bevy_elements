@@ -55,8 +55,9 @@ pub struct ElementsGlobals {
     pub snow_cover: f32,
     /// Rain intensity `min(1, R_liquid / 20)`, with `R_liquid` the liquid precipitation in mm/h.
     pub rain_intensity: f32,
-    /// Mean direct cloud transmittance at the camera, 0–1 (1 without clouds).
-    pub camera_transmittance: f32,
+    /// Mean direct cloud transmittance over the cloud shadow map, 0–1 (1 without clouds): the
+    /// share of the clear beam the lights carry (`CloudShadows::mean_transmittance`).
+    pub mean_transmittance: f32,
     /// World XZ of the cloud shadow map's minimum corner, m.
     pub shadow_origin: Vec2,
     /// Side of the cloud shadow map, m.
@@ -80,7 +81,7 @@ impl Default for ElementsGlobals {
             wetness: 0.0,
             snow_cover: 0.0,
             rain_intensity: 0.0,
-            camera_transmittance: 1.0,
+            mean_transmittance: 1.0,
             shadow_origin: Vec2::ZERO,
             shadow_extent: 1.0,
             shadow_enabled: false,
@@ -101,13 +102,13 @@ impl ElementsGlobals {
         shadows: Option<&CloudShadows>,
         seconds: f64,
     ) -> Self {
-        let (shadow_origin, shadow_extent, shadow_enabled, camera_transmittance, light) =
+        let (shadow_origin, shadow_extent, shadow_enabled, mean_transmittance, light) =
             match shadows {
                 Some(s) => (
                     s.origin,
                     s.extent,
                     true,
-                    s.camera_transmittance,
+                    s.mean_transmittance,
                     s.light_direction,
                 ),
                 None => (Vec2::ZERO, 1.0, false, 1.0, Vec3::Y),
@@ -116,7 +117,7 @@ impl ElementsGlobals {
             wetness: weathering.map_or(0.0, |w| w.wetness),
             snow_cover: weathering.map_or(0.0, |w| w.snow_cover),
             rain_intensity: model::rain_intensity(weather),
-            camera_transmittance,
+            mean_transmittance,
             shadow_origin,
             shadow_extent,
             shadow_enabled,
@@ -134,7 +135,7 @@ impl ElementsGlobals {
                 self.wetness,
                 self.snow_cover,
                 self.rain_intensity,
-                self.camera_transmittance,
+                self.mean_transmittance,
             ],
             [
                 self.shadow_origin.x,
