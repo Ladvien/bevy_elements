@@ -28,6 +28,7 @@ Every system was studied in the home-still paper library first. The note for eac
 | `GroundCoverPlugin` | `cover` | Snow and wetness maps on the terrain grid: snow accumulates at each cell's own rain–snow split and shelter, densifies, drifts with the wind, smooths and melts into hydrology's water (degree-day, Hock 2003), wetness follows rain and evaporation; the terrain and ground materials shade snow, wet darkening and gloss, and puddles with ripples; `SurfaceWeathering` becomes the map's mean around the camera; `Environment::snow_depth` and `wetness` |
 | `DustPlugin` | `dust` | Wind-blown sand on the terrain's `sediment` layer: a capacity `k u² (u − u_t)` from the 10 m wind with Venturi speed-up and 15° lee shadow (Paris et al. 2019), a line scan that relaxes the flux over the saturation length and moves the bed by the flux divergence (conserving sand exactly), then hydrology's thermal kernels avalanche it at 34°; runs only while the wind can exceed 8 m/s. `Weather::dust` also fills 40 % of the precipitation particle buffer with tan sprites (`kind = 2`) and tints the ground fog |
 | `TrailsPlugin` | `trails` | Footprints, ruts and tracks: `Imprint` components press a camera-following centimetre field to their Bekker–Wong sinkage (CRREL's compaction limit in snow) with a rim of the displaced material, sweeping the path between frames; new snow fills it, wind smooths it, sand and mud slump; the terrain and ground materials draw it per pixel with parallax occlusion mapping and a soft self-shadow; `TrailState` for custom shaders |
+| `WavesPlugin` | `waves` | Ripples and wakes: `WaterContact` ellipsoids press the hydrology's water with the pressure head of their column and their entry's impact; a dispersive capillary-gravity wave field in three camera-following cascades (iWave with a kernel fitted to Airy's dispersion) reflects off the shores, slows in the shallows, follows the current, breaks into foam; drawn by the water's passes; `WaveState` for custom shaders |
 | `VoxelPlugin` (feature `isomesh`) | `voxel` | Snow on `bevy_isomesh` voxel volumes: `VoxelGround` on a `VoxelVolume` scans the column tops into an external `Terrain` the snow, wetness and hydrology maps run on, and `SnowyField` adds the snow depth back as a slab over the tops, swapped per column when it moves half a voxel, remeshing only the chunks that changed; tunnels stay clear; erosion is off for voxel ground |
 | `ElementsFloraPlugin` (feature `flora`) | `flora` | Drives `bevy_flora`'s wind, gusts, season and wetness, and `FloraGround` from the terrain's height snapshot |
 
@@ -252,6 +253,25 @@ Dry sand at evening (the prints slump to rounded dishes with a raised rim) and m
 
 ![Prints and ruts in dry sand at a low sun](docs/trails_sand.png) ![Ruts and prints in mud](docs/trails_mud.png)
 
+### Waves
+
+`WavesPlugin` makes the hydrology's water answer what moves through it. Put a `WaterContact { half_extents }` (an ellipsoid along the entity's local axes, any rotation) on a hull, a float, a wader's legs or a falling stone: where it cuts the surface it presses down with the pressure head of its occupied column (its draft for a shallow hull, less for a deep narrow leg whose lower part the waves do not reach), plus Bernoulli's impact head `v²/2g` while it crosses the surface going down. At rest the water stays flat around it; moving, it leaves a wake bounded by Kelvin's 19.47°; bobbing or dropped in, it sends out rings in which the short waves outrun the long ones. Waves reflect off the shores, slow in the shallows, are carried by the current, break where they grow steeper than water holds (amplitude 7 % of the wavelength) and leave foam that fades over a few seconds.
+
+The field is three camera-following windows a factor of four apart (High: 512² of 5, 20 and 80 cm, out to 410 m), each a linear capillary-gravity wave field stepped by Tessendorf's iWave scheme with a 13 × 13 kernel fitted at start-up to Airy's dispersion over its band (within 1.5 %), forced by the bodies' head split into the bands like a Laplacian pyramid. The water's surface and absorb passes add its slopes to the flow-mapped ripples and draw its breaking foam; `WaveState` publishes it for a water shader of your own. `WaveSettings::damping_per_s` sets how long a wake lasts.
+
+```rust
+# use bevy::prelude::*;
+# use bevy_elements::*;
+fn a_float(mut commands: Commands) {
+    // A 25 cm ball; move its transform and the water answers.
+    commands.spawn((WaterContact::sphere(0.25), Transform::from_xyz(0.0, 5.7, 0.0)));
+}
+```
+
+![A hull's wake: Kelvin's V, transverse crests and breaking foam](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/waves.gif)
+
+![A hull crossing a pond, its wake and foam](docs/waves_wake.png) ![A pebble's rings](docs/waves_rings.png)
+
 ### Snow on voxel volumes
 
 With the feature `isomesh` (`bevy_elements = { version = "0.5", features = ["isomesh"] }`, `bevy_isomesh` and `isomesh` 0.0.11), `ElementsPlugins` also adds `VoxelPlugin`. The snow maps are heightfields, so a `VoxelVolume` gets one of its own: put `VoxelGround { resolution }` on the volume's entity and the crate scans the top of every column (the first sign change from the top, then bisection to a millimetre), spawns the crate's `Terrain` (`TerrainRender::External`) over the volume's XZ extent with those heights, and wraps the volume's field in a `SnowyField`. Hydrology, snow, wetness, wind and rain then run on it unchanged.
@@ -385,6 +405,8 @@ Aeolian transport (`elements_aeolian_*`, at 3840 × 2160 with the GPU at 1800–
 
 Trails (`elements_trails`: stamp, merge, block occupancy and relax over the window, every frame; `bench_elements` with `ELEMENTS_TERRAIN=hills ELEMENTS_IMPRINTS=16`, 1920 × 1080, the GPU at 1500–1935 MHz, minimum over the diagnostic history): **0.119 ms** at High's 1024² × 5 cm window with 16 wheels pressing, against the note's 0.15 ms. The parallax in the terrain material skips any pixel whose ray meets no trail (the published block occupancy): `main_opaque_pass_3d` read 0.054–0.058 ms with `ELEMENTS_TRAILS=off` and 0.057–0.058 ms on. See [`trails.md`](docs/research/trails.md).
 
+Waves (`elements_waves_force`: the bodies' head and the per-texel forcing, depth and current; `elements_waves_step`: one 1/60 s substep of all three cascades; `elements_waves_publish`: slopes and foam into the field; `bench_elements` with `ELEMENTS_TERRAIN=lake ELEMENTS_CONTACTS=8`, the camera over the filling lake, 1920 × 1080, the GPU at 1740–1800 MHz, minimum over the diagnostic history): High (3 × 512²) 0.037 + 0.217 + 0.033 = **0.29 ms** a frame with currents everywhere (each tile texel then fetched upstream, four loads), 0.23 ms on still water; Medium the same; Low (3 × 256²) 0.15 ms. Dry texels cost only their depth, so a window over land is nearly free. The water's shading of the field is within the run-to-run spread of `main_transparent_pass_3d`. This is above the note's 0.15 ms: a third cascade was the price of holding Airy's dispersion over 15 cm to 10 m waves (`waves.md` Deviation 1, 10).
+
 Voxel snow is CPU work on the main world (the column-top scans and the chunk remesh), not a GPU pass, so it reports through the ignored `voxel_cost` release test rather than `bench_elements` (`docs/research/voxel-snow.md`): the initial scan of 16 384 columns (the `voxel_snow` example's 128 × 128) is 11.7 ms once at spawn; a user edit's column rescan 0.125 ms and one crest chunk's Marching Cubes 0.428 ms, both under the frame budget the note gives them (2 ms); the two depth-swap frames of a 60 game-hour run cost no more than the frame budget (2.9 ms of the 33 ms target); the median frame over 3 600 frames is 2.86 ms.
 
 ## Platforms
@@ -449,7 +471,8 @@ Run with `cargo run --release --example <name>`. Every example takes `ELEMENTS_F
 | `dust_storm` | `Climate::desert()`, `ProceduralTerrain::dunes(7)` and a forced `DustStorm`: tan haze, dust sprites, and the wind stripping the sand sheet's upwind edge downwind; prints the migration the note predicts; `ELEMENTS_HOUR`, `ELEMENTS_EYE` / `ELEMENTS_LOOK`; with `ELEMENTS_FRAMES` frames run at a fixed 1/60 s, so `600` and `4200` are two shots 60 s apart |
 | `voxel_snow` | A `bevy_isomesh` hill carved by a gyroid labyrinth with two tunnels through it, `VoxelGround` on its volume and forced Snow at 3 600 game seconds a second (`--features isomesh`): a cap of snow grows on the hill, remeshed each time the depth moves by half a voxel, and the tunnels stay dark; prints the crest's snow depth every second; `ELEMENTS_HOUR`, `ELEMENTS_EYE` / `ELEMENTS_LOOK`, `ELEMENTS_TIME_SCALE`, and `ELEMENTS_SNOW_FRAMES` stops the snow and clears the sky after that many frames |
 | `trails` | A walker (two feet, 760 N) and a four-wheeled vehicle (3 400 N a wheel, 4 m/s round a 14 m loop) pressing tracks into `ELEMENTS_GROUND=snow` (default: January, the hills under forced snow; `ELEMENTS_GROW_HOURS=24` grows it before the first frame, then the sky clears), `sand` (the dunes, June, dry) or `mud` (June, the hills after rain: `ELEMENTS_GROW_HOURS=6`); `ELEMENTS_PRESET=Snow` with `ELEMENTS_SCALE=120` watches new snow soften the tracks; `ELEMENTS_HOUR` (default 10.5), `ELEMENTS_EYE` / `ELEMENTS_LOOK` |
-| `bench_elements` | Per-pass GPU time; `ELEMENTS_QUALITY`, `ELEMENTS_RESOLUTION`, `ELEMENTS_PRESET`, `ELEMENTS_BLOCKERS`, `ELEMENTS_TERRAIN=hills\|mountains\|dunes\|lake\|none`, `ELEMENTS_WATER=off`, `ELEMENTS_IMPRINTS=16` (wheels pressing round the camera every frame), `ELEMENTS_TRAILS=off` |
+| `waves` | A pond (the `lake` basin, filled at start) with a hull circling at 2 m/s, a bobbing float, a pebble dropped every 4 s and a wader's two legs in the shallows, each a `WaterContact`; `ELEMENTS_BODIES=hull,float,pebble,wader` picks them, `ELEMENTS_FOLLOW=right,up,behind` rides with the hull (`ELEMENTS_FOLLOW_BODY=wader` with the legs), `ELEMENTS_EYE` / `ELEMENTS_LOOK`, `ELEMENTS_HOUR` (default 16.5), `ELEMENTS_QUALITY`, `ELEMENTS_PRESET`, `ELEMENTS_WAVES=off` |
+| `bench_elements` | Per-pass GPU time; `ELEMENTS_QUALITY`, `ELEMENTS_RESOLUTION`, `ELEMENTS_PRESET`, `ELEMENTS_BLOCKERS`, `ELEMENTS_TERRAIN=hills\|mountains\|dunes\|lake\|none`, `ELEMENTS_WATER=off`, `ELEMENTS_IMPRINTS=16` (wheels pressing round the camera every frame), `ELEMENTS_TRAILS=off`, `ELEMENTS_CONTACTS=8` (bodies crossing the `lake`, the camera over the water), `ELEMENTS_WAVES=off` |
 
 ## License
 
