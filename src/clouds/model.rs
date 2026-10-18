@@ -35,11 +35,16 @@ const WEATHER_TEXELS: usize = 512;
 /// Soft edge and dome width of the coverage threshold, field units (`weather.wesl`).
 const SOFT_EDGE: f64 = 0.18;
 const DOME_WIDTH: f64 = 0.37;
-const BASE_TILE_M: f64 = 8192.0;
-const DETAIL_TILE_M: f64 = 1024.0;
+const BASE_TILE_M: f64 = 4096.0;
+const DETAIL_TILE_M: f64 = 640.0;
 const WIND_SKEW_M: f64 = 500.0;
 const DETAIL_EROSION: f64 = 0.2;
 const MIN_HEIGHT_SCALE: f64 = 0.3;
+/// The cumuliform density of `common.wesl` (`docs/research/cumulus-shape.md`).
+const CUMULUS_BASE_RISE: f64 = 0.06;
+const CUMULUS_TOP_ROUND: f64 = 0.25;
+const CUMULUS_EDGE_HEIGHT: f64 = 0.45;
+const CORE_PROFILE: f64 = 0.75;
 const MAX_MARCH_M: f64 = 32_000.0;
 const FADE_START_M: f64 = 16_000.0;
 const EMPTY_LIMIT: u32 = 10;
@@ -262,6 +267,67 @@ pub(crate) fn eroded_coverage(r: f64, f: f64, kind: f64) -> f64 {
     r.powf(coverage_exponent(f, kind))
 }
 
+/// `cumuliform`: weight of the cumuliform density, 0 for stratus up to type 0.25, 1 from
+/// cumulus (0.5) up.
+pub(crate) fn cumuliform(kind: f64) -> f64 {
+    (4.0 * kind - 1.0).clamp(0.0, 1.0)
+}
+
+/// `cumulus_envelope`: the rounded top, full up to `CUMULUS_TOP_ROUND` of the blob's height
+/// `s = mix(CUMULUS_EDGE_HEIGHT, 1, √dome)` and 0 from `s` up, C¹.
+pub(crate) fn cumulus_envelope(f: f64, dome: f64) -> f64 {
+    let s = mix(CUMULUS_EDGE_HEIGHT, 1.0, dome.sqrt());
+    1.0 - smoothstep(s * CUMULUS_TOP_ROUND, s, f)
+}
+
+/// `cumulus_base`: the flat base, a factor on the eroded density.
+pub(crate) fn cumulus_base(f: f64) -> f64 {
+    smoothstep(0.0, CUMULUS_BASE_RISE, f)
+}
+
+/// `cumulus_profile`: the dimensional profile, the top times the eroded coverage times the
+/// convective cell (the base texture's G channel), whose gaps close as `cover⁴` → 1.
+pub(crate) fn cumulus_profile(f: f64, dome: f64, r: f64, cell: f64, cover: f64) -> f64 {
+    let closed = cover.clamp(0.0, 1.0).powi(4);
+    let gaps = mix(CORE_PROFILE * smoothstep(0.25, 0.65, cell), 1.0, closed);
+    cumulus_envelope(f, dome) * r * gaps
+}
+
+/// `billow_weight`: wispy at the base, billowy above it.
+fn billow_weight(f: f64) -> f64 {
+    smoothstep(0.05, 0.25, f)
+}
+
+/// `noise_composite` of the base Perlin-Worley `shape`, the base Worley octaves `lf` and the
+/// detail octaves `hf`.
+pub(crate) fn noise_composite(f: f64, shape: f64, lf: f64, hf: f64) -> f64 {
+    let wispy = 0.6 * shape + 0.4 * (1.0 - hf);
+    let billowy = 0.5 * shape + 0.3 * lf + 0.2 * hf;
+    mix(wispy, billowy, billow_weight(f))
+}
+
+/// `noise_bound`: the largest `noise_composite` any detail value gives.
+pub(crate) fn noise_bound(f: f64, shape: f64, lf: f64) -> f64 {
+    mix(
+        0.6 * shape + 0.4,
+        0.5 * shape + 0.3 * lf + 0.2,
+        billow_weight(f),
+    )
+}
+
+/// `value_erosion`: `√saturate((noise − (1 − d)) / d)`, 0 for `d ≤ 0`.
+pub(crate) fn value_erosion(noise: f64, d: f64) -> f64 {
+    if d <= 0.0 {
+        return 0.0;
+    }
+    ((noise - (1.0 - d)) / d).clamp(0.0, 1.0).sqrt()
+}
+
+/// `detail_weight`: how much of the detail noise a fine step of `dt` metres resolves.
+pub(crate) fn detail_weight(dt: f64) -> f64 {
+    1.0 - smoothstep(DETAIL_TILE_M / 8.0, DETAIL_TILE_M / 4.0, dt)
+}
+
 /// Field value of the weather map at a world position, `[0, 1]`: the position is wrapped to the
 /// field's 32 km period in `f64` first, so the `f32` field keeps its precision at any drift.
 fn field_at(xz: [f64; 2], drift: [f64; 2]) -> f64 {
@@ -307,7 +373,7 @@ pub(crate) fn coverage_threshold(cover: f64, drift: [f64; 2]) -> f64 {
     threshold_of(&sorted_field(drift), cover)
 }
 
-/// What `cloud_medium` reads from the weather map at a point.
+/// What `cloud_medium` reads from the weather map and the base noise at a point.
 struct ShapeSample {
     /// Height fraction in the layer.
     f: f64,
@@ -315,8 +381,26 @@ struct ShapeSample {
     lean: [f64; 2],
     /// Coverage `r`, `(0, 1]`.
     coverage: f64,
-    /// Base shape times the height gradient, `S · G`.
-    shape: f64,
+    /// Dome factor (the weather map's A channel).
+    dome: f64,
+    /// Base Perlin-Worley shape `S`.
+    base_shape: f64,
+    /// Base Worley octaves `lf`.
+    lf: f64,
+    /// The base texture's G channel: the convective cell.
+    cell: f64,
+}
+
+impl ShapeSample {
+    /// The stratiform base shape times the height gradient, `S · G`.
+    fn stratiform_shape(&self, kind: f64) -> f64 {
+        self.base_shape * cloud_gradient(self.f, kind, self.dome)
+    }
+
+    /// The cumuliform dimensional profile at eroded coverage `r` under the weather's `cover`.
+    fn profile(&self, r: f64, cover: f64) -> f64 {
+        cumulus_profile(self.f, self.dome, r, self.cell, cover)
+    }
 }
 
 /// The cloud layer and weather of a mirror evaluation.
@@ -403,12 +487,14 @@ impl MirrorParams {
         ))
         .map(f64::from);
         let lf = 0.625 * b[1] + 0.25 * b[2] + 0.125 * b[3];
-        let base_shape = ((b[0] + 1.0 - lf) / (2.0 - lf)).clamp(0.0, 1.0);
         Some(ShapeSample {
             f,
             lean,
             coverage,
-            shape: base_shape * cloud_gradient(f, self.kind, dome),
+            dome,
+            base_shape: ((b[0] + 1.0 - lf) / (2.0 - lf)).clamp(0.0, 1.0),
+            lf,
+            cell: b[1],
         })
     }
 
@@ -419,33 +505,53 @@ impl MirrorParams {
     }
 
     /// Mirror of `cloud_medium`: extinction σ_t, m⁻¹, and the precipitation darkening g at
-    /// altitude `h` over `xz`; the detail noise erodes the edges when `detail`.
-    pub(crate) fn medium(&self, h: f64, xz: [f64; 2], detail: bool) -> (f64, f64) {
+    /// altitude `h` over `xz`; `detail` (0–1) is how much of the detail noise is resolved.
+    pub(crate) fn medium(&self, h: f64, xz: [f64; 2], detail: f64) -> (f64, f64) {
         let Some(s) = self.shape_at(h, xz) else {
             return (0.0, 0.0);
         };
         let r = eroded_coverage(s.coverage, s.f, self.kind);
-        let mut rho = ((s.shape - (1.0 - r)) / r.max(1e-4)).clamp(0.0, 1.0) * r;
-        if detail && rho > 0.0 {
+        // Without the detail tap the detail octaves take their mean.
+        let mut raw_hf = 0.5;
+        if detail > 0.0 {
             let d = cloud_detail_at(Self::noise_coordinate(
                 (s.lean[0] - self.drift[0]) / DETAIL_TILE_M,
                 h / DETAIL_TILE_M,
                 (s.lean[1] - self.drift[1]) / DETAIL_TILE_M,
             ))
             .map(f64::from);
-            let hf = 0.625 * d[0] + 0.25 * d[1] + 0.125 * d[2];
-            let wispy = mix(hf, 1.0 - hf, (10.0 * s.f).clamp(0.0, 1.0));
-            let lo = DETAIL_EROSION * wispy;
-            rho = ((rho - lo) / (1.0 - lo)).clamp(0.0, 1.0);
+            raw_hf = 0.625 * d[0] + 0.25 * d[1] + 0.125 * d[2];
         }
-        (sigma_peak(self.kind) * rho, self.precipitation * s.coverage)
+        let hf = mix(0.5, raw_hf, detail);
+        let k = cumuliform(self.kind);
+        let mut stratiform = 0.0;
+        if k < 1.0 {
+            stratiform =
+                ((s.stratiform_shape(self.kind) - (1.0 - r)) / r.max(1e-4)).clamp(0.0, 1.0) * r;
+            if detail > 0.0 && stratiform > 0.0 {
+                let wispy = mix(raw_hf, 1.0 - raw_hf, (10.0 * s.f).clamp(0.0, 1.0));
+                let lo = DETAIL_EROSION * wispy;
+                stratiform = ((stratiform - lo) / (1.0 - lo)).clamp(0.0, 1.0);
+            }
+        }
+        let mut cumulus = 0.0;
+        if k > 0.0 {
+            cumulus = value_erosion(
+                noise_composite(s.f, s.base_shape, s.lf, hf),
+                s.profile(r, self.cover),
+            ) * cumulus_base(s.f);
+        }
+        (
+            sigma_peak(self.kind) * mix(stratiform, cumulus, k),
+            self.precipitation * s.coverage,
+        )
     }
 }
 
 /// Extinction and precipitation darkening of the density mirror with the detail noise on, at
 /// altitude `altitude_m` over world `xz`.
 pub(crate) fn density(altitude_m: f64, xz: [f64; 2], p: &MirrorParams) -> (f64, f64) {
-    p.medium(altitude_m, xz, true)
+    p.medium(altitude_m, xz, 1.0)
 }
 
 /// Vertical optical depth `τ_col = ∫ σ_t dh` through the layer over `xz`, midpoint rule with
@@ -453,7 +559,7 @@ pub(crate) fn density(altitude_m: f64, xz: [f64; 2], p: &MirrorParams) -> (f64, 
 pub(crate) fn column_optical_depth(p: &MirrorParams, xz: [f64; 2], steps: u32) -> f64 {
     let dh = (p.top_m - p.base_m) / f64::from(steps);
     (0..steps)
-        .map(|k| p.medium(p.base_m + (f64::from(k) + 0.5) * dh, xz, true).0 * dh)
+        .map(|k| p.medium(p.base_m + (f64::from(k) + 0.5) * dh, xz, 1.0).0 * dh)
         .sum()
 }
 
@@ -470,7 +576,7 @@ pub(crate) trait Medium {
     /// `coarse_shape`: the base-shape term `S′·r′`, 0 outside cloud.
     fn coarse(&self, altitude: f64, xz: [f64; 2]) -> f64;
     /// `cloud_medium`: (σ_t, g).
-    fn sample(&self, altitude: f64, xz: [f64; 2], detail: bool) -> (f64, f64);
+    fn sample(&self, altitude: f64, xz: [f64; 2], detail: f64) -> (f64, f64);
 }
 
 impl Medium for MirrorParams {
@@ -484,11 +590,22 @@ impl Medium for MirrorParams {
 
     fn coarse(&self, altitude: f64, xz: [f64; 2]) -> f64 {
         self.shape_at(altitude, xz).map_or(0.0, |s| {
-            s.shape * eroded_coverage(s.coverage, s.f, self.kind)
+            let r = eroded_coverage(s.coverage, s.f, self.kind);
+            let k = cumuliform(self.kind);
+            let mut stratiform = 0.0;
+            if k < 1.0 {
+                stratiform = s.stratiform_shape(self.kind) * r;
+            }
+            let mut cumulus = 0.0;
+            if k > 0.0 {
+                cumulus = (noise_bound(s.f, s.base_shape, s.lf) - (1.0 - s.profile(r, self.cover)))
+                    .max(0.0);
+            }
+            mix(stratiform, cumulus, k)
         })
     }
 
-    fn sample(&self, altitude: f64, xz: [f64; 2], detail: bool) -> (f64, f64) {
+    fn sample(&self, altitude: f64, xz: [f64; 2], detail: f64) -> (f64, f64) {
         self.medium(altitude, xz, detail)
     }
 }
@@ -523,7 +640,7 @@ impl Medium for Slab {
         if self.contains(altitude) { 1.0 } else { 0.0 }
     }
 
-    fn sample(&self, altitude: f64, _xz: [f64; 2], _detail: bool) -> (f64, f64) {
+    fn sample(&self, altitude: f64, _xz: [f64; 2], _detail: f64) -> (f64, f64) {
         if self.contains(altitude) {
             (self.sigma, 0.0)
         } else {
@@ -624,7 +741,7 @@ fn light_optical_depth(off: DVec3, light: DVec3, camera: DVec3, medium: &impl Me
         let phi = 2.399_963_23 * (j + 1) as f64;
         let perp = phi.cos() * e1 + phi.sin() * e2;
         let o = off + light * dist + perp * (CONE_TAN * dist);
-        let (sigma, g) = medium.sample(camera.y + o.y, [camera.x + o.x, camera.z + o.z], false);
+        let (sigma, g) = medium.sample(camera.y + o.y, [camera.x + o.x, camera.z + o.z], 0.0);
         tau += (1.0 + g) * sigma * len;
     }
     tau
@@ -669,7 +786,7 @@ pub(crate) fn march(scene: &Scene, medium: &impl Medium) -> Marched {
             }
             continue;
         }
-        let (mut sigma, _) = medium.sample(h, xz, true);
+        let (mut sigma, _) = medium.sample(h, xz, detail_weight(dt));
         sigma *= 1.0 - smoothstep(FADE_START_M, MAX_MARCH_M, t);
         if sigma <= 0.0 {
             empty += 1;
@@ -1207,6 +1324,40 @@ mod tests {
         );
     }
 
+    /// `cumulus-shape.md` Validation 4: carving the cumulus out of the coverage keeps the share
+    /// of the ground in their shade (vertical columns with `T < 0.5`, the shadow map's own
+    /// sampling without the detail noise) at the weather map's fraction, so `cloud_cover` still
+    /// means what it says. Measured over 2048 columns of the 32 km field: 0.048 at cover 0.05,
+    /// 0.377 at 0.4, 0.818 at 0.8, 0.966 at 0.95.
+    #[test]
+    fn the_cumulus_shadow_covers_what_the_weather_says() {
+        for cover in [0.05, 0.4, 0.8] {
+            let p = MirrorParams::new(1500.0, 3300.0, 0.5, cover, [0.0, 0.0]);
+            let n = 2048;
+            let dh = (p.top_m - p.base_m) / 32.0;
+            let (mut map, mut dark) = (0, 0);
+            for i in 0..n {
+                let x = (0.5 + f64::from(i) * 0.754_877_666_246_692_7).fract() * WEATHER_EXTENT_M;
+                let z = (0.5 + f64::from(i) * 0.569_840_290_998_053_2).fract() * WEATHER_EXTENT_M;
+                map += usize::from(p.weather_at([x, z]).0 >= 0.5);
+                let tau: f64 = (0..32)
+                    .map(|k| {
+                        p.medium(p.base_m + (f64::from(k) + 0.5) * dh, [x, z], 0.0)
+                            .0
+                            * dh
+                    })
+                    .sum();
+                dark += usize::from(tau > std::f64::consts::LN_2);
+            }
+            let (map, dark) = (map as f64 / f64::from(n), dark as f64 / f64::from(n));
+            println!("cover {cover}: map {map:.3}, shade {dark:.3}");
+            assert!(
+                (dark - map).abs() <= 0.03,
+                "cover {cover}: map {map}, shade {dark}"
+            );
+        }
+    }
+
     /// Vertical optical depth of the default stratus layer (1500–2300 m, kind 0, cover 1) averaged
     /// over 4096 columns of the weather map, 64 samples per column with the detail noise.
     /// Measured: τ_col = 6.04 (T_dir = 0.0024; 4.3–7.2 over the columns), above the prior
@@ -1487,7 +1638,7 @@ mod tests {
             assert_eq!(g, 0.0);
             // Where the march's coarse test sees nothing, the medium has no extinction.
             let coarse = p.coarse(2300.0, xz);
-            assert!(coarse > 0.0 || p.medium(2300.0, xz, false).0 == 0.0);
+            assert!(coarse > 0.0 || p.medium(2300.0, xz, 1.0).0 == 0.0);
             if sigma > 0.0 {
                 dense += 1;
             }
@@ -1495,19 +1646,76 @@ mod tests {
         assert!(dense > 0, "no cloud found at mid height");
     }
 
+    /// The coarse march samples the base noise only; it must never step over a cloud the fine
+    /// march would draw, for any type, height or detail weight.
     #[test]
-    fn detail_noise_only_removes_density() {
-        let p = MirrorParams::new(1500.0, 3300.0, 0.5, 0.95, [0.0, 0.0]);
+    fn the_coarse_test_never_misses_a_cloud() {
+        for kind in [0.0, 0.35, 0.5, 1.0] {
+            let p = MirrorParams::new(1500.0, 3300.0, kind, 0.6, [0.0, 0.0]);
+            for i in 0..600 {
+                let xz = [f64::from(i) * 97.0, f64::from(i) * 53.0];
+                let h = 1510.0 + f64::from(i % 29) * 62.0;
+                for detail in [0.0, 0.5, 1.0] {
+                    let fine = p.medium(h, xz, detail).0;
+                    assert!(
+                        fine == 0.0 || p.coarse(h, xz) > 0.0,
+                        "type {kind}: σ {fine} at {xz:?}, {h} with a zero coarse test"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn detail_noise_only_removes_stratus_density() {
+        let p = MirrorParams::new(1500.0, 2300.0, 0.0, 0.95, [0.0, 0.0]);
         for i in 0..300 {
             let xz = [f64::from(i) * 97.0, f64::from(i) * 53.0];
-            let h = 1600.0 + f64::from(i % 17) * 100.0;
-            let with = p.medium(h, xz, true).0;
-            let without = p.medium(h, xz, false).0;
+            let h = 1510.0 + f64::from(i % 17) * 45.0;
+            let with = p.medium(h, xz, 1.0).0;
+            let without = p.medium(h, xz, 0.0).0;
             assert!(
                 with <= without + 1e-12,
                 "detail added density at {xz:?}, {h}"
             );
         }
+    }
+
+    /// `cumulus-shape.md` Validation 5: the envelope is 0 above the blob's height and 1 below
+    /// its rounding, C¹ (no jump in slope: the terraces were slope jumps), the base is a plane,
+    /// and the erosion is a density in [0, 1] that grows with the noise and is 0 below `1 − d`.
+    #[test]
+    fn the_cumulus_envelope_is_smooth_and_the_erosion_bounded() {
+        for dome in [0.0, 0.3, 1.0] {
+            let s = mix(CUMULUS_EDGE_HEIGHT, 1.0, f64::sqrt(dome));
+            assert_eq!(cumulus_envelope(s, dome), 0.0);
+            assert_eq!(cumulus_envelope(0.99 * s * CUMULUS_TOP_ROUND, dome), 1.0);
+            // A kink (the old linear gradient's corners) jumps the slope by a whole 1/width
+            // however fine the step; a C¹ curve by its curvature times the step.
+            let h = 1e-5;
+            let slope = |f: f64| {
+                (cumulus_envelope(f + h, dome) - cumulus_envelope(f - h, dome)) / (2.0 * h)
+            };
+            let mut f = 0.0005;
+            while f < 0.999 {
+                let jump = (slope(f + 0.0005) - slope(f)).abs();
+                assert!(jump < 0.1, "slope jumps by {jump} at f {f}, dome {dome}");
+                f += 0.0005;
+            }
+        }
+        assert_eq!(cumulus_base(0.0), 0.0);
+        assert_eq!(cumulus_base(CUMULUS_BASE_RISE), 1.0);
+        for d in [0.1, 0.5, 0.75] {
+            assert_eq!(value_erosion(1.0 - d - 1e-6, d), 0.0);
+            assert!((value_erosion(1.0, d) - 1.0).abs() < 1e-12);
+            let mut last = 0.0;
+            for i in 0..=100 {
+                let v = value_erosion(f64::from(i) / 100.0, d);
+                assert!((last..=1.0).contains(&v), "not monotone at {i}");
+                last = v;
+            }
+        }
+        assert_eq!(value_erosion(1.0, 0.0), 0.0);
     }
 
     #[test]
@@ -1517,7 +1725,7 @@ mod tests {
         for i in 0..300 {
             let xz = [f64::from(i) * 101.0, f64::from(i) * 67.0];
             let (coverage, _) = p.weather_at(xz);
-            let (_, g) = p.medium(1800.0, xz, false);
+            let (_, g) = p.medium(1800.0, xz, 0.0);
             if coverage <= 0.0 {
                 assert_eq!(g, 0.0);
             } else {

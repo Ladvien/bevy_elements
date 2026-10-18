@@ -661,12 +661,13 @@ fn a_still_camera_gives_a_steady_history() {
 }
 
 /// Validation 13: with no flash the cloud is what it was; a 7.96×10⁶ cd flash at the layer base
-/// lights the cloud over it at dusk by at least 50×, and changes the exposed noon sky by under
-/// 1 %.
+/// lights the cloud over it at dusk by at least 50×, and changes the exposed noon sky by a few
+/// per cent at most: 3.4 % since the cumulonimbus has a flat base 480 m thick where the
+/// flash fires (cumulus-shape.md Deviation 10; under 2 % with the old 800 m ramp).
 #[test]
 #[ignore = "needs a GPU"]
 fn a_flash_lights_the_cloud_at_dusk_and_not_at_noon() {
-    for (hour, minimum_ratio, maximum_change) in [(21.0, 50.0, f32::MAX), (12.0, 0.0, 0.02)] {
+    for (hour, minimum_ratio, maximum_change) in [(21.0, 50.0, f32::MAX), (12.0, 0.0, 0.05)] {
         let mut case = Case::sky(WeatherPreset::Thunderstorm);
         case.hour = hour;
         let mut app = app(case);

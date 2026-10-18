@@ -46,7 +46,7 @@ fn shadow_at(texel: vec2<f32>) -> vec3<f32> {
     var s_sum = 0.0;
     for (var i = 0u; i < STEPS; i += 1u) {
         let h = h_b + (f32(i) + jitter) * dh;
-        let m = cloud_medium(h, q + l.xz * (h / l.y), false, params, base_tex, base_tex, weather_tex, smp);
+        let m = cloud_medium(h, q + l.xz * (h / l.y), 0.0, params, base_tex, base_tex, weather_tex, smp);
         tau += (1.0 + m.g) * m.sigma * ds;
         g_sum += m.g * m.sigma;
         s_sum += m.sigma;

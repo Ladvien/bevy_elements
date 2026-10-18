@@ -54,9 +54,10 @@ struct CloudParams {
 const PI: f32 = 3.14159265358979;
 /// Farthest distance the march goes, m: the weather map extent and the aerial LUT range.
 const MAX_MARCH_M: f32 = 32000.0;
-/// World size of the base and detail noise tiles, m.
-const BASE_TILE_M: f32 = 8192.0;
-const DETAIL_TILE_M: f32 = 1024.0;
+/// World size of the base and detail noise tiles, m (docs/research/cumulus-shape.md: lobes of
+/// about a kilometre, turrets and billows of 50–200 m).
+const BASE_TILE_M: f32 = 4096.0;
+const DETAIL_TILE_M: f32 = 640.0;
 /// Horizontal lean of cloud tops per unit of height fraction, m (Nubis).
 const WIND_SKEW_M: f32 = 500.0;
 /// Cloud-side detail erosion strength (Schneider 2015 / GPU Pro 7).
@@ -96,6 +97,49 @@ fn height_gradient(f: f32, q: vec4<f32>) -> f32 {
     let up = clamp((f - q.x) / max(q.y - q.x, 1e-4), 0.0, 1.0);
     let down = 1.0 - clamp((f - q.z) / max(q.w - q.z, 1e-4), 0.0, 1.0);
     return up * down;
+}
+
+/// Weight of the cumuliform density (cumulus-shape.md, Model): 0 for stratus up to type 0.25,
+/// 1 from cumulus (0.5) up.
+fn cumuliform(kind: f32) -> f32 {
+    return clamp(4.0 * kind - 1.0, 0.0, 1.0);
+}
+
+/// Flat base of a cumuliform cloud: the density rises over this fraction of the layer.
+const CUMULUS_BASE_RISE: f32 = 0.06;
+/// The top rounds off over the upper part of the blob's height, from this fraction of it.
+const CUMULUS_TOP_ROUND: f32 = 0.25;
+/// Height of a cumuliform cloud at the edge of its blob, as a fraction of the layer.
+const CUMULUS_EDGE_HEIGHT: f32 = 0.45;
+
+/// The rounded top of a cumuliform cloud at height fraction `f` with the dome factor `dome`:
+/// full up to the upper part of the blob's height `s`, rounding off toward it. C¹, so neither
+/// the corners of a linear gradient nor the dome texels' kinks crease the cloud.
+fn cumulus_envelope(f: f32, dome: f32) -> f32 {
+    let s = mix(CUMULUS_EDGE_HEIGHT, 1.0, sqrt(dome));
+    return 1.0 - smoothstep(s * CUMULUS_TOP_ROUND, s, f);
+}
+
+/// The flat base of a cumuliform cloud: a factor on the eroded density, not on the profile the
+/// noise erodes, so the condensation level is a plane and no billow hangs below it.
+fn cumulus_base(f: f32) -> f32 {
+    return smoothstep(0.0, CUMULUS_BASE_RISE, f);
+}
+
+/// Weight of the billowy composite: wispy at the base, billowy above it (Nubis Evolved's
+/// `noise_height_blend` around the type).
+fn billow_weight(f: f32) -> f32 {
+    return smoothstep(0.05, 0.25, f);
+}
+
+/// Nubis' value erosion `saturate(noise − (1 − d))`, normalised to reach 1 where the noise is 1
+/// and raised to the edge exponent ½: 0 wherever the noise is below `1 − d`, and a cloud's core
+/// is as dense as its type allows however thin the profile that carved it.
+fn value_erosion(noise: f32, d: f32) -> f32 {
+    if d <= 0.0 {
+        return 0.0;
+    }
+    return sqrt(clamp((noise - (1.0 - d)) / d, 0.0, 1.0));
 }
 
 /// Altitude above the surface of the point `rel_xz` away from the camera horizontally at world
@@ -205,7 +249,9 @@ struct Medium {
     g: f32,
 }
 
-/// The base-shape term `S′·r′`, 0 outside cloud: what the coarse march samples.
+/// The base-shape term, 0 outside cloud: what the coarse march samples. For a cumuliform
+/// cloud it is the value erosion of the largest noise composite the detail could give, so the
+/// coarse march never steps over a cloud the fine one would draw.
 fn coarse_shape(
     h: f32,
     xz: vec2<f32>,
@@ -228,27 +274,73 @@ fn coarse_shape(
     }
     let kind = p.layer.z;
     let lean = xz - f * p.drift_detail.zw * WIND_SKEW_M;
-    let uvw = vec3<f32>(
-        (lean.x - p.drift.z) / BASE_TILE_M,
-        h / BASE_TILE_M,
-        (lean.y - p.drift.w) / BASE_TILE_M,
-    );
-    let b4 = textureSampleLevel(base_tex, smp, uvw, 0.0);
+    let b4 = textureSampleLevel(base_tex, smp, base_uvw(lean, h, p), 0.0);
     let lf = 0.625 * b4.g + 0.25 * b4.b + 0.125 * b4.a;
     let shape = clamp((b4.r + 1.0 - lf) / (2.0 - lf), 0.0, 1.0);
+    let r = pow(w.r, coverage_exponent(f, kind));
+    let k = cumuliform(kind);
+    var stratiform = 0.0;
+    if k < 1.0 {
+        stratiform = shape * cloud_gradient(f, kind, w.a) * r;
+    }
+    var cumulus = 0.0;
+    if k > 0.0 {
+        // Only the sign matters to the coarse march: no division or power.
+        cumulus = max(noise_bound(f, shape, lf) - (1.0 - cumulus_profile(f, w.a, r, b4.g, p.layer.w)), 0.0);
+    }
+    return mix(stratiform, cumulus, k);
+}
+
+/// Exponent of the coverage erosion `r′ = r^e`: the anvil inflation of the top.
+fn coverage_exponent(f: f32, kind: f32) -> f32 {
     let beta = smoothstep(0.5, 1.0, kind);
-    let e = mix(1.0, mix(1.0, 0.5, beta), clamp((f - 0.7) / 0.1, 0.0, 1.0));
-    let r = pow(w.r, e);
-    return shape * cloud_gradient(f, kind, w.a) * r;
+    return mix(1.0, mix(1.0, 0.5, beta), clamp((f - 0.7) / 0.1, 0.0, 1.0));
+}
+
+/// Base-noise coordinate of a (leaned) point.
+fn base_uvw(lean: vec2<f32>, h: f32, p: CloudParams) -> vec3<f32> {
+    return vec3<f32>((lean.x - p.drift.z) / BASE_TILE_M, h / BASE_TILE_M, (lean.y - p.drift.w) / BASE_TILE_M);
+}
+
+/// Share of the cumuliform profile the cloud's core keeps, so the noise's lows still open gaps
+/// inside a coverage blob and it breaks into separate clouds.
+const CORE_PROFILE: f32 = 0.75;
+
+/// The dimensional profile of a cumuliform cloud (Nubis Evolved): the rounded envelope times
+/// the eroded coverage times the convective cell (`cell`, the base texture's Worley cells: a
+/// coverage blob is a field of separate thermals, not one mass). The gaps close as the weather's
+/// `cover` reaches 1 (`cover⁴`): a sky the weather calls overcast has no holes, its billows
+/// pack into a deck (Nubis³: "Increasing Density = Layered Billows").
+fn cumulus_profile(f: f32, dome: f32, r: f32, cell: f32, cover: f32) -> f32 {
+    let c2 = clamp(cover, 0.0, 1.0) * clamp(cover, 0.0, 1.0);
+    let closed = c2 * c2;
+    let gaps = mix(CORE_PROFILE * smoothstep(0.25, 0.65, cell), 1.0, closed);
+    return cumulus_envelope(f, dome) * r * gaps;
+}
+
+/// The noise composite of a cumuliform cloud from the base Perlin-Worley `shape`, the base
+/// Worley octaves `lf` and the detail Worley octaves `hf`: wispy toward the base, billowy above
+/// (cumulus-shape.md, Model 3).
+fn noise_composite(f: f32, shape: f32, lf: f32, hf: f32) -> f32 {
+    let wispy = 0.6 * shape + 0.4 * (1.0 - hf);
+    let billowy = 0.5 * shape + 0.3 * lf + 0.2 * hf;
+    return mix(wispy, billowy, billow_weight(f));
+}
+
+/// The largest `noise_composite` any detail value gives: the coarse march's bound.
+fn noise_bound(f: f32, shape: f32, lf: f32) -> f32 {
+    return mix(0.6 * shape + 0.4, 0.5 * shape + 0.3 * lf + 0.2, billow_weight(f));
 }
 
 /// The medium at a point of altitude `h` above world XZ `xz`: the weather map gives coverage,
-/// precipitation and (uniform) type, the base noise the shape, the detail noise (when
-/// `detail`) erodes the edges.
+/// precipitation and (uniform) type, the base noise the shape, the detail noise erodes the
+/// edges. `detail` (0–1) is how much of the detail noise the sample can resolve: 0 skips the
+/// tap (the shadow map, the light march), and the march lowers it as its step outgrows the
+/// billows (`detail_weight`), so a long step sees their mean instead of aliasing them.
 fn cloud_medium(
     h: f32,
     xz: vec2<f32>,
-    detail: bool,
+    detail: f32,
     p: CloudParams,
     base_tex: texture_3d<f32>,
     detail_tex: texture_3d<f32>,
@@ -271,33 +363,47 @@ fn cloud_medium(
     }
     let kind = p.layer.z;
     let lean = xz - f * p.drift_detail.zw * WIND_SKEW_M;
-    let uvw = vec3<f32>(
-        (lean.x - p.drift.z) / BASE_TILE_M,
-        h / BASE_TILE_M,
-        (lean.y - p.drift.w) / BASE_TILE_M,
-    );
-    let b4 = textureSampleLevel(base_tex, smp, uvw, 0.0);
+    let b4 = textureSampleLevel(base_tex, smp, base_uvw(lean, h, p), 0.0);
     let lf = 0.625 * b4.g + 0.25 * b4.b + 0.125 * b4.a;
-    let shape = clamp((b4.r + 1.0 - lf) / (2.0 - lf), 0.0, 1.0) * cloud_gradient(f, kind, w.a);
-    let beta = smoothstep(0.5, 1.0, kind);
-    let e = mix(1.0, mix(1.0, 0.5, beta), clamp((f - 0.7) / 0.1, 0.0, 1.0));
-    let r = pow(w.r, e);
-    var rho = clamp((shape - (1.0 - r)) / max(r, 1e-4), 0.0, 1.0) * r;
-    if detail && rho > 0.0 {
+    let base_shape = clamp((b4.r + 1.0 - lf) / (2.0 - lf), 0.0, 1.0);
+    let r = pow(w.r, coverage_exponent(f, kind));
+    // Without the detail tap the detail octaves take their mean.
+    var raw_hf = 0.5;
+    if detail > 0.0 {
         let duvw = vec3<f32>(
             (lean.x - p.drift_detail.x) / DETAIL_TILE_M,
             h / DETAIL_TILE_M,
             (lean.y - p.drift_detail.y) / DETAIL_TILE_M,
         );
         let d4 = textureSampleLevel(detail_tex, smp, duvw, 0.0);
-        let hf = 0.625 * d4.r + 0.25 * d4.g + 0.125 * d4.b;
-        let wispy = mix(hf, 1.0 - hf, clamp(10.0 * f, 0.0, 1.0));
-        let lo = DETAIL_EROSION * wispy;
-        rho = clamp((rho - lo) / (1.0 - lo), 0.0, 1.0);
+        raw_hf = 0.625 * d4.r + 0.25 * d4.g + 0.125 * d4.b;
     }
-    m.sigma = sigma_peak(kind) * rho;
+    let hf = mix(0.5, raw_hf, detail);
+    let k = cumuliform(kind);
+    var stratiform = 0.0;
+    if k < 1.0 {
+        let shape = base_shape * cloud_gradient(f, kind, w.a);
+        stratiform = clamp((shape - (1.0 - r)) / max(r, 1e-4), 0.0, 1.0) * r;
+        if detail > 0.0 && stratiform > 0.0 {
+            let wispy = mix(raw_hf, 1.0 - raw_hf, clamp(10.0 * f, 0.0, 1.0));
+            let lo = DETAIL_EROSION * wispy;
+            stratiform = clamp((stratiform - lo) / (1.0 - lo), 0.0, 1.0);
+        }
+    }
+    var cumulus = 0.0;
+    if k > 0.0 {
+        let d = cumulus_profile(f, w.a, r, b4.g, p.layer.w);
+        cumulus = value_erosion(noise_composite(f, base_shape, lf, hf), d) * cumulus_base(f);
+    }
+    m.sigma = sigma_peak(kind) * mix(stratiform, cumulus, k);
     m.g = w.g;
     return m;
+}
+
+/// How much of the detail noise a fine step of `dt` metres resolves: all of it up to an eighth
+/// of the detail tile (its finest cells are a sixteenth), none past a quarter.
+fn detail_weight(dt: f32) -> f32 {
+    return 1.0 - smoothstep(DETAIL_TILE_M / 8.0, DETAIL_TILE_M / 4.0, dt);
 }
 
 /// Henyey–Greenstein phase function, sr⁻¹.
