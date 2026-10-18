@@ -8,7 +8,10 @@
 //! The weather cycles Rain, Thunderstorm, Snow and PartlyCloudy, 30 s each of real time, at a
 //! clock 30 times real time. `ELEMENTS_PRESET=Snow` (or any preset) fixes it,
 //! `ELEMENTS_HOUR=14` starts the clock at that hour, `ELEMENTS_SCALE=300` changes the time scale,
-//! and `ELEMENTS_ZOOM=60` sets the view's height in metres (default 40). `ELEMENTS_LOOK=game`
+//! `ELEMENTS_ZOOM=60` sets the view's height in metres (default 40), `ELEMENTS_PITCH=35` the
+//! camera's angle below the horizon (default 30), and `ELEMENTS_PRECIPITATION=readable` draws the
+//! rain and snow in `PrecipitationLook::readable()` (`docs/research/precipitation-look.md`).
+//! `ELEMENTS_LOOK=game`
 //! keeps a game's own look (`docs/research/integration.md`): its own warm key light, a flat
 //! ambient and a plain clear colour, no physical sky, fog or exposure from the crate, and the
 //! crate's weather on top (`ElementsCamera::bare()` with `msaa_off`, `CelestialSettings` off).
@@ -74,6 +77,14 @@ fn main() {
     if fixed_preset().is_none() {
         app.add_systems(Update, cycle.before(ElementsSystems::Clock));
     }
+    // A game's own bright key light makes rain nearly as bright as the sunlit ground behind it (a
+    // physical fact Lagarde 2012 says games should not follow): the game brightens its streaks.
+    if game_look() && std::env::var("ELEMENTS_PRECIPITATION").as_deref() == Ok("readable") {
+        app.insert_resource(PrecipitationLook {
+            rain_tint: LinearRgba::new(2.4, 2.5, 2.8, 0.8),
+            ..PrecipitationLook::readable()
+        });
+    }
     app.run();
 }
 
@@ -105,9 +116,10 @@ fn walk(time: Res<Time>, mut walker: Query<&mut Transform, With<Walker>>) {
     }
 }
 
-/// The classic isometric direction: from the south-east, 30° down.
+/// The classic isometric direction: from the south-east, 30° down (`ELEMENTS_PITCH` degrees).
 fn iso_offset() -> Vec3 {
-    let (yaw, pitch) = (45f32.to_radians(), 30f32.to_radians());
+    let pitch_deg = env_f64("ELEMENTS_PITCH").unwrap_or(30.0) as f32;
+    let (yaw, pitch) = (45f32.to_radians(), pitch_deg.to_radians());
     BACK_M
         * Vec3::new(
             yaw.sin() * pitch.cos(),

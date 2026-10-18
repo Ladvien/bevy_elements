@@ -32,7 +32,7 @@ Three requests from a shipping game (Sanctuary: an orthographic camera pitched a
 |---|---|---|---|
 | `rain_fall_scale` | 1 | 4 | Tatarchuk 2006 (artist rain speed); capture review |
 | `rain_wind_scale` | 1 | 0.5 | Tatarchuk 2006 (artist rain direction); Lagarde 2012 (slant by art, not wind) |
-| `rain_tint` | `(1, 1, 1, 1)` | `(0.85, 0.9, 1.0, 1.3)` | Lagarde 2012 (rain reads stronger than physics in bright scenes); capture review |
+| `rain_tint` | `(1, 1, 1, 1)` | `(0.85, 0.9, 1.0, 0.7)` | Lagarde 2012 (rain reads stronger than physics in bright scenes); capture review (Deviation 1) |
 | `flake_size_spread` σ | 0 | 0.5 | Tiira et al. 2016 (exponential snow PSD, CV 1); Tatarchuk 2006 (random size) |
 | `flake_min_half_width_px` | 1 | 1.5 | capture review |
 
@@ -62,7 +62,10 @@ The `readable()` values are the capture review's; a change to them moves no defa
 
 ## Deviations from this plan
 
-(none yet)
+1. **`readable()`'s rain opacity is 0.7, not 1.3.** At 1.3 the 25 mm/h `Thunderstorm` became an opaque white wall over the town (ground mean 153 DN against 140 physical; critique round 1); at 0.7 it is 147 against 149 physical, and the 4 mm/h `Rain` streaks still read because the fall scale lengthens them. A brighter crate tint (1.15–1.35, round 3) greyed the crate-lit town into a veil, so it was not taken. Lagarde's point that rain should read stronger than physics in bright scenes is a per-game call: the `isometric` example's game look (its own bright key light) sets `rain_tint (2.4, 2.5, 2.8, 0.8)` on top of `readable()`, which is what the field is for.
+2. **The flake size factor's normal is clamped to ±2σ.** Unclamped, the log-normal's tail drew a few flakes four to five times the mean as soft blobs (critique round 1). The clamp keeps 95 % of the distribution; at σ = 0.5 the measured coefficient of variation is still above 0.3 and the mean within 5 % (`a_size_spread_varies_the_flakes_about_their_own_size`).
+3. **Measured:** under an orthographic camera pitched 35° the mean streak angle from vertical is 63.4° physical and 15.3° readable (`a_readable_rain_stands_upright_under_an_orthographic_camera`). Cost: `elements_precip_draw` at High, 3840 × 2160, `Thunderstorm`, minimum over two runs each: 0.122 / 0.126 ms before, 0.123 / 0.115 ms with `readable()` (the GPU at 1695–1755 MHz, P2): within the run-to-run spread. Defaults: the isometric `Rain` and `Snow` captures' mean colour moved by at most 0.02 DN against the build before the change.
+4. **Night and storms under an orthographic camera are unchanged by this note and stay open:** a 25 mm/h storm hides the town under both looks, and the isometric town at 22 h under `Rain` renders black (mean 1 DN) under both. Neither is the draw's style.
 
 ## Pending index
 
