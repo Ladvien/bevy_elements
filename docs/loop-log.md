@@ -1183,3 +1183,53 @@ Schneider & Vos 2015 (`s2015-advances-ppt-944-mb-pdf-5-mb-2`); Schneider & Vos 2
 3. **Rim sparkle** on distant lit cloud edges at sunset (half-resolution march; a full-resolution edge pass or a bilateral upsample).
 4. **Buoyancy readback** and **save/restore of the GPU layers** (carried).
 5. **A view-dependent exposure cap**, **flat terrain shading**, **wave cost** (carried).
+
+## Iteration 18 — 2026-10-18 — clouds that are white: multiple scattering by diffusion
+
+**Commits:** `d3d0f8d` (research note `docs/research/cloud-lighting.md`), the implementation with the mirror, the Monte Carlo table and tests, the README / CHANGELOG / still / tour GIF, this log. Merged through a pull request. **Sibling repos:** none. **Not released.**
+
+### What changed, and why it ranked first
+
+Iteration 17's top item. With the shapes right, the lighting was the beauty gap in every outdoor frame: cumulus were translucent grey-blue from the ground, khaki from 3.8 km and black underneath at sunset (`/tmp/i18/before/sheet.png`). A Monte Carlo reference (`docs/research/cloud-lighting-mc.py`: homogeneous conservative slabs, the march's dual-lobe phase, 2×10⁶ photons per case) put numbers on it: three Wrenninge octaves gave 0.16–0.3× of a thick top and nearly nothing of a base. The best octave sum the rule `a ≤ b` allows still had 3× the error of a diffusion term.
+
+The octaves are replaced by single scattering plus photon diffusion between the lit face and the cloud behind, `α √μ_l / π · (τ_b + z) / (τ_l + τ_b + 2z)`, with Jensen 2001's extrapolation `z = 2/(3(1 − g))` (the free fit recovers 3.39 against 3.33) and α = 0.68; `τ_b` is one extra base-shape sample 300 m behind each sample. Two more defects surfaced while prototyping and were fixed: descending rays took their aerial perspective along a path that met the ground (khaki from above; now Bruneton's reversed ray), and the clouds' ambient still carried the sunlight the diffusion now carries, turning the noon overcast cream (the ambient is now the sky's colour alone). The far veil had cloud behind a deck's base and drew a ridge at the 32 km boundary; it has none now.
+
+### Candidates ranked
+
+| # | Candidate | Category | Note |
+|---|---|---|---|
+| 1 | **Cloud lighting: grey/khaki cumulus, black bases** | 2 | picked |
+| 2 | Anti-solar sky at sunset dark grey | 1 | carried |
+| 3 | Rim sparkle on lit cloud edges at sunset | 2 | carried |
+| 4 | Buoyancy readback; save/restore of the GPU layers | 3 | carried |
+| 5 | View-dependent exposure cap; flat terrain shading; wave cost | 2/5 | carried |
+
+### Sources
+
+Hillaire 2016 *Physically based sky, atmosphere and cloud rendering in Frostbite* (§5.8); Hillaire 2020 SIGGRAPH PBS course slides (Unreal's octaves, albedo ≈ 1 needs multiple scattering); Bouthors et al. 2008 (HAL `inria-00333007`: orders 1–30 carry 30–100 % of the reflectance); Jensen et al. 2001 (`10.1145_383259.383319`, the extrapolated boundary `φ − 2AD ∂φ/∂n = 0`); Kallweit et al. 2017 (`10.1145_3130800.3130880`, downloaded). Not obtained: Lacis & Hansen 1974, Meador & Weaver 1980, Wrenninge 2013.
+
+### Critique and verdicts (`/tmp/i18/critique.md`; rounds `/tmp/i18/p1`, `p2`, `r1`–`r3`)
+
+| Feature | Evidence | Verdict |
+|---|---|---|
+| Cumulus from the ground (15.5 h, 9 h, 11 h) | `r3/cmp_front.png`, `r3/strip.png`, `r3/cmp_horizon.png` | GREAT: white tops, grey bases, crisp against the blue |
+| Cumulus from 3.8 km | `r3/cmp_aerial.png` | GREAT: white over the haze (was khaki) |
+| Sunset undersides | `r3/z_sunset.png`, `r3/z_rim.png` | GREAT: orange-lit, volume reads; rim speckle unchanged (carried) |
+| Noon overcast | `r1/overcast.png` (cream, NOT YET) → `r3/overcast.png` | GREAT: neutral (226, 225, 222), brighter than (193, 195, 197) |
+| Storm, night, overhead | `r3/cmp_storm.png`, `r3/cmp_night.png`, `r3/cmp_e.png` | pass: storm unchanged under its fog, moonlit clouds keep their form |
+
+### Verification
+
+- `clouds::model`: `the_slab_matches_monte_carlo` (96 cases, mean squared log error 0.067 ≤ 0.08; thick tops 0.57–1.12×, bases 0.45–1.19×, `cloud-lighting.md` Deviation 2), `the_integrator_converges_on_the_slab` (Q 64 within 5 % of Q 1024), `the_source_bound_is_the_phase_peak_and_the_diffuse_albedo` (2.7285), the phase integral and values, the stress bound, the white furnace.
+- GPU: `the_far_veil_continues_the_marched_deck_at_full_cover` (near rows ratio 0.95–0.97, tint ≤ 0.016, chroma ≤ 0.031; far rows now 0.08 / 0.15, measured 0.062 / 0.122, a smooth drift with distance, Deviation 4); `the_deck_takes_the_colour_of_its_light` (noon blue/red 1.12× the neutral deck, bound now < 1.2; dusk red/green 1.26 against 1.02).
+- Gates: `cargo build --release`, `cargo test`, `cargo build --examples --all-features`, clippy `-D warnings`, `cargo doc` `-D warnings`, wasm32, rustfmt on the changed files, `tests/save.rs` with `--features serde`, every GPU file and lib module (`/tmp/i13/gpu_suite.sh`).
+- Performance (`bench_elements`, High, hills, `PartlyCloudy`, 1080p, alternating runs against `8b0620c`, P2 at 1740–1800 MHz logged in the same shell, the GPU otherwise idle; one run at P5 discarded): `elements_clouds_march` 0.480–0.524 → 0.513–0.539 ms (+3–7 %, within 10 %); `elements_clouds_shadow` unchanged (0.069–0.072 → 0.068–0.073).
+- Stills `docs/cloud_lighting.png` (new), `docs/tour.gif` regenerated.
+
+### Top 5 remaining items, ranked
+
+1. **Open issues #7–#15** (filed by a consumer integrating the crate): orthographic cameras and a follow anchor, a world-units scale, opt-outs on `ElementsCamera`, `CelestialPlugin` without its own lights, a public `ElementsGlobals` handle, `bevy_flora` 0.46, the `isomesh` feature for many volumes, serializing `SurfaceWeathering`, a snow season on `Climate`.
+2. **The anti-solar sky at sunset reads dark grey** (carried).
+3. **Rim sparkle** on distant lit cloud edges at sunset (carried).
+4. **The aerial haze floor** seen from 3.8 km is a flat featureless grey (`r3/aerial.png`).
+5. **Buoyancy readback**, **save/restore of the GPU layers**, **a view-dependent exposure cap**, **flat terrain shading**, **wave cost** (carried).
