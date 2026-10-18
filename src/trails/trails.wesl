@@ -9,6 +9,12 @@
 // 3. `trail_blocks`: the largest |h| per 8 × 8 block, the materials' occupancy.
 // 4. `trail_relax`: every texel; slump above the material's angle and wind diffusion, `b` → `a`,
 //    and publishes (h, occupancy, ∂h/∂x, ∂h/∂z) to the field the materials sample.
+// 5. `trail_readback` (on a readback tick, its own layout): the deepest `h` per readback cell, for
+//    `Environment::trail_depth`.
+//
+// The ground is the terrain's and the cover maps', or on a game's own ground
+// (docs/research/trails-game-ground.md) one uniform ground over the window, whose contact the
+// main world tests: the imprint's sole height is then its height above that ground.
 //
 // The window is toroidal by world texel: world texel `w` lives at `w mod N`, so it slides without
 // copying.
@@ -26,6 +32,10 @@ struct TrailParams {
     // x: texel edge, m. y: game time of this step, s. z: wind diffusivity in snow, m²/s.
     // w: in sand, m²/s.
     sim: vec4<f32>,
+    // A game's own ground: snow depth (m), snow density (kg/m³), wetness, sediment (m).
+    ground: vec4<f32>,
+    // x: 1 on a game's own ground. y: texels a side of a readback cell.
+    mode: vec4<u32>,
 }
 
 struct ImprintGpu {
@@ -51,6 +61,9 @@ struct ImprintGpu {
 @group(0) @binding(7) var field: texture_storage_2d<rgba16float, write>;
 // The largest |h| per BLOCK × BLOCK block of slots.
 @group(0) @binding(8) var<storage, read_write> blocks: array<f32>;
+// `trail_readback`'s output: the window origin (texels), cells a side and texels a cell, then
+// the deepest `h` per cell, row-major by slot cell.
+@group(0) @binding(9) var<storage, read_write> readback: array<f32>;
 
 // Texels a side of an occupancy block.
 const BLOCK: i32 = 8;
@@ -119,12 +132,25 @@ fn centre(w: vec2<i32>) -> vec2<f32> {
     return (vec2<f32>(w) + 0.5) * texel_m();
 }
 
+fn game_ground() -> bool {
+    return params.mode.x != 0u;
+}
+
 fn bekker(k: vec3<f32>, p_kpa: f32, b: f32) -> f32 {
     return pow(max(p_kpa, 0.0) / (k.y / max(b, 1e-3) + k.z), 1.0 / k.x);
 }
 
-// The ground at world XZ from the terrain and cover maps (bilinear).
+// The ground at world XZ from the terrain and cover maps (bilinear), or a game's uniform one.
 fn ground_at(xz: vec2<f32>) -> Ground {
+    if game_ground() {
+        var flat: Ground;
+        flat.snow_m = max(params.ground.x, 0.0);
+        flat.snow_density = clamp(params.ground.y, 50.0, 917.0);
+        flat.wetness = clamp(params.ground.z, 0.0, 1.0);
+        flat.sediment_m = params.ground.w;
+        flat.slope_deg = 0.0;
+        return flat;
+    }
     let t = grid_taps(params.terrain.grid, xz);
     let c00 = terrain_cells[t.i00];
     let c10 = terrain_cells[t.i10];
@@ -150,8 +176,12 @@ fn ground_at(xz: vec2<f32>) -> Ground {
     return out;
 }
 
-// The undisturbed surface's world height at XZ: terrain plus snow.
+// The undisturbed surface's world height at XZ: terrain plus snow. On a game's own ground the
+// sole comes as its height above that surface, so the surface is 0.
 fn surface_y(xz: vec2<f32>) -> f32 {
+    if game_ground() {
+        return 0.0;
+    }
     let t = grid_taps(params.terrain.grid, xz);
     let h = mix(mix(terrain_cells[t.i00].x, terrain_cells[t.i10].x, t.w.x), mix(terrain_cells[t.i01].x, terrain_cells[t.i11].x, t.w.x), t.w.y);
     let s = mix(mix(cover_cells[t.i00].x, cover_cells[t.i10].x, t.w.x), mix(cover_cells[t.i01].x, cover_cells[t.i11].x, t.w.x), t.w.y);
@@ -408,4 +438,31 @@ fn trail_blocks(@builtin(global_invocation_id) id: vec3<u32>) {
         }
     }
     blocks[u32(b.y * nb + b.x)] = m;
+}
+
+// The deepest h per readback cell of `mode.y` × `mode.y` slots (a world-aligned block: a whole
+// number of cells fits the window), after relax.
+@compute @workgroup_size(8, 8, 1)
+fn trail_readback(@builtin(global_invocation_id) id: vec3<u32>) {
+    let k = i32(max(params.mode.y, 1u));
+    let cells = size() / k;
+    let c = vec2<i32>(id.xy);
+    if any(c >= vec2<i32>(cells)) {
+        return;
+    }
+    if all(c == vec2<i32>(0)) {
+        // Exact as f32 below 2^24 texels (840 km at 5 cm).
+        readback[0] = f32(params.origin.x);
+        readback[1] = f32(params.origin.y);
+        readback[2] = f32(cells);
+        readback[3] = f32(k);
+    }
+    var deepest = 0.0;
+    for (var y = 0; y < k; y += 1) {
+        for (var x = 0; x < k; x += 1) {
+            let s = c * k + vec2<i32>(x, y);
+            deepest = min(deepest, state_a[u32(s.y * size() + s.x)].x);
+        }
+    }
+    readback[4u + u32(c.y * cells + c.x)] = deepest;
 }

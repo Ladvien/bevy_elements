@@ -12,7 +12,7 @@
 
 import bevy_elements::noise::{hash33, perlin3};
 
-/// The shared globals buffer, six `vec4<f32>` (96 B). Mirrors the Rust `ElementsGlobals`.
+/// The shared globals buffer, eight `vec4<f32>` (128 B). Mirrors the Rust `ElementsGlobals`.
 struct ElementsGlobals {
     /// x wetness 0–1, y snow cover 0–1 (both of exposed flat ground), z rain intensity
     /// `min(1, R_liquid / 20)`, w the mean cloud transmittance the lights carry.
@@ -29,6 +29,12 @@ struct ElementsGlobals {
     /// from Bevy divides it by this before the metre-based functions below (`rain_streak`,
     /// `ripple_offset`, `cloud_shadow_uv`).
     units: vec4<f32>,
+    /// The trail field's window, as `bevy_elements::trails::surface` takes it: x texel edge (m),
+    /// y texels a side, z 1 when trails run, w the parallax march's bound on |h| (m).
+    trail: vec4<f32>,
+    /// x the beam's share of the light on a horizontal surface (a trail's self-shadow removes
+    /// it), yz the trail window's centre (metre-frame XZ), w the snow depth of exposed ground (m).
+    trail_light: vec4<f32>,
 }
 
 /// Linear albedo of snow; bit-equal to `bevy_flora`'s `SNOW_ALBEDO` (`common.wesl:388`).

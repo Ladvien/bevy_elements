@@ -1,6 +1,6 @@
-//! Render-world side of the trails: pipelines, the bind group, and one compute pass a frame
-//! (`elements_trails`: stamp, merge, block occupancy, relax) after the terrain's pack kernels, so
-//! the maps it reads are this frame's.
+//! Render-world side of the trails: pipelines, the bind groups, and one compute pass a frame
+//! (`elements_trails`: stamp, merge, block occupancy, relax, and on a readback tick the readback
+//! cells) after the terrain's pack kernels, so the maps it reads are this frame's.
 //!
 //! The render world remembers the window's origin of the last frame it ran, which is what the
 //! field holds: the main world cannot know it under pipelined rendering.
@@ -28,9 +28,8 @@ use bevy::render::{Render, RenderApp, RenderStartup, RenderSystems};
 
 use super::model::ImprintGpu;
 use super::{TrailGpu, TrailParams};
-use crate::cover::CoverGpu;
 use crate::gpu::kernel::{Kernel, groups, queue_kernel, ready};
-use crate::terrain::{TerrainDispatch, TerrainGpu};
+use crate::terrain::TerrainDispatch;
 
 impl ExtractResource<RenderApp> for TrailGpu {
     type Source = TrailGpu;
@@ -46,6 +45,7 @@ struct TrailPipelines {
     merge: Kernel,
     blocks: Kernel,
     relax: Kernel,
+    readback: Kernel,
 }
 
 #[derive(Resource, Default)]
@@ -55,7 +55,10 @@ struct TrailUniforms {
 }
 
 #[derive(Resource)]
-struct TrailBindGroup(BindGroup);
+struct TrailBindGroup {
+    main: BindGroup,
+    readback: BindGroup,
+}
 
 /// What the field holds: the state buffer it was last run on and that run's window origin.
 #[derive(Resource, Default)]
@@ -102,6 +105,22 @@ fn layout() -> BindGroupLayoutDescriptor {
     )
 }
 
+/// The readback kernel's own layout (the uniform, the state, the readback cells), so the other
+/// four keep seven storage buffers.
+fn readback_layout() -> BindGroupLayoutDescriptor {
+    BindGroupLayoutDescriptor::new(
+        "elements_trails_readback",
+        &BindGroupLayoutEntries::with_indices(
+            ShaderStages::COMPUTE,
+            (
+                (0, uniform_buffer::<TrailParams>(false)),
+                (1, storage_buffer_sized(false, None)),
+                (9, storage_buffer_sized(false, None)),
+            ),
+        ),
+    )
+}
+
 fn init_pipelines(mut commands: Commands, assets: Res<AssetServer>, cache: Res<PipelineCache>) {
     let shader = load_embedded_asset!(assets.as_ref(), "trails.wesl");
     let kernel = |entry| queue_kernel(&cache, shader.clone(), entry, layout(), Vec::new());
@@ -110,6 +129,13 @@ fn init_pipelines(mut commands: Commands, assets: Res<AssetServer>, cache: Res<P
         merge: kernel("trail_merge"),
         blocks: kernel("trail_blocks"),
         relax: kernel("trail_relax"),
+        readback: queue_kernel(
+            &cache,
+            shader.clone(),
+            "trail_readback",
+            readback_layout(),
+            Vec::new(),
+        ),
     });
 }
 
@@ -117,8 +143,6 @@ fn init_pipelines(mut commands: Commands, assets: Res<AssetServer>, cache: Res<P
 fn prepare(
     mut commands: Commands,
     gpu: Option<Res<TrailGpu>>,
-    terrain: Option<Res<TerrainGpu>>,
-    cover: Option<Res<CoverGpu>>,
     pipelines: Option<Res<TrailPipelines>>,
     mut uniforms: ResMut<TrailUniforms>,
     mut memory: ResMut<TrailMemory>,
@@ -130,27 +154,38 @@ fn prepare(
 ) {
     commands.remove_resource::<TrailBindGroup>();
     memory.params = None;
-    let (Some(gpu), Some(terrain), Some(cover), Some(pipelines)) = (gpu, terrain, cover, pipelines)
-    else {
+    let (Some(gpu), Some(pipelines)) = (gpu, pipelines) else {
         return;
     };
     let get = |h: &Handle<ShaderBuffer>| buffers.get(h).map(|b| &b.buffer);
-    let (Some(a), Some(b), Some(stamp), Some(cells), Some(cover_cells), Some(field), Some(blocks)) = (
+    let (
+        Some(a),
+        Some(b),
+        Some(stamp),
+        Some(cells),
+        Some(cover_cells),
+        Some(field),
+        Some(blocks),
+        Some(readback),
+    ) = (
         get(&gpu.state_a),
         get(&gpu.state_b),
         get(&gpu.stamp),
-        get(&terrain.state.cells),
-        get(&cover.cover_cells),
+        get(&gpu.cells),
+        get(&gpu.cover),
         images.get(&gpu.field),
         get(&gpu.blocks),
-    ) else {
+        get(&gpu.readback),
+    )
+    else {
         gpu.ready.store(false, Ordering::Relaxed);
         return;
     };
     let compiled = ready(&cache, &pipelines.stamp).is_some()
         && ready(&cache, &pipelines.merge).is_some()
         && ready(&cache, &pipelines.blocks).is_some()
-        && ready(&cache, &pipelines.relax).is_some();
+        && ready(&cache, &pipelines.relax).is_some()
+        && ready(&cache, &pipelines.readback).is_some();
     gpu.ready.store(compiled, Ordering::Relaxed);
     if !compiled || !gpu.run {
         return;
@@ -172,7 +207,7 @@ fn prepare(
     let Some(imprints) = uniforms.imprints.binding() else {
         return;
     };
-    let group = device.create_bind_group(
+    let main = device.create_bind_group(
         "elements_trails",
         &cache.get_bind_group_layout(&pipelines.stamp.layout),
         &BindGroupEntries::sequential((
@@ -187,7 +222,16 @@ fn prepare(
             blocks.as_entire_buffer_binding(),
         )),
     );
-    commands.insert_resource(TrailBindGroup(group));
+    let readback = device.create_bind_group(
+        "elements_trails_readback",
+        &cache.get_bind_group_layout(&pipelines.readback.layout),
+        &BindGroupEntries::with_indices((
+            (0, &uniforms.params),
+            (1, a.as_entire_buffer_binding()),
+            (9, readback.as_entire_buffer_binding()),
+        )),
+    );
+    commands.insert_resource(TrailBindGroup { main, readback });
 }
 
 fn dispatch(
@@ -203,11 +247,12 @@ fn dispatch(
     else {
         return;
     };
-    let (Some(stamp), Some(merge), Some(blocks), Some(relax)) = (
+    let (Some(stamp), Some(merge), Some(blocks), Some(relax), Some(readback)) = (
         ready(&cache, &pipelines.stamp),
         ready(&cache, &pipelines.merge),
         ready(&cache, &pipelines.blocks),
         ready(&cache, &pipelines.relax),
+        ready(&cache, &pipelines.readback),
     ) else {
         return;
     };
@@ -221,7 +266,7 @@ fn dispatch(
             ..default()
         });
     let span = diagnostics.pass_span(&mut pass, "elements_trails");
-    pass.set_bind_group(0, &group.0, &[]);
+    pass.set_bind_group(0, &group.main, &[]);
     if params.counts.y > 0 && params.counts.w > 0 {
         let tiles = groups(params.counts.w, 16);
         pass.set_pipeline(stamp);
@@ -235,6 +280,22 @@ fn dispatch(
     pass.dispatch_workgroups(groups(size, 8), groups(size, 8), 1);
     span.end(&mut pass);
     drop(pass);
+    // On a readback tick, the deepest point per cell for `Environment::trail_depth`, timed on its
+    // own (`elements_trails_readback`).
+    if gpu.read {
+        let cells = size / params.mode.y.max(1);
+        let mut pass = ctx
+            .command_encoder()
+            .begin_compute_pass(&ComputePassDescriptor {
+                label: Some("elements_trails_readback"),
+                ..default()
+            });
+        let span = diagnostics.pass_span(&mut pass, "elements_trails_readback");
+        pass.set_bind_group(0, &group.readback, &[]);
+        pass.set_pipeline(readback);
+        pass.dispatch_workgroups(groups(cells, 8), groups(cells, 8), 1);
+        span.end(&mut pass);
+    }
     memory.origin = Some(params.origin);
     gpu.executed.fetch_add(1, Ordering::Relaxed);
 }

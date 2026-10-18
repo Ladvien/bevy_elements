@@ -163,7 +163,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let n0 = pbr_input.world_normal;
     let slope = -n0.xz / max(n0.y, 0.2);
     var trail = trail_none(p.xz);
-    let fade = trail_fade(p.xz, eye.xz, ground.trail) * gated;
+    let fade = trail_fade(p.xz, ground.trail_light.yz, ground.trail) * gated;
     if fade > 0.0 {
         trail = trail_march(trail_field, trail_sampler, ground.trail, p, eye, slope, brightest_light(), fade);
     }

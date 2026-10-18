@@ -6,10 +6,14 @@
 // One file for the forward and deferred pipelines (like bevy_pbr's pbr.wesl): the depth/normal
 // prepass fragment stays Bevy's, because nothing here changes alpha or geometry. Skeleton:
 // pbr.wesl:59-67, build the input, edit it, light it.
+//
+// A material `with_trails()` also draws the trail field (docs/research/trails-game-ground.md) in
+// forward rendering: the parallax march of `bevy_elements::trails::surface` over the face's own
+// plane, as `GroundExtension` does.
 
 import bevy_elements::surface_cover::{
     ElementsGlobals, cloud_shadow_ratio, cloud_shadow_uv, mesh_snow_cover, overcast_relief,
-    rain_streak, weather_surface,
+    rain_streak, ripple_offset, ripple_weights, weather_surface,
 };
 import bevy_pbr::render::{
     pbr_fragment::pbr_input_from_standard_material,
@@ -30,15 +34,47 @@ import bevy_pbr::deferred::functions::deferred_output;
 
 @if(!PREPASS_PIPELINE)
 import bevy_pbr::render::pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing};
+@if(!PREPASS_PIPELINE)
+import bevy_pbr::render::mesh_view_bindings::{view, lights};
+@if(!PREPASS_PIPELINE)
+import bevy_elements::trails::surface::{trail_fade, trail_march, trail_none};
 
 @if(VISIBILITY_RANGE_DITHER)
 import bevy_pbr::render::pbr_functions::visibility_range_dither;
 
-// 1 exposed, 0 sheltered.
-@group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> exposure: f32;
+struct WeatheredParams {
+    // 1 exposed, 0 sheltered.
+    exposure: f32,
+    // 1 when the material draws trails.
+    trails: f32,
+}
+
+@group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> params: WeatheredParams;
 @group(constants::MATERIAL_BIND_GROUP) @binding(101) var<storage, read> elements: ElementsGlobals;
 @group(constants::MATERIAL_BIND_GROUP) @binding(102) var cloud_map: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(103) var cloud_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(104) var trail_field: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(105) var trail_sampler: sampler;
+
+// Compacted snow's albedo relative to fresh snow on a trench floor (trails.md Deviation 8).
+const COMPACTED_SNOW_TINT: vec3<f32> = vec3<f32>(0.86, 0.91, 0.97);
+
+// The direction toward the brightest directional light (the sun, else the moon); straight up
+// without one.
+@if(!PREPASS_PIPELINE)
+fn brightest_light() -> vec3<f32> {
+    var brightest = 0.0;
+    var l = vec3<f32>(0.0, 1.0, 0.0);
+    for (var i = 0u; i < lights.n_directional_lights; i += 1u) {
+        let c = lights.directional_lights[i].color;
+        let luminance = c.r + c.g + c.b;
+        if luminance > brightest {
+            brightest = luminance;
+            l = lights.directional_lights[i].direction_to_light;
+        }
+    }
+    return l;
+}
 
 @if(!PREPASS_PIPELINE || DEFERRED_PREPASS)
 @fragment
@@ -56,15 +92,59 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 
     // Weather: the geometric normal drives snow and streaks, never the normal map.
     let g = elements;
+    let exposure = params.exposure;
     let n = normalize(pbr_input.world_normal);
+    let p = in.world_position.xyz / g.units.x;
+
+    // Trails: the hit of the view ray on the field over this face's plane. Snow and streaks keep
+    // the face's own normal (a trench's wall is snow); what the trench changes is its depth.
+    var pressed = 0.0;
+    var grad = vec2<f32>(0.0);
+    var lit = 1.0;
+    var xz = p.xz;
+@if(!PREPASS_PIPELINE) {
+    if params.trails > 0.5 {
+        let slope = -n.xz / max(n.y, 0.2);
+        // Walls and steep faces are not walked on.
+        let fade = trail_fade(p.xz, g.trail_light.yz, g.trail) * smoothstep(0.5, 0.6, n.y);
+        if fade > 0.0 {
+            let eye = view.world_position / g.units.x;
+            let trail = trail_march(trail_field, trail_sampler, g.trail, p, eye, slope, brightest_light(), fade);
+            let pv = vec3<f32>(trail.xz.x, p.y + trail.h + dot(slope, trail.xz - p.xz), trail.xz.y);
+            pressed = max(-trail.h, 0.0);
+            grad = trail.grad;
+            lit = trail.lit;
+            xz = pv.xz;
+            // The field's slope tilts the shading normal (normal map included) and the geometric
+            // one; flat ground leaves both as they were.
+            let tilt = vec3<f32>(trail.grad.x, 0.0, trail.grad.y) * n.y;
+            pbr_input.N = normalize(pbr_input.N - tilt);
+            pbr_input.world_normal = normalize(n - tilt);
+            pbr_input.world_position = vec4<f32>(pv * g.units.x, 1.0);
+            pbr_input.diffuse_occlusion = pbr_input.diffuse_occlusion * trail.open;
+        }
+    }
+}
+
     var wet = g.weather.x * exposure;
     let rain = g.weather.z * exposure;
     if rain > 0.0 {
         // The streak noise is in metres; the fragment's world position is in world units.
-        wet = wet + rain_streak(in.world_position.xyz / g.units.x, n, rain, g.wind.z);
+        wet = wet + rain_streak(p, n, rain, g.wind.z);
     }
-    let snow = mesh_snow_cover(g.weather.y, n.y) * exposure;
-    if wet > 0.0 || snow > 0.0 {
+    // A trench pressed to the bottom of the snow shows the surface under it (only where pressed:
+    // the snow cover is the authority on unpressed ground).
+    let snow_depth = g.trail_light.w;
+    let bared = select(0.0, smoothstep(snow_depth - 0.02, snow_depth, pressed), pressed > 0.0);
+    let snow = mesh_snow_cover(g.weather.y, n.y) * exposure * (1.0 - bared);
+    // Ruts in saturated ground hold water on their floors (trails.md Deviation 6).
+    let puddle = smoothstep(0.6, 1.0, wet) * smoothstep(0.01, 0.04, pressed)
+        * (1.0 - smoothstep(0.3, 0.8, length(grad))) * (1.0 - snow);
+    if wet > 0.0 || snow > 0.0 || pressed > 0.0 {
+        var ripple = vec2<f32>(0.0);
+        if puddle > 0.0 && rain > 0.0 {
+            ripple = ripple_offset(xz, g.ripple, ripple_weights(rain));
+        }
         let s = weather_surface(
             pbr_input.material.base_color.rgb,
             pbr_input.material.perceptual_roughness,
@@ -72,13 +152,23 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             pbr_input.material.reflectance,
             pbr_input.N,
             wet,
-            0.0,
+            puddle,
             snow,
-            vec2<f32>(0.0),
+            ripple,
         );
-        pbr_input.material.base_color = vec4<f32>(s.base_color, pbr_input.material.base_color.a);
-        pbr_input.material.perceptual_roughness = s.roughness;
+        // Compacted snow on a trench floor.
+        let packed = snow * smoothstep(0.005, 0.04, pressed);
+        pbr_input.material.base_color = vec4<f32>(
+            s.base_color * mix(vec3<f32>(1.0), COMPACTED_SNOW_TINT, packed),
+            pbr_input.material.base_color.a,
+        );
+        pbr_input.material.perceptual_roughness = mix(s.roughness, s.roughness * 0.75, packed);
         pbr_input.material.metallic = s.metallic;
+        if puddle > 0.0 {
+            pbr_input.material.reflectance = s.reflectance;
+            pbr_input.N = s.normal;
+            pbr_input.world_normal = s.normal;
+        }
     }
 
     // Cloud shadow: the lit colour (the albedo in deferred, whose lighting runs later) scales by
@@ -106,7 +196,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         // by the deck: `t` is the raw cloud map transmittance sampled above (1 outside the map
         // or with none), so clear air is exactly no change.
         out.color = apply_pbr_lighting(pbr_input);
-        out.color = vec4<f32>(out.color.rgb * overcast_relief(pbr_input.N.y, 1.0 - t), out.color.a);
+        // A trail's self-shadow takes the beam's share of the light (trails.md, Rendering).
+        let trail_shade = 1.0 - g.trail_light.x * (1.0 - lit);
+        out.color = vec4<f32>(out.color.rgb * overcast_relief(pbr_input.N.y, 1.0 - t) * trail_shade, out.color.a);
     } else {
         out.color = pbr_input.material.base_color;
     }

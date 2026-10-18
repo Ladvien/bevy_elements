@@ -4,23 +4,20 @@
 // the sample count by the view angle, soft self-shadows from the blocker-to-receiver ratio), its
 // normal, and how open the floor is to the sky.
 //
-// The field is `rgba16float`, (h, 0, ∂h/∂x, ∂h/∂z) with `h` the surface's offset from the
-// undisturbed ground (m), toroidal by world texel: sample it at `xz / (texel · N)` with a
-// repeating sampler. `window` is (texel edge m, texels a side, 1 when bound, bound on |h| m).
-
-// The window is centred on the camera's texel (`trails::model::window_origin`).
-fn trail_centre(eye: vec2<f32>, window: vec4<f32>) -> vec2<f32> {
-    return floor(eye / window.x) * window.x;
-}
+// The field is `rgba16float`, (h, occupancy, ∂h/∂x, ∂h/∂z) with `h` the surface's offset from
+// the undisturbed ground (m), toroidal by world texel: sample it at `xz / (texel · N)` with a
+// repeating sampler. `window` is (texel edge m, texels a side, 1 when bound, bound on |h| m);
+// `centre` is the window's centre, metre-frame XZ (`TrailState::centre`: the texel of the
+// `ElementsFocus`, else the camera), which the crate's materials carry in their uniforms.
 
 // 1 well inside the window, 0 outside, a ramp over its outer eighth: the field is cleared where
 // it enters and wraps around beyond, and neither may show.
-fn trail_fade(xz: vec2<f32>, eye: vec2<f32>, window: vec4<f32>) -> f32 {
+fn trail_fade(xz: vec2<f32>, centre: vec2<f32>, window: vec4<f32>) -> f32 {
     if window.z < 0.5 {
         return 0.0;
     }
     let half = 0.5 * window.x * window.y;
-    let d = abs(xz - trail_centre(eye, window));
+    let d = abs(xz - centre);
     return 1.0 - smoothstep(0.85 * half, 0.97 * half, max(d.x, d.y));
 }
 

@@ -51,7 +51,8 @@ struct TerrainMaterialParams {
     // x: texel edge (m), y: texels a side, z: 1 when the trail field is bound, w: the parallax
     // march's bound on |h| (m).
     trail: vec4<f32>,
-    // x: the beam's share of the light on a horizontal surface.
+    // x: the beam's share of the light on a horizontal surface. yz: the window's centre,
+    // metre-frame XZ.
     trail_light: vec4<f32>,
     // World units to the metre (`ElementsUnits`): the shader divides the positions Bevy gives it
     // by this and multiplies the ones it hands back.
@@ -249,7 +250,7 @@ fn brightest_light() -> vec3<f32> {
 // outside the window or without trails.
 fn trail_at(p: vec3<f32>, g: vec2<f32>) -> TrailHit {
     let eye = view.world_position / material.units;
-    let fade = trail_fade(p.xz, eye.xz, material.trail);
+    let fade = trail_fade(p.xz, material.trail_light.yz, material.trail);
     if fade <= 0.0 {
         return trail_none(p.xz);
     }
