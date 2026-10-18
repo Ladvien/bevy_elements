@@ -24,9 +24,10 @@ mod waves;
 mod weathered;
 mod wind;
 
-// Plugin group, system sets, camera, its focus, quality.
+// Plugin group, system sets, camera, its focus, quality, world units.
 pub use plugin::{
     ElementsCamera, ElementsFocus, ElementsPlugins, ElementsQuality, ElementsSystems,
+    ElementsUnits,
 };
 
 // Readback cadence.
