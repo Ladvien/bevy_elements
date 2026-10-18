@@ -19,7 +19,9 @@
 //! (`main_transparent_pass_3d` then holds both water passes; `ELEMENTS_WATER=off` leaves the
 //! water rendering out to subtract it). `ELEMENTS_IMPRINTS=16` drives that many wheel imprints
 //! round the camera so `elements_trails` stamps every frame; `ELEMENTS_TRAILS=off` leaves the
-//! trails out (their parallax in `main_opaque_pass_3d`). `dunes` runs the aeolian transport
+//! trails out (their parallax in `main_opaque_pass_3d`). `ELEMENTS_CONTACTS=8` sends that many
+//! `WaterContact` spheres round the `lake` (`elements_waves`); `ELEMENTS_WAVES=off` leaves the
+//! waves out (their shading in `main_transparent_pass_3d`). `dunes` runs the aeolian transport
 //! (`elements_aeolian_*`, 20 steps a second) in a forced `DustStorm`, unless `ELEMENTS_PRESET`
 //! says otherwise. Bevy's main and depth passes the scene is drawn in
 //! are printed on their own line.
@@ -45,7 +47,7 @@ const WARMUP_FRAMES: u32 = 240;
 const AEOLIAN_FRAME_SHARE: f64 = 20.0 / 60.0;
 
 /// The crate's GPU passes, by diagnostic span name.
-const PASSES: [&str; 21] = [
+const PASSES: [&str; 24] = [
     "elements_wind",
     "elements_fog",
     "elements_clouds_noise",
@@ -67,6 +69,9 @@ const PASSES: [&str; 21] = [
     "elements_terrain",
     "elements_water_normals",
     "elements_trails",
+    "elements_waves_force",
+    "elements_waves_step",
+    "elements_waves_publish",
 ];
 
 /// Bevy's own passes the terrain is drawn in, printed on a separate line.
@@ -102,6 +107,12 @@ fn main() {
     } else {
         elements
     };
+    // `ELEMENTS_WAVES=off` leaves the waves out, for the cost of their shading in the water.
+    let elements = if std::env::var("ELEMENTS_WAVES").as_deref() == Ok("off") {
+        elements.disable::<WavesPlugin>()
+    } else {
+        elements
+    };
     App::new()
         .add_plugins((
             DefaultPlugins.set(WindowPlugin {
@@ -128,7 +139,7 @@ fn main() {
                 .with_time_scale(60.0),
         )
         .add_systems(Startup, setup)
-        .add_systems(Update, (report, drive_imprints))
+        .add_systems(Update, (report, drive_imprints, drive_contacts))
         .run();
 }
 
@@ -172,8 +183,13 @@ fn setup(
     quality: Res<ElementsQuality>,
 ) {
     let lake = std::env::var("ELEMENTS_TERRAIN").as_deref() == Ok("lake");
+    let bodies = std::env::var("ELEMENTS_CONTACTS").is_ok();
     let eye = commands
-        .spawn(if lake {
+        .spawn(if lake && bodies {
+            // Over the water, so every wave cascade's window is wet where it can be (the fine
+            // one wholly): the field's cost on open water, not on the land around it.
+            camera(Vec3::new(0.0, 12.0, -20.0), Vec3::new(0.0, 2.0, 0.0))
+        } else if lake {
             // The lake fills half the frame.
             camera(Vec3::new(-75.0, 45.0, 0.0), Vec3::new(0.0, 0.0, 0.0))
         } else {
@@ -275,6 +291,18 @@ fn setup(
             Transform::from_xyz(0.0, -1000.0, 0.0),
         ));
     }
+    // Bodies crossing the lake: each presses the wave field every frame.
+    let contacts: usize = std::env::var("ELEMENTS_CONTACTS")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0);
+    for i in 0..contacts {
+        commands.spawn((
+            BenchContact(i as f32),
+            WaterContact::sphere(0.3),
+            Transform::from_xyz(0.0, -1000.0, 0.0),
+        ));
+    }
 }
 
 /// An imprint of the bench, by index.
@@ -298,6 +326,28 @@ fn drive_imprints(
         let y = ground + env.snow_depth(xz).unwrap_or(0.0) - 0.05;
         *transform = Transform::from_xyz(xz.x, y, xz.y)
             .looking_to(Vec3::new(-a.sin(), 0.0, a.cos()), Vec3::Y);
+    }
+}
+
+/// A body of the bench, by index.
+#[derive(Component)]
+struct BenchContact(f32);
+
+/// Every bench body on its own circle round the lake's centre at 2 m/s, half in the water.
+fn drive_contacts(
+    env: Environment,
+    time: Res<Time<Virtual>>,
+    mut contacts: Query<(&BenchContact, &mut Transform)>,
+) {
+    let t = time.elapsed_secs();
+    for (contact, mut transform) in &mut contacts {
+        let radius = 10.0 + 1.5 * contact.0;
+        let a = contact.0 * 2.399_963 + 2.0 * t / radius;
+        let xz = Vec2::new(a.cos(), a.sin()) * radius;
+        let (Some(ground), Some(depth)) = (env.terrain_height(xz), env.water_depth(xz)) else {
+            continue;
+        };
+        *transform = Transform::from_xyz(xz.x, ground + depth, xz.y);
     }
 }
 

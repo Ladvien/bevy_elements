@@ -25,6 +25,7 @@ use crate::precipitation::PrecipitationPlugin;
 use crate::query::EnvironmentSnapshot;
 use crate::terrain::TerrainPlugin;
 use crate::trails::TrailsPlugin;
+use crate::waves::WavesPlugin;
 use crate::weathered::WeatheredPlugin;
 use crate::wind::{WindPlugin, WindState};
 
@@ -51,6 +52,7 @@ impl PluginGroup for ElementsPlugins {
             .add(GroundCoverPlugin)
             .add(DustPlugin)
             .add(TrailsPlugin)
+            .add(WavesPlugin)
             .add(FogPlugin)
             .add(CloudPlugin)
             .add(LightningPlugin)
@@ -199,6 +201,17 @@ impl ElementsQuality {
             Self::Medium => (1024, 0.06),
             Self::High => (1024, 0.05),
             Self::Ultra => (2048, 0.03),
+        }
+    }
+
+    /// The wave field's window: texels a side and the finest cascade's texel edge (m); the
+    /// coarser cascades are 4× and 16× (`docs/research/waves.md`).
+    pub fn wave_window(self) -> (u32, f32) {
+        match self {
+            Self::Low => (256, 0.08),
+            Self::Medium => (512, 0.06),
+            Self::High => (512, 0.05),
+            Self::Ultra => (1024, 0.04),
         }
     }
 }

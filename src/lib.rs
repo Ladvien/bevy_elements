@@ -20,6 +20,7 @@ mod terrain;
 mod trails;
 #[cfg(feature = "isomesh")]
 mod voxel;
+mod waves;
 mod weathered;
 mod wind;
 
@@ -94,6 +95,9 @@ pub use cover::{CoverState, CoverStats, GroundCoverPlugin, SnowSettings, Wetness
 
 // Trails: footprints, ruts and tracks in snow, sand and mud.
 pub use trails::{Imprint, TrailSettings, TrailState, TrailsPlugin};
+
+// Waves: ripples and wakes from bodies in the water.
+pub use waves::{WaterContact, WaveSettings, WaveState, WavesPlugin};
 
 // `bevy_flora` integration.
 #[cfg(feature = "flora")]
