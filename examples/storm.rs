@@ -104,8 +104,9 @@ fn setup(
 fn script(mut scripted: ResMut<ScriptedStrike>, mut strikes: MessageWriter<StrikeLightning>) {
     scripted.frame += 1;
     if scripted.frame == scripted.on_frame && scripted.distance_m > 0.0 {
+        // A world position: `ELEMENTS_UNITS` scales it with the camera.
         strikes.write(StrikeLightning {
-            at: Vec3::new(scripted.distance_m, 0.0, 0.0),
+            at: Vec3::new(scripted.distance_m * common::units(), 0.0, 0.0),
         });
     }
 }

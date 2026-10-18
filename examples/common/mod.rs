@@ -35,6 +35,17 @@ use bevy_elements::*;
 /// Adds the harness to an example.
 pub struct ExampleHarness;
 
+/// `ELEMENTS_UNITS`: world units to the metre for this run (default 1). The harness inserts
+/// [`ElementsUnits`] and [`camera`] and [`stand_on_ground`] scale what they place, so an example
+/// whose world is the crate's (terrain, sky, weather) runs in feet with `ELEMENTS_UNITS=3.2808`.
+pub fn units() -> f32 {
+    std::env::var("ELEMENTS_UNITS")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok())
+        .filter(|u| u.is_finite() && *u > 0.0)
+        .unwrap_or(1.0)
+}
+
 /// The free-fly camera.
 #[derive(Component, Default)]
 pub struct FlyCamera {
@@ -94,6 +105,11 @@ impl Plugin for ExampleHarness {
                 1.0 / 60.0,
             )));
         }
+        if units() != 1.0 {
+            app.insert_resource(ElementsUnits {
+                units_per_metre: units(),
+            });
+        }
         app.insert_resource(RunConfig {
             frames,
             shot,
@@ -117,12 +133,14 @@ impl Plugin for ExampleHarness {
             Update,
             (settle_on_ground, status, capture_frames).after(ElementsSystems::Readback),
         )
-        .add_systems(Update, run_limit.after(capture_frames));
+        .add_systems(Update, run_limit.after(capture_frames))
+        .add_systems(PostStartup, scale_projections);
         ground::plugin(app);
     }
 }
 
-/// The standard example camera: an `ElementsCamera` that flies.
+/// The standard example camera: an `ElementsCamera` that flies, placed at `position` looking at
+/// `look_at` (metres, scaled by [`units`]).
 pub fn camera(position: Vec3, look_at: Vec3) -> impl Bundle {
     let dir = (look_at - position).normalize_or(Vec3::NEG_Z);
     let yaw = (-dir.x).atan2(-dir.z);
@@ -131,13 +149,27 @@ pub fn camera(position: Vec3, look_at: Vec3) -> impl Bundle {
         Camera3d::default(),
         ElementsCamera::default(),
         FlyCamera::looking(yaw, pitch),
-        Transform::from_translation(position).with_rotation(Quat::from_euler(
+        Transform::from_translation(position * units()).with_rotation(Quat::from_euler(
             EulerRot::YXZ,
             yaw,
             pitch,
             0.0,
         )),
     )
+}
+
+/// A flying camera's near and far planes in [`units`], whatever projection the example gave it.
+fn scale_projections(mut cameras: Query<&mut Projection, With<FlyCamera>>) {
+    let u = units();
+    if u == 1.0 {
+        return;
+    }
+    for mut projection in &mut cameras {
+        if let Projection::Perspective(p) = &mut *projection {
+            p.near *= u;
+            p.far *= u;
+        }
+    }
 }
 
 /// Marks a camera that moves to `height` metres above the terrain at its XZ once the terrain's
@@ -147,9 +179,11 @@ pub struct StandOnGround {
     height: f32,
 }
 
-/// See [`StandOnGround`].
+/// See [`StandOnGround`]; `height` is metres, scaled by [`units`].
 pub fn stand_on_ground(height: f32) -> StandOnGround {
-    StandOnGround { height }
+    StandOnGround {
+        height: height * units(),
+    }
 }
 
 fn settle_on_ground(
@@ -194,11 +228,12 @@ fn fly(
                 wish += dir;
             }
         }
-        let speed = if keys.pressed(KeyCode::ShiftLeft) {
-            60.0
-        } else {
-            12.0
-        };
+        let speed = units()
+            * if keys.pressed(KeyCode::ShiftLeft) {
+                60.0
+            } else {
+                12.0
+            };
         transform.translation += wish.normalize_or_zero() * speed * dt;
     }
 }

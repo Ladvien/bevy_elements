@@ -102,6 +102,12 @@ Orthographic cameras (`Projection::Orthographic`) work: the clouds are marched a
 
 ![Twilight toward the sun, the sun 8° below the horizon: the orange glow under a violet sky, clouds and posts in silhouette](docs/twilight.png) ![The same evening away from the sun, 5° below: the pink Belt of Venus over the blue Earth's shadow](docs/belt_of_venus.png)
 
+#### World units
+
+The crate works in metres. A game whose world unit is something else inserts `ElementsUnits { units_per_metre: 3.2808 }` (feet; 100.0 for centimetres) and the weather is sized for its world: the rain box, the wind cells, fog, clouds and the sky's aerial perspective, lightning and its light, shadow cascades, the terrain and water. Positions the crate reads and gives back are world units (`Transform`s, `ElementsFocus::Point`, the `Environment` query positions and `terrain_height`, strike, thunder, flash and gust positions); lengths, depths and speeds stay SI (`Thunder::distance_m`, `Terrain` extents and heights, blocker, contact and imprint half extents under their transforms, `wind_at` in m/s). A scene built in feet renders as the same scene in metres (`docs/research/units.md`); `ELEMENTS_UNITS=3.2808` runs an example in feet, which reproduces it exactly where its world is the crate's (`terrain_tour`, `quickstart`), while an example's own props keep their metre sizes.
+
+![The same hills, clouds and rain in metres (left) and in feet (right)](docs/units.png)
+
 ### Clock, sun, moon and stars
 
 `WorldClock` holds the local date and hour and advances by `Time<Virtual>` × `time_scale`; `GeoLocation` places the observer. `SunState` has the sun's and moon's directions, true altitudes, the synodic phase and the lit fraction. The `astro` module exposes the ephemeris functions (Meeus ch. 7–48: sidereal time, nutation, the sun at 0.01°, the moon from a 51 + 34-term series, phase, refraction, the USNO total-illuminance factor), each tested against the book's worked examples and the SPA reference case. Stars are the 8404 Yale Bright Star Catalogue stars to V = 6.5, precessed to the date, coloured from B−V; the moon is a Lommel–Seeliger-shaded disc from NASA's LROC map. See [`src/celestial/PROVENANCE.md`](src/celestial/PROVENANCE.md).
@@ -171,7 +177,7 @@ The nearest 256 blockers to the camera are tested; any oriented box works (`Glob
 
 ### Weathered materials
 
-`WeatheredMaterial` is `ExtendedMaterial<StandardMaterial, WeatheredExtension>`: give any mesh one and it follows the weather. `WeatheredPlugin` writes `ElementsGlobals` every frame (wetness and snow cover from `SurfaceWeathering`, the rain intensity `min(1, R_liquid/20)`, the cloud shadow map, ripple and streak phases) into one 80-byte storage buffer all weathered materials bind (binding 101, fragment stage only: it leaves the fragment stage two of the eight storage buffers WebGPU guarantees). A wet surface loses up to half its albedo in proportion to its porosity (Lagarde's gloss-based estimate: rough surfaces soak, plastic, tile and metal do not) and its roughness falls toward 0.1; rain on a wall adds darker streaks that run down it; faces turn white under snow with the curve `snow · smoothstep(0.85 − 0.6 snow, +0.2, n.y)` that `bevy_flora` uses, snow albedo `SNOW_ALBEDO` and roughness `SNOW_ROUGHNESS`, so trees and buildings read as one snow. `WeatheredExtension::exposure` is 1 under open sky and 0 sheltered (no wetness, streaks or snow, only cloud shadow): it does not follow a `PrecipitationBlocker` by itself, set it from your own test.
+`WeatheredMaterial` is `ExtendedMaterial<StandardMaterial, WeatheredExtension>`: give any mesh one and it follows the weather. `WeatheredPlugin` writes `ElementsGlobals` every frame (wetness and snow cover from `SurfaceWeathering`, the rain intensity `min(1, R_liquid/20)`, the cloud shadow map, ripple and streak phases, the world units) into one 96-byte storage buffer all weathered materials bind (binding 101, fragment stage only: it leaves the fragment stage two of the eight storage buffers WebGPU guarantees). A wet surface loses up to half its albedo in proportion to its porosity (Lagarde's gloss-based estimate: rough surfaces soak, plastic, tile and metal do not) and its roughness falls toward 0.1; rain on a wall adds darker streaks that run down it; faces turn white under snow with the curve `snow · smoothstep(0.85 − 0.6 snow, +0.2, n.y)` that `bevy_flora` uses, snow albedo `SNOW_ALBEDO` and roughness `SNOW_ROUGHNESS`, so trees and buildings read as one snow. `WeatheredExtension::exposure` is 1 under open sky and 0 sheltered (no wetness, streaks or snow, only cloud shadow): it does not follow a `PrecipitationBlocker` by itself, set it from your own test.
 
 ```rust
 # use bevy::prelude::*;
@@ -484,7 +490,7 @@ Native (Vulkan, Metal, DX12) and wasm WebGPU. WebGL2 is unsupported: the simulat
 
 ## Examples
 
-Run with `cargo run --release --example <name>`. Every example takes `ELEMENTS_FRAMES=N` (exit after N frames) and `ELEMENTS_SHOT=/path.png` (screenshot on the last frame). Keys: WASD + Q/E to fly (Shift ×5), right mouse to look, `[`/`]` time scale, `T` +1 hour, `1`–`0` force a preset, `R` release.
+Run with `cargo run --release --example <name>`. Every example takes `ELEMENTS_FRAMES=N` (exit after N frames), `ELEMENTS_SHOT=/path.png` (screenshot on the last frame) and `ELEMENTS_UNITS=3.2808` (a world in feet: `ElementsUnits`, with the camera and its planes scaled). Keys: WASD + Q/E to fly (Shift ×5), right mouse to look, `[`/`]` time scale, `T` +1 hour, `1`–`0` force a preset, `R` release.
 
 | Example | Shows |
 |---|---|
