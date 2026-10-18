@@ -115,4 +115,4 @@ pub use weathered::{
 
 // Volumetric snow on `bevy_isomesh` voxel volumes.
 #[cfg(feature = "isomesh")]
-pub use voxel::{SnowyField, VoxelGround, VoxelGroundSystems, VoxelPlugin};
+pub use voxel::{SnowyField, VoxelGround, VoxelGroundSystems, VoxelPlugin, VoxelSnow};
