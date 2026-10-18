@@ -189,7 +189,7 @@ fn setup(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<WeatheredMaterial>>,
     mut director: ResMut<WeatherDirector>,
     scene: Res<Scene>,
 ) {
@@ -219,10 +219,15 @@ fn setup(
         .unwrap_or(WeatherPreset::Clear);
     director.force(preset, Duration::ZERO);
 
-    let paint = |r: f32, g: f32, b: f32| StandardMaterial {
-        base_color: Color::srgb(r, g, b),
-        perceptual_roughness: 0.6,
-        ..default()
+    // `WeatheredMaterial` takes the cloud shadow per pixel (and wets in rain); a plain
+    // `StandardMaterial` would see only the mean beam the lights carry.
+    let paint = |r: f32, g: f32, b: f32| WeatheredMaterial {
+        base: StandardMaterial {
+            base_color: Color::srgb(r, g, b),
+            perceptual_roughness: 0.6,
+            ..default()
+        },
+        extension: WeatheredExtension::default(),
     };
     let hidden = Transform::from_xyz(0.0, -100.0, 0.0);
     let has = |name: &str| scene.bodies.iter().any(|b| b == name);

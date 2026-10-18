@@ -257,12 +257,12 @@ impl CloudLight {
     }
 }
 
-/// The light split under the current cloud: with the cloud shadow map, its mean transmittance at
-/// the camera (measured); without [`CloudShadows`], the cover-only [`beam_transmittance`].
+/// The light split under the current cloud: with the cloud shadow map, its mean transmittance
+/// over the map (measured); without [`CloudShadows`], the cover-only [`beam_transmittance`].
 pub(crate) fn cloud_light(cover: f32, shadows: Option<&CloudShadows>) -> CloudLight {
     CloudLight::from_beam(shadows.map_or_else(
         || beam_transmittance(cover),
-        |shadows| shadows.camera_transmittance,
+        |shadows| shadows.mean_transmittance,
     ))
 }
 
@@ -744,13 +744,13 @@ mod tests {
         assert_eq!(CloudLight::from_beam(2.0), CloudLight::CLEAR);
     }
 
-    fn shadows(camera_transmittance: f32) -> CloudShadows {
+    fn shadows(mean_transmittance: f32) -> CloudShadows {
         CloudShadows {
             map: Handle::default(),
             origin: Vec2::ZERO,
             extent: 8000.0,
             light_direction: Vec3::Y,
-            camera_transmittance,
+            mean_transmittance,
         }
     }
 
@@ -848,7 +848,7 @@ mod tests {
         let (_, frame, _, moon_lux) = run_sky(moon_hour, cover, None);
         assert!(close(moon_lux, frame.moon_lux * beam_transmittance(cover)));
 
-        // Before the first readback the camera transmittance is `1 − cover^3.4`: same split.
+        // Before the first readback the mean transmittance is `1 − cover^3.4`: same split.
         for c in [0.0f32, 0.3, 0.7, 1.0] {
             let s = shadows(beam_transmittance(c));
             assert_eq!(cloud_light(c, Some(&s)), cloud_light(c, None));

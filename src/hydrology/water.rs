@@ -146,7 +146,7 @@ pub struct WaterParams {
     pub(crate) lod: [Vec4; MAX_LEVELS],
     /// x: coarsest level.
     pub(crate) top: Vec4,
-    /// Cloud shadow map origin xy, extent, camera transmittance.
+    /// Cloud shadow map origin xy, extent, the lights' mean transmittance.
     pub(crate) shadow: Vec4,
     /// Unit direction toward the light; w = 1 with a map.
     pub(crate) light: Vec4,

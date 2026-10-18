@@ -1085,3 +1085,51 @@ Tessendorf 2004 (iWave; *Simulating Ocean Water* course notes); Canabal et al. 2
 3. **Save/restore of the GPU layers** (carried).
 4. **A view-dependent exposure cap** and **flat terrain shading** (carried).
 5. **Wave cost**: step the coarse cascades at 30 Hz or skip windows with no body and no waves; refraction of what is under the water (the pebble draws where it is, not where it appears).
+
+## Iteration 16 — 2026-10-18 — the sun under broken cloud: a steady sky under a cloud's shadow, a hidden disc
+
+**Commits:** `3ea0d0f` (research note `docs/research/broken-cloud-light.md`), the implementation with the new GPU test, the README / CHANGELOG / still / tour GIF, this log. Merged through a pull request. **Sibling repos:** none. **Not released.**
+
+### What changed, and why it ranked first
+
+Iteration 15's top backlog item, "the sky darkens toward black over a filled lake at 17.5 h", reproduced on `main` and turned out to be general: the sun's and moon's lights carried the cloud transmittance of the 70 m around the camera, and Bevy lights its sky, aerial perspective and environment map with them, so every cumulus that shaded the camera took the whole sky with it — black in `waves` at 17.5 h (the camera's `T̄` reached 0 and `sky_gain` had nothing to scale), grey in `terrain_tour` under `PartlyCloudy` within seconds of a shadow arriving. A second defect of the same scene: the sun disc burned through a cumulus's dark base, because the march kept the last 1 % of the sky behind an opaque cloud and the disc is 10⁵ times the sky. Category 1 (visible, physically wrong, in the default `PartlyCloudy` of the flagship example); it beats the runner-up (buoyancy readback, category 3) because every game with fair-weather cumulus hit it.
+
+The lights now carry the shadow map's mean over 8 km (Hillaire 2016 eq. 22's hemisphere mean; Kasten & Czeplak's mean over points), computed on the CPU from the 256² grid already read back for `Environment::cloud_shadow_at`; the crate's surfaces keep their per-pixel shadow relative to it. `CloudShadows::camera_transmittance` became `mean_transmittance` (migration note in the CHANGELOG); the camera kernel and its readback are deleted. An exhausted march is opaque (Schneider & Vos 2015). Bevy's `DirectionalLightTexture` would have shadowed every `StandardMaterial` too, but it needs clustered decals, which Metal and WebGPU lack; the `waves` example's bodies became `WeatheredMaterial` so they take the shadow.
+
+### Candidates ranked
+
+| # | Candidate | Category | Note |
+|---|---|---|---|
+| 1 | **The sky follows the camera's cloud shadow; the sun shines through cumulus** | 1 (visible artifact) | picked |
+| 2 | Buoyancy readback for `WaterContact` | 3 | carried |
+| 3 | Save/restore of the GPU layers | 3 | carried |
+| 4 | View-dependent exposure cap; flat terrain shading | 2 | carried |
+| 5 | Wave cost (coarse cascades at 30 Hz) | 5 | carried |
+
+### Sources
+
+Hillaire 2016 §4.1.2, §5.9, §5.9.2 (local text); Wenzel 2006 (`s2006-advances-materials-12`); Ubisoft Montréal 2025 (`s2025-advances-materials-3`); Patry 2021 (`s2021-advances-pdf-66-mb`); Schneider & Vos 2015 (`s2015-advances-ppt-944-mb-pdf-5-mb-2`); Mol & van Heerwaarden 2025 (`10.5194_acp-25-4419-2025`, downloaded); Mol et al. 2023 (`10.1029_2022jd037894`, downloaded); Kasten & Czeplak 1980 (via `celestial.md`); Bevy 0.20 source (atmosphere light loop, light render layers, clustered-decal light textures). Not obtained: Perez et al. 1993.
+
+### Critique and verdicts (`/tmp/i16/critique.md`; before `/tmp/i16/before/`, after `/tmp/i16/after/`, `/tmp/i16/cmp/`, sequences `/tmp/i16/seq_*`)
+
+| Feature | Evidence | Verdict |
+|---|---|---|
+| Sky under a cloud's shadow | `after/long_cmp.png` (waves 17.5 h, frames 600–1800), `seq_cmp.png` + `seq.py` (sky 0.9 % range vs 26.6 %), `docs/cloud_shadow_sky.png` | GREAT |
+| Sun behind a cumulus | `after/dn_dot_cmp.png` (4× zoom: disc gone, silver lining kept) | GREAT |
+| Props in the shadow | `after/props.png` (waves bodies darken with the water) | GREAT with `WeatheredMaterial`; plain `StandardMaterial` sees the mean (documented) |
+| No regression | `cmp/all.png` (Overcast, Thunderstorm, night, dusk, Clear), `day_night` 16.5/18.0 h within 0.5 %, `tour_sheet.png` | GREAT |
+
+### Verification
+
+- `tests/gpu_clouds.rs` `a_cloud_over_the_camera_leaves_the_lights_alone` (new): beam 0.5666 in the shade vs 0.5752 in the sun, ambient 11 842 vs 11 607 lx; on `7dd1ef0` it fails (0.0222 vs 0.8591). `the_shadow_map_and_the_sun_factor_follow_the_clouds` now also checks the beam against the map's mean (Clear 0.9696 vs 0.9691). `clouds::model` `an_opaque_column_hides_what_is_behind_it` replaces the early-exit test.
+- Gates: `cargo build --release`, `cargo test` (0 failures), `cargo build --examples --all-features`, clippy `-D warnings`, `cargo doc` `-D warnings`, wasm32, rustfmt on the changed hunks, `tests/save.rs` with `--features serde` (2). GPU, one process per file/module: every `tests/gpu_*.rs` file and lib `clouds` (10), `terrain` (8), `cover` (7), `dust` (6), `voxel` (1), `the_horizon_sky` — all pass; `gpu_hydrology`'s two bake tests timed out (240 s wall deadline) while a vLLM server held the GPU at 95 % and passed on a rerun with the GPU idle.
+- Performance (`bench_elements`, High, hills, `PartlyCloudy`, 1080p, four rounds alternating `7dd1ef0` and this tree, P2 1740–1800 MHz logged in the same shell): `elements_clouds_shadow` 0.066–0.079 → 0.059–0.065 ms, march 0.436–0.466 → 0.443–0.468 ms, composite 0.037–0.038 → 0.042 ms (unchanged code); net ≈ −0.003 ms. CPU mean of the readback grid 47 µs at 4 Hz.
+- `docs/tour.gif` regenerated; `docs/cloud_shadow_sky.png` new.
+
+### Top 5 remaining items, ranked
+
+1. **The anti-solar sky at sunset reads dark grey** (`/tmp/i16/cmp/pair_w1_19.6.png`: sun +1.3°, `PartlyCloudy`, looking east; same before and after): the glow-capped exposure leaves the Belt of Venus side nearly black between orange clouds.
+2. **Ribbed cumulus faces**: the large cumulus in `terrain_tour` shows horizontal stair-step shelves on its sunlit face (`/tmp/i16/seq_after/`).
+3. **Buoyancy readback**: publish the wave height under each `WaterContact` so a float can ride the waves (carried).
+4. **Save/restore of the GPU layers** (carried).
+5. **A view-dependent exposure cap**, **flat terrain shading**, and **wave cost** (carried).

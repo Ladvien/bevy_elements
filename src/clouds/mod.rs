@@ -139,11 +139,15 @@ pub struct CloudShadows {
     /// Unit vector toward the light the map was generated for: the sun by day, the moon when
     /// the sun is lower than −4°.
     pub light_direction: Vec3,
-    /// Mean direct transmittance over about 70 m around the camera, 0–1, smoothed over 1 s of
-    /// real time. Before the first GPU readback it is `1 − cover^3.4`, the cover-only estimate of
-    /// the weather. The sun's and moon's `DirectionalLight` carry `T̄` of their clear-sky
-    /// illuminance and the camera's `AmbientLight` the diffuse remainder `0.25 · (1 − T̄)`.
-    pub camera_transmittance: f32,
+    /// Mean direct transmittance over the whole map (the 8 km around the camera), 0–1,
+    /// smoothed over 1 s of real time: the share of the clear-sky beam the landscape gets on
+    /// average. Before the first GPU readback it is `1 − cover^3.4`, the cover-only estimate
+    /// of the weather. The sun's and moon's `DirectionalLight` carry `T̄` of their clear-sky
+    /// illuminance (and so do Bevy's sky, aerial perspective and environment map, which they
+    /// light) and the camera's `AmbientLight` the diffuse remainder `0.25 · (1 − T̄)`; a
+    /// surface that samples the map takes its own shadow relative to it,
+    /// `(0.25 + 0.75 T) / (0.25 + 0.75 T̄)` (`docs/research/broken-cloud-light.md`).
+    pub mean_transmittance: f32,
 }
 
 /// Lowest sine of the light's elevation the shadow map is generated for: arcsin 0.1 = 5.74°. A
@@ -236,8 +240,8 @@ const GROUND_ALBEDO: f32 = 0.3;
 /// the air with the scalar irradiance over 4π, `E (1 + ρ) / 4π` for the downward irradiance
 /// `E = π L` of the sky and the ground albedo `ρ`, which is `L (1 + ρ) / 4`.
 const AIRLIGHT_PER_SKY_RADIANCE: f32 = (1.0 + GROUND_ALBEDO) / 4.0;
-/// Smoothing time of the camera transmittance, s of real time.
-const CAMERA_TRANSMITTANCE_TAU_S: f32 = 1.0;
+/// Smoothing time of the mean transmittance, s of real time.
+const MEAN_TRANSMITTANCE_TAU_S: f32 = 1.0;
 
 /// Uniform of every cloud kernel (`common.wesl`, `CloudParams`).
 #[derive(Clone, Copy, Debug, Default, ShaderType)]
@@ -302,7 +306,6 @@ pub(crate) struct CloudGpu {
     pub shadow: Handle<Image>,
     pub histogram: Handle<ShaderBuffer>,
     pub threshold: Handle<ShaderBuffer>,
-    pub camera_t: Handle<ShaderBuffer>,
     /// Every fourth shadow-map texel's transmittance, `SHADOW_COARSE_CELLS²` row-major.
     pub shadow_coarse: Handle<ShaderBuffer>,
     /// The cube the ambient takes its colour from: the followed camera's atmosphere environment
@@ -362,8 +365,9 @@ pub(crate) struct CloudDebug {
 /// Creates the noise volumes, the weather map and the shadow map; each frame it derives the
 /// [`CloudLayer`] from the weather, marches the clouds for the followed
 /// [`ElementsCamera`](crate::ElementsCamera) and composites them after the transparent pass, and keeps
-/// [`CloudShadows`] current. It dims the sun and moon lights by the cloud transmittance over the
-/// camera. Needs `DepthPrepass`, `Msaa::Off` and an HDR target, which `ElementsCamera` sets up.
+/// [`CloudShadows`] current. It dims the sun and moon lights by the mean cloud transmittance over
+/// the shadow map's 8 km, so a cloud's shadow over the camera darkens the surfaces in it and not
+/// the sky. Needs `DepthPrepass`, `Msaa::Off` and an HDR target, which `ElementsCamera` sets up.
 pub struct CloudPlugin;
 
 impl Plugin for CloudPlugin {
@@ -384,7 +388,7 @@ impl Plugin for CloudPlugin {
             .add_systems(
                 Update,
                 (
-                    smooth_camera_transmittance
+                    smooth_mean_transmittance
                         .in_set(ElementsSystems::Celestial)
                         .before(crate::celestial::update_sky),
                     (
@@ -530,7 +534,7 @@ fn create_resources(
         origin: Vec2::ZERO,
         extent: SHADOW_EXTENT_M,
         light_direction: Vec3::Y,
-        camera_transmittance: 1.0,
+        mean_transmittance: 1.0,
     });
     commands.insert_resource(CloudGpu {
         base,
@@ -539,7 +543,6 @@ fn create_resources(
         shadow,
         histogram: storage_buffer(&mut buffers, "elements_clouds_histogram", vec![0u32; 256]),
         threshold: storage_buffer(&mut buffers, "elements_clouds_threshold", vec![0f32; 4]),
-        camera_t: storage_buffer(&mut buffers, "elements_clouds_camera_t", vec![0f32; 4]),
         // Nothing shadowed until the first dispatch: T = 1.
         shadow_coarse: storage_buffer(
             &mut buffers,
@@ -742,7 +745,7 @@ fn update_gpu(
     gpu.sky_probe = probes
         .get(entity)
         .map_or_else(|_| gpu.neutral_sky.clone(), |p| p.environment_map.clone());
-    let cloud = CloudLight::from_beam(shadows.camera_transmittance);
+    let cloud = CloudLight::from_beam(shadows.mean_transmittance);
     let (diffuse_colour, diffuse_brightness) = cloud_ambient(&sun, frame.moon_lux, cloud);
     let airlight = diffuse_colour * (diffuse_brightness * AIRLIGHT_PER_SKY_RADIANCE);
     gpu.params = CloudParams {
@@ -839,9 +842,9 @@ fn apply_debug(debug: Option<Res<CloudDebug>>, mut gpu: ResMut<CloudGpu>) {
     }
 }
 
-/// The camera transmittance the lights are dimmed by: the readback, smoothed over a second;
-/// until the first readback `1 − cover^3.4`, the cover-only beam.
-fn smooth_camera_transmittance(
+/// The mean transmittance the lights are dimmed by: the readback grid's mean, smoothed over a
+/// second; until the first readback `1 − cover^3.4`, the cover-only beam.
+fn smooth_mean_transmittance(
     time: Res<Time<Real>>,
     weather: Res<Weather>,
     snapshot: Res<EnvironmentSnapshot>,
@@ -850,14 +853,14 @@ fn smooth_camera_transmittance(
     let Some(mut shadows) = shadows else {
         return;
     };
-    match snapshot.cloud_transmittance {
+    match &snapshot.cloud_shadow {
         None => {
-            shadows.camera_transmittance = beam_transmittance(weather.cloud_cover);
+            shadows.mean_transmittance = beam_transmittance(weather.cloud_cover);
         }
         Some(measured) => {
-            let k = 1.0 - (-time.delta_secs() / CAMERA_TRANSMITTANCE_TAU_S).exp();
-            let now = shadows.camera_transmittance;
-            shadows.camera_transmittance = now + (measured.clamp(0.0, 1.0) - now) * k;
+            let k = 1.0 - (-time.delta_secs() / MEAN_TRANSMITTANCE_TAU_S).exp();
+            let now = shadows.mean_transmittance;
+            shadows.mean_transmittance = now + (measured.mean - now) * k;
         }
     }
 }
@@ -873,14 +876,6 @@ fn read_shadows(
     if !gpu.active || !gpu.live.load(Ordering::Relaxed) {
         return;
     }
-    readbacks.request("cloud_camera_t", gpu.camera_t.clone(), |bytes, snapshot| {
-        if let Some(values) = decode::<f32>(bytes)
-            && let Some(&t) = values.first()
-            && t.is_finite()
-        {
-            snapshot.cloud_transmittance = Some(t);
-        }
-    });
     let grid = CloudShadowSnapshot::grid(shadows.origin);
     let light = shadows.generation_direction();
     readbacks.request(
@@ -891,10 +886,23 @@ fn read_shadows(
             if let Some(values) = decode::<f32>(bytes)
                 && values.len() >= cells
             {
+                let values = &values[..cells];
+                // The mean over the finite cells: the share of the clear beam the 8 km get.
+                let (sum, count) = values
+                    .iter()
+                    .filter(|t| t.is_finite())
+                    .fold((0.0f64, 0u32), |(s, n), &t| {
+                        (s + f64::from(t.clamp(0.0, 1.0)), n + 1)
+                    });
                 snapshot.cloud_shadow = Some(CloudShadowSnapshot {
                     grid,
                     light,
-                    transmittance: values[..cells].into(),
+                    transmittance: values.into(),
+                    mean: if count > 0 {
+                        (sum / f64::from(count)) as f32
+                    } else {
+                        1.0
+                    },
                 });
             }
         },
@@ -911,6 +919,9 @@ pub(crate) struct CloudShadowSnapshot {
     pub light: Vec3,
     /// Row-major transmittance, 0–1.
     pub transmittance: Arc<[f32]>,
+    /// Mean of `transmittance`: the beam the lights carry (`CloudShadows::mean_transmittance`
+    /// before its smoothing).
+    pub mean: f32,
 }
 
 impl CloudShadowSnapshot {

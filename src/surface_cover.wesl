@@ -15,7 +15,7 @@ import bevy_elements::noise::{hash33, perlin3};
 /// The shared globals buffer, five `vec4<f32>` (80 B). Mirrors the Rust `ElementsGlobals`.
 struct ElementsGlobals {
     /// x wetness 0–1, y snow cover 0–1 (both of exposed flat ground), z rain intensity
-    /// `min(1, R_liquid / 20)`, w the camera's mean cloud transmittance.
+    /// `min(1, R_liquid / 20)`, w the mean cloud transmittance the lights carry.
     weather: vec4<f32>,
     /// xy cloud shadow map origin (world XZ, m), z extent (m), w 1 when a map is bound.
     shadow: vec4<f32>,
@@ -191,10 +191,11 @@ fn cloud_shadow_uv(g: ElementsGlobals, p: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(0.0);
 }
 
-/// Scale of the lit colour from the map's transmittance `t` at the point against the camera's
-/// mean transmittance: `(0.25 + 0.75 t) / (0.25 + 0.75 t_cam)` (clouds.md, "Cloud shadow map").
-fn cloud_shadow_ratio(t: f32, camera_transmittance: f32) -> f32 {
+/// Scale of the lit colour from the map's transmittance `t` at the point against the mean
+/// transmittance the lights carry: `(0.25 + 0.75 t) / (0.25 + 0.75 t_mean)`
+/// (broken-cloud-light.md, Model 2).
+fn cloud_shadow_ratio(t: f32, mean_transmittance: f32) -> f32 {
     let here = 0.25 + 0.75 * t;
-    let camera = max(0.25 + 0.75 * camera_transmittance, 0.01);
-    return clamp(here / camera, 0.0, 4.0);
+    let lights = max(0.25 + 0.75 * mean_transmittance, 0.01);
+    return clamp(here / lights, 0.0, 4.0);
 }

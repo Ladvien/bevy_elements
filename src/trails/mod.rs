@@ -254,11 +254,11 @@ fn yaw_of(transform: &GlobalTransform) -> f32 {
 
 /// The share of the light on a horizontal surface carried by the brightest body's beam: the
 /// clear sky's direct share (the clouds' `sky_share`: 85 % at high sun, none in twilight) times
-/// the beam the clouds let through over the camera; the moon's light is all beam
-/// ([INFERENCE]: the note's self-shadow weighting).
+/// the beam the lights carry under the clouds (their mean over the shadow map); the moon's
+/// light is all beam ([INFERENCE]: the note's self-shadow weighting).
 fn direct_share(sun: &SunState, frame: &CelestialFrame, shadows: Option<&CloudShadows>) -> f32 {
     let beam = shadows
-        .map_or(1.0, |s| s.camera_transmittance)
+        .map_or(1.0, |s| s.mean_transmittance)
         .clamp(0.0, 1.0);
     if sun.altitude_deg > 0.0 {
         let t = ((sun.altitude_deg + 2.0) / 12.0).clamp(0.0, 1.0);

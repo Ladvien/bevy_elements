@@ -21,8 +21,6 @@ use crate::wind::{WindSnapshot, WindState};
 pub struct EnvironmentSnapshot {
     /// The wind field at the last readback, if any.
     pub(crate) wind: Option<WindSnapshot>,
-    /// Mean direct cloud transmittance around the camera at the last readback, 0–1.
-    pub(crate) cloud_transmittance: Option<f32>,
     /// The cloud shadow map's query grid at the last readback.
     pub(crate) cloud_shadow: Option<CloudShadowSnapshot>,
     /// The terrain surface heights at the last readback, if a terrain exists.
@@ -239,6 +237,7 @@ mod tests {
             grid,
             light: Vec3::new(elevation.cos(), elevation.sin(), 0.0),
             transmittance: Arc::from(t),
+            mean: 1.0,
         };
         (snapshot, centre)
     }
