@@ -468,3 +468,112 @@ fn the_bind_group_layout_has_one_fragment_storage_buffer_at_101() {
     app.world_mut().write_message(bevy::app::AppExit::Success);
     app.update();
 }
+
+/// A material extension a game writes for itself: it binds the crate's globals buffer at a slot
+/// of its own and draws the wetness and snow cover it reads, unlit.
+#[derive(Asset, AsBindGroup, TypePath, Debug, Clone)]
+struct GlobalsProbe {
+    #[storage(100, read_only, visibility(fragment))]
+    globals: Handle<bevy::render::storage::ShaderBuffer>,
+}
+
+const PROBE_SHADER: Handle<Shader> =
+    bevy::asset::uuid_handle!("2f6a8f3e-5b1c-4d7e-9a2f-6c3b8e1d4f70");
+
+const PROBE_WESL: &str = "
+import bevy_elements::surface_cover::ElementsGlobals;
+import bevy_pbr::render::forward_io::VertexOutput;
+
+@group(constants::MATERIAL_BIND_GROUP) @binding(100) var<storage, read> elements: ElementsGlobals;
+
+@fragment
+fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
+    return vec4<f32>(elements.weather.x, elements.weather.y, 0.0, 1.0);
+}
+";
+
+impl bevy::pbr::MaterialExtension for GlobalsProbe {
+    fn fragment_shader() -> bevy::shader::ShaderRef {
+        bevy::shader::ShaderRef::Handle(PROBE_SHADER)
+    }
+}
+
+type ProbeMaterial = bevy::pbr::ExtendedMaterial<StandardMaterial, GlobalsProbe>;
+
+/// Issue #11 (`integration.md` Validation 5): a material defined outside the crate binds
+/// `ELEMENTS_GLOBALS_BUFFER`, imports the WGSL `ElementsGlobals` and reads the wetness and snow
+/// cover `SurfaceWeathering` holds.
+#[test]
+#[ignore = "needs a GPU"]
+fn a_game_material_reads_the_globals_buffer() {
+    let _lock = serial();
+    let mut app = App::new();
+    app.add_plugins((
+        support::headless_plugins(),
+        WeatheredPlugin,
+        MaterialPlugin::<ProbeMaterial>::default(),
+    ))
+    .init_resource::<SurfaceWeathering>()
+    .init_resource::<Pin>()
+    .add_systems(Update, pin_weather.in_set(ElementsSystems::Weather));
+    support::finish(&mut app);
+    let image = {
+        let world = app.world_mut();
+        world
+            .resource_mut::<Assets<Shader>>()
+            .insert(
+                PROBE_SHADER.id(),
+                Shader::from_wesl(PROBE_WESL, "globals_probe.wesl"),
+            )
+            .expect("the probe shader");
+        let material = world
+            .resource_mut::<Assets<ProbeMaterial>>()
+            .add(ProbeMaterial {
+                base: StandardMaterial::default(),
+                extension: GlobalsProbe {
+                    globals: ELEMENTS_GLOBALS_BUFFER,
+                },
+            });
+        let quad = world
+            .resource_mut::<Assets<Mesh>>()
+            .add(Rectangle::new(40.0, 40.0));
+        let mut target = Image::new_target_texture(
+            SIZE,
+            SIZE,
+            bevy::render::render_resource::TextureFormat::Rgba8Unorm,
+            None,
+        );
+        target.texture_descriptor.usage |= bevy::render::render_resource::TextureUsages::COPY_SRC;
+        let image = world.resource_mut::<Assets<Image>>().add(target);
+        world.spawn((
+            Camera3d::default(),
+            bevy::core_pipeline::tonemapping::Tonemapping::None,
+            bevy::core_pipeline::tonemapping::DebandDither::Disabled,
+            bevy::camera::RenderTarget::Image(image.clone().into()),
+            Transform::from_xyz(0.0, 0.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
+        ));
+        world.spawn((Mesh3d(quad), MeshMaterial3d(material)));
+        image
+    };
+    for (wetness, snow) in [(0.25, 0.75), (0.8, 0.1)] {
+        *app.world_mut().resource_mut::<Pin>() = Pin {
+            wetness,
+            snow_cover: snow,
+            rain_mm_h: 0.0,
+        };
+        for _ in 0..6 {
+            app.update();
+        }
+        let bytes =
+            support::read_texture(&mut app, image.clone(), SIZE as usize * 4, SIZE as usize);
+        let p = pixel(&bytes, 128, 128);
+        let expect = |v: f32| (v * 255.0).round() as i32;
+        assert!(
+            (i32::from(p[0]) - expect(wetness)).abs() <= 1
+                && (i32::from(p[1]) - expect(snow)).abs() <= 1,
+            "wetness {wetness}, snow {snow}: pixel {p:?}"
+        );
+    }
+    app.world_mut().write_message(bevy::app::AppExit::Success);
+    app.update();
+}

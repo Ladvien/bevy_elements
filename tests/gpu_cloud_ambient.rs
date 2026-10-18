@@ -59,6 +59,7 @@ fn deck(hour: f64, sky_probe: bool, projection: Projection) -> Vec3 {
                     RenderTarget::Image(handle.into()),
                     ElementsCamera {
                         auto_exposure: false,
+                        ..default()
                     },
                     Tonemapping::None,
                     DebandDither::Disabled,

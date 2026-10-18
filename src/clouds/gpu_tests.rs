@@ -112,6 +112,7 @@ fn app(case: Case) -> App {
                     target,
                     ElementsCamera {
                         auto_exposure: false,
+                        ..default()
                     },
                     Transform::from_translation(case.position).looking_to(case.look, up),
                 ));

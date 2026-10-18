@@ -29,14 +29,16 @@ use bevy::render::storage::ShaderBuffer;
 use bevy::shader::load_shader_library;
 
 use crate::celestial::{
-    CelestialFrame, CloudLight, MOON_TINT, NIGHT_SKY_LUMINANCE, SunState, beam_transmittance,
-    cloud_ambient, scene_illuminance, sky_clear_gain, sky_gain,
+    CelestialFrame, CelestialSettings, CloudLight, MOON_TINT, NIGHT_SKY_LUMINANCE, Sun, SunState,
+    beam_transmittance, cloud_ambient, scene_illuminance, sky_clear_gain, sky_gain,
 };
 use crate::climate::Weather;
 use crate::flash::LightningFlash;
 use crate::gpu::grid::storage_buffer;
 use crate::gpu::readback::{Readbacks, decode};
-use crate::plugin::{ElementsQuality, ElementsSystems, ElementsView, ensure_gpu_core};
+use crate::plugin::{
+    ElementsQuality, ElementsSystems, ElementsView, ensure_gpu_core, needs_depth_prepass,
+};
 use crate::query::EnvironmentSnapshot;
 use crate::terrain::TerrainGrid;
 
@@ -374,6 +376,7 @@ pub struct CloudPlugin;
 impl Plugin for CloudPlugin {
     fn build(&self, app: &mut App) {
         ensure_gpu_core(app);
+        needs_depth_prepass(app);
         load_shader_library!(app, "common.wesl");
         embedded_asset!(app, "generate.wesl");
         embedded_asset!(app, "weather.wesl");
@@ -683,6 +686,10 @@ fn update_gpu(
     mut gpu: ResMut<CloudGpu>,
     mut map: ResMut<CloudWeatherMap>,
     mut shadows: ResMut<CloudShadows>,
+    own_sun: (
+        Option<Res<CelestialSettings>>,
+        Query<&GlobalTransform, With<Sun>>,
+    ),
 ) {
     let Some(entity) = view.entity else {
         gpu.active = false;
@@ -695,7 +702,16 @@ fn update_gpu(
         .map_or((6_360_000.0, 6_460_000.0), |a| {
             (a.inner_radius, a.outer_radius)
         });
-    let (light_dir, light_e) = pick_light(&sun, &frame);
+    let (mut light_dir, light_e) = pick_light(&sun, &frame);
+    // A game that lights its scene itself (`CelestialSettings::lights` off) and marks its key
+    // light `Sun` gets the cloud shadows cast along that light, as its buildings' shadows fall
+    // (`docs/research/integration.md` Deviation 2).
+    let (celestial, suns) = &own_sun;
+    if celestial.as_ref().is_some_and(|c| !c.lights)
+        && let Some(own) = suns.iter().next()
+    {
+        light_dir = *own.back();
+    }
     // Diffuse sky light: the metered illuminance before cloud dimming, all of it diffuse in
     // twilight and 15 % of it at high sun.
     let sky_share = 1.0 + (0.15 - 1.0) * smoothstep(-2.0, 10.0, sun.altitude_deg);

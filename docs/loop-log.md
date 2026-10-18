@@ -1282,3 +1282,50 @@ Marschner & Shirley, *Fundamentals of Computer Graphics* §4.3.1 (corpus); *Real
 3. **The anti-solar sky at sunset reads dark grey** (carried).
 4. **Rim sparkle** on lit cloud edges at sunset (carried).
 5. **Bevy's own sky and aerial perspective are perspective-only** (`uv_to_ray_direction`): under an orthographic camera looking at the horizon the sky is a perspective fan; the crate's clouds are right, Bevy's atmosphere is not.
+
+## Iteration 20 — 2026-10-18 — a game keeps its own look and lights (issues #9, #10, #11)
+
+**Commits:** `ad45762` (research note `docs/research/integration.md`), the implementation with tests, `ELEMENTS_LOOK=game` in the `isometric` example, the README / CHANGELOG / still / GIF, this log. Merged through a pull request; closes #9, #10, #11. **Sibling repos:** none. **Not released.**
+
+### What changed, and why it ranked first
+
+Of the open issues after #7, #8 (a units scale) turned out to touch ten render shaders, 31 metre constants and every transform-reading domain: an iteration of its own, next. #9, #10 and #11 share one theme every art-directed game hits (the crate took over the camera's look, the lights and the globals), so they went first, together. `ElementsCamera` gained five dressing flags (`atmosphere`, `distance_fog`, `volumetric_fog`, `ambient`, `msaa_off`), each inserting and driving only what is on, removing only what the crate put there, and flipped at runtime by a change system; `DepthPrepass` follows the plugins that read it. `CelestialSettings { lights, sky }` keeps `SunState` without spawning or touching lights (`update_sky` computes, `drive_lights` writes). `ELEMENTS_GLOBALS_BUFFER` is public. The capture review then found the game look's rain lit by the crate's 50 klx sun; the particles now take the `Sun`-marked light (the crate's or the game's) and the camera's own ambient, and the cloud shadows follow a game's `Sun`-marked light.
+
+### Candidates ranked
+
+| # | Candidate | Category | Note |
+|---|---|---|---|
+| 1 | **#9, #10, #11: the game's look, lights and globals** | 3 (adoption) | picked |
+| 2 | #8 world-units scale | 3 | next (wide: ten shaders, every domain) |
+| 3 | #14 serialize `SurfaceWeathering`, #15 a snow season | 3 | queued |
+| 4 | #12 bevy_flora 0.46, #13 isomesh many volumes | 3 | queued |
+| 5 | Wet surfaces reflect a clear sky under overcast | 2 | carried |
+
+### Sources
+
+Patry 2021 (corpus `s2021-advances-pdf-66-mb`: physically based lighting that "can deviate from physical correctness" with artist knobs per weather state); Schneider & Vos 2015 (corpus: "art direct-able" as a requirement); Tatarchuk 2006 (corpus: artist-directable rain as separate pieces); Bevy 0.20's atmosphere extraction, environment-map observer and `Camera3d`'s required `Exposure`.
+
+### Critique and verdicts (`/tmp/i20/critique.md`; rounds `/tmp/i20/r1`, `r2`, `seq`)
+
+| Feature | Evidence | Verdict |
+|---|---|---|
+| Game look: key light, palette, no fog or sky | `r2/sheet.png` | GREAT |
+| Rain and snow on the game look | `r1/sheet.png` (stark white, NOT YET) → `r2/z_rain.png` | GREAT: in the palette's range, walls wet |
+| Cloud shadows along the game's light | `seq_sheet.png` | GREAT |
+| Default look | `r1` top row, `tests/gpu_dressing.rs` | unchanged |
+
+### Verification
+
+- New tests: `tests/gpu_dressing.rs` — `the_default_dressing_is_unchanged` (the component set, one atmosphere, two lights, the moon disc and stars), `a_bare_camera_without_lights_keeps_the_games_look` (only `DepthPrepass` inserted, no atmosphere, lights, moon or stars; the game's fog, ambient, MSAA and `Sun`-marked light keep their values; `SunState` equal to the lit run's), `flags_flip_at_runtime`; `tests/gpu_weathered.rs` `a_game_material_reads_the_globals_buffer` (a material extension defined in the test binds `ELEMENTS_GLOBALS_BUFFER` and draws the pinned wetness and snow cover to ±1 DN).
+- Found by a test: `Camera3d` requires `Exposure`, so the old `insert_if_new(Exposure::SUNLIGHT)` never applied and an `exposure` flag would be meaningless (Deviation 1).
+- Gates: build, `cargo test`, examples, clippy `-D warnings`, `cargo doc` `-D warnings`, wasm32, rustfmt on the changed files, `tests/save.rs`, every GPU file and lib module.
+- Performance: no shader or kernel change on the default path (the cloud view query gains an `Msaa` filter; the precipitation light is a few CPU lines); not re-benchmarked.
+- Still `docs/game_look.png`, GIF `docs/game_look.gif` (new).
+
+### Top 5 remaining items, ranked
+
+1. **#8 world-units scale** (ten render shaders, the metre constants, every transform boundary).
+2. **#14 serialize `SurfaceWeathering`** and **#15 a snow season on `Climate`**.
+3. **#12 bevy_flora 0.46**, **#13 isomesh with many volumes and a game-owned ground**.
+4. **Wet surfaces reflect a clear sky under overcast** (carried).
+5. **The anti-solar sky at sunset**, **rim sparkle**, **Bevy's perspective-only sky under an orthographic camera** (carried).

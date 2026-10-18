@@ -8,8 +8,11 @@
 //! The weather cycles Rain, Thunderstorm, Snow and PartlyCloudy, 30 s each of real time, at a
 //! clock 30 times real time. `ELEMENTS_PRESET=Snow` (or any preset) fixes it,
 //! `ELEMENTS_HOUR=14` starts the clock at that hour, `ELEMENTS_SCALE=300` changes the time scale,
-//! and `ELEMENTS_ZOOM=60` sets the view's height in metres (default 40). For a still:
-//! `ELEMENTS_PRESET=Rain ELEMENTS_FRAMES=600 ELEMENTS_SHOT=/tmp/x.png`.
+//! and `ELEMENTS_ZOOM=60` sets the view's height in metres (default 40). `ELEMENTS_LOOK=game`
+//! keeps a game's own look (`docs/research/integration.md`): its own warm key light, a flat
+//! ambient and a plain clear colour, no physical sky, fog or exposure from the crate, and the
+//! crate's weather on top (`ElementsCamera::bare()` with `msaa_off`, `CelestialSettings` off).
+//! For a still: `ELEMENTS_PRESET=Rain ELEMENTS_FRAMES=600 ELEMENTS_SHOT=/tmp/x.png`.
 
 mod common;
 
@@ -46,6 +49,11 @@ fn fixed_preset() -> Option<WeatherPreset> {
         .find(|p| format!("{p:?}").eq_ignore_ascii_case(&name))
 }
 
+/// `ELEMENTS_LOOK=game`: the game's own lights and look, the crate's weather.
+fn game_look() -> bool {
+    std::env::var("ELEMENTS_LOOK").is_ok_and(|v| v.eq_ignore_ascii_case("game"))
+}
+
 fn main() {
     let clock = WorldClock::new(CivilDate::new(2026, 4, 15))
         .at_hour(env_f64("ELEMENTS_HOUR").unwrap_or(13.0))
@@ -54,6 +62,10 @@ fn main() {
     app.add_plugins((DefaultPlugins, ElementsPlugins, ExampleHarness))
         .insert_resource(clock)
         .insert_resource(Climate::temperate())
+        .insert_resource(CelestialSettings {
+            lights: !game_look(),
+            sky: !game_look(),
+        })
         .add_systems(Startup, setup)
         .add_systems(
             Update,
@@ -204,9 +216,8 @@ fn setup(
         ))
         .id();
     let zoom = env_f64("ELEMENTS_ZOOM").unwrap_or(40.0) as f32;
-    commands.spawn((
+    let mut camera = commands.spawn((
         Camera3d::default(),
-        ElementsCamera::default(),
         ElementsFocus::Entity(walker),
         Projection::from(OrthographicProjection {
             scaling_mode: ScalingMode::FixedVertical {
@@ -218,6 +229,47 @@ fn setup(
         Transform::from_translation(Vec3::new(LOOP_RADIUS_M, 0.9, 0.0) + iso_offset())
             .looking_at(Vec3::new(LOOP_RADIUS_M, 0.9, 0.0), Vec3::Y),
     ));
+    if game_look() {
+        // The game's palette: a plain sky colour, a cool flat ambient, its own warm key light
+        // with shadow cascades around the scene 1500 m in front of the camera. The crate adds
+        // only the weather; it keeps `Msaa::Off`, which the precipitation pass needs.
+        camera.insert((
+            ElementsCamera {
+                msaa_off: true,
+                ..ElementsCamera::bare()
+            },
+            AmbientLight {
+                color: Color::srgb(0.80, 0.86, 1.0),
+                brightness: 900.0,
+                ..default()
+            },
+        ));
+        camera.entry::<Camera>().and_modify(|mut c| {
+            c.clear_color = ClearColorConfig::Custom(Color::srgb(0.62, 0.70, 0.78));
+        });
+        // Marked `Sun`, so the rain and snow are lit as the town is; with
+        // `CelestialSettings::lights` off the crate never touches it.
+        commands.spawn((
+            Sun,
+            DirectionalLight {
+                illuminance: 6000.0,
+                color: Color::srgb(1.0, 0.92, 0.80),
+                shadow_maps_enabled: true,
+                ..default()
+            },
+            bevy::light::CascadeShadowConfigBuilder {
+                num_cascades: 1,
+                minimum_distance: BACK_M - 300.0,
+                first_cascade_far_bound: BACK_M + 300.0,
+                maximum_distance: BACK_M + 300.0,
+                ..default()
+            }
+            .build(),
+            Transform::from_xyz(-3.0, 5.0, 2.0).looking_at(Vec3::ZERO, Vec3::Y),
+        ));
+    } else {
+        camera.insert(ElementsCamera::default());
+    }
 
     let mut b = Builder {
         commands: commands.reborrow(),

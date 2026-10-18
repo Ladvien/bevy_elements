@@ -387,7 +387,7 @@ fn prepare_views(
     images: Res<RenderAssets<GpuImage>>,
     cache: Res<PipelineCache>,
     device: Res<RenderDevice>,
-    views: Query<(Entity, &ViewPrepassTextures, &AtmosphereTextures), With<CloudView>>,
+    views: Query<(Entity, &ViewPrepassTextures, &AtmosphereTextures, &Msaa), With<CloudView>>,
 ) {
     let (Some(cloud), Some(pipelines)) = (cloud, pipelines) else {
         return;
@@ -426,8 +426,11 @@ fn prepare_views(
     } else {
         (history_b, history_a)
     };
-    for (entity, prepass, atmosphere) in &views {
-        let Some(depth) = prepass.depth_only_view() else {
+    for (entity, prepass, atmosphere, msaa) in &views {
+        // The layouts bind a single-sampled depth and the composite writes the main texture
+        // without a resolve: a camera that kept its MSAA (`ElementsCamera::msaa_off` off) is
+        // skipped.
+        let Some(depth) = prepass.depth_only_view().filter(|_| *msaa == Msaa::Off) else {
             continue;
         };
         let march_group = device.create_bind_group(
