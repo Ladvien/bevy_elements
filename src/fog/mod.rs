@@ -15,7 +15,7 @@ use crate::celestial::{CelestialFrame, CloudLight, SunState, cloud_light, dusk_t
 use crate::climate::{Weather, WeatherDirector, WeatherPreset};
 use crate::clouds::{CloudShadows, CloudWeatherMap};
 use crate::gpu::grid::storage_volume;
-use crate::plugin::{ElementsCamera, ElementsSystems, ElementsView, ensure_gpu_core};
+use crate::plugin::{ElementsCamera, ElementsSystems, ElementsUnits, ElementsView, ensure_gpu_core};
 use crate::precipitation::model::{
     marshall_palmer_lambda, precipitation_split, rain_extinction, snow_extinction,
     water_weighted_fall_speed,
@@ -102,6 +102,25 @@ pub fn orthographic_fog_falloff(visibility_m: f32, near_depth_m: f32) -> FogFall
     FogFalloff::Linear {
         start,
         end: start + 1.0 / extinction_for_visibility(visibility_m),
+    }
+}
+
+/// A falloff computed in metres as Bevy's world-unit falloff, `units` world units to the metre:
+/// distances × `units`, extinction and in-scattering per world unit ÷ `units`.
+pub fn falloff_in_world_units(falloff: FogFalloff, units: f32) -> FogFalloff {
+    match falloff {
+        FogFalloff::Linear { start, end } => FogFalloff::Linear {
+            start: start * units,
+            end: end * units,
+        },
+        FogFalloff::Atmospheric {
+            extinction,
+            inscattering,
+        } => FogFalloff::Atmospheric {
+            extinction: extinction / units,
+            inscattering: inscattering / units,
+        },
+        other => other,
     }
 }
 
@@ -326,6 +345,7 @@ fn update_volume(
     mut volumes: Query<(&mut FogVolume, &mut Transform), With<GroundFog>>,
     cameras: Query<&Projection>,
     snapshot: Res<EnvironmentSnapshot>,
+    units: Res<ElementsUnits>,
 ) {
     let Some(mut gpu) = gpu else {
         return;
@@ -355,7 +375,9 @@ fn update_volume(
 
     let ground = snapshot.ground_height(camera.xz());
     let centre = volume_centre(camera, ground);
-    *transform = Transform::from_translation(centre).with_scale(GROUND_FOG_EXTENT);
+    let u = units.per_metre();
+    // Bevy's volume is in world units: its transform × u (the density kernel stays in metres).
+    *transform = Transform::from_translation(centre * u).with_scale(GROUND_FOG_EXTENT * u);
     // An orthographic view looks down through the whole layer at every pixel along one slant: a
     // uniform veil set by the look-down angle and the layer's height, not by the scene, opaque
     // under `Fog`. Its distance fog, counted from the focus plane, carries the weather's whole
@@ -391,7 +413,8 @@ fn update_volume(
     // total light: the density is faded by the share its own light source carries and the
     // intensity raised by the reciprocal (see `volume_density_share` and `volume_light_gain`).
     let cloud = cloud_light(weather.cloud_cover, shadows.as_deref());
-    volume.density_factor = volume_density_share(cloud);
+    // Bevy's density is per world unit: the metre density ÷ u keeps the optical depth.
+    volume.density_factor = volume_density_share(cloud) / u;
     volume.light_intensity = volume_light_gain(cloud)
         * volume_light_compensation(
             weather.visibility_m,
@@ -473,6 +496,7 @@ fn update_distance_fog(
     sun: Res<SunState>,
     frame: Res<CelestialFrame>,
     view: Res<ElementsView>,
+    units: Res<ElementsUnits>,
     shadows: Option<Res<CloudShadows>>,
     mut cameras: FogCameras,
 ) {
@@ -496,17 +520,27 @@ fn update_distance_fog(
         fog.falloff = match projection {
             Some(Projection::Orthographic(o)) => {
                 // The followed camera's focus; another orthographic camera fogs from its plane.
-                let eye = transform.translation();
+                let eye = units.point_to_metres(transform.translation());
                 let focus = if view.entity == Some(entity) {
                     view.position
                 } else {
                     eye
                 };
-                let near =
-                    orthographic_near_depth(eye, *transform.forward(), focus, o.area.height());
-                orthographic_fog_falloff(weather.visibility_m, near)
+                let near = orthographic_near_depth(
+                    eye,
+                    *transform.forward(),
+                    focus,
+                    units.metres(o.area.height()),
+                );
+                falloff_in_world_units(
+                    orthographic_fog_falloff(weather.visibility_m, near),
+                    units.per_metre(),
+                )
             }
-            _ => distance_fog_falloff(weather.visibility_m),
+            _ => falloff_in_world_units(
+                distance_fog_falloff(weather.visibility_m),
+                units.per_metre(),
+            ),
         };
     }
 }
@@ -514,6 +548,45 @@ fn update_distance_fog(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A world in feet: Bevy's distances are the metre ones times the units and its extinction
+    /// per world unit the metre one over them, so the fog reaches the same metres (issue #8);
+    /// the default 1.0 changes nothing.
+    #[test]
+    fn a_falloff_in_feet_fogs_the_same_metres() {
+        let feet = 3.2808_f32;
+        let metres = distance_fog_falloff(300.0);
+        assert_eq!(
+            format!("{:?}", falloff_in_world_units(metres.clone(), 1.0)),
+            format!("{metres:?}")
+        );
+        let (
+            FogFalloff::Atmospheric {
+                extinction: m,
+                inscattering: mi,
+            },
+            FogFalloff::Atmospheric {
+                extinction: f,
+                inscattering: fi,
+            },
+        ) = (metres, falloff_in_world_units(distance_fog_falloff(300.0), feet))
+        else {
+            unreachable!("distance fog is atmospheric");
+        };
+        // 300 m is 984.24 ft; the transmittance over it is the metre one.
+        let (tm, tf) = ((-m * 300.0).exp(), (-f * 300.0 * feet).exp());
+        assert!((tm - tf).abs().max_element() < 1e-6, "{tm} {tf}");
+        assert!((fi - mi / feet).abs().max_element() < 1e-9);
+
+        // An orthographic falloff starts and ends at the same metres.
+        let FogFalloff::Linear { start, end } =
+            falloff_in_world_units(orthographic_fog_falloff(300.0, 1500.0), feet)
+        else {
+            unreachable!("an orthographic view fogs linearly");
+        };
+        assert!((start / feet - 1500.0).abs() < 1e-2);
+        assert!((end / feet - (1500.0 + 300.0 / KOSCHMIEDER)).abs() < 1e-2);
+    }
 
     /// The nearest ground a view 40 m high shows, looking down 30° at a focus 1500 m away, is
     /// 20 · cot 30° = 34.6 m in front of the focus; straight down, all of it is at the focus; a

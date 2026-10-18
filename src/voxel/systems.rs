@@ -22,7 +22,7 @@ use super::{VoxelGround, VoxelSnow};
 use crate::climate::SurfaceWeathering;
 use crate::cover::SnowSettings;
 use crate::hydrology::{ErosionLocked, ErosionSettings};
-use crate::plugin::ElementsQuality;
+use crate::plugin::{ElementsQuality, ElementsUnits};
 use crate::query::EnvironmentSnapshot;
 use crate::terrain::model::resolve_resolution;
 use crate::terrain::{Terrain, TerrainGpu, TerrainState};
@@ -38,9 +38,10 @@ pub(crate) struct VoxelGroundState {
     /// the user replaced the field.
     pub installed: Arc<dyn VolumeField>,
     pub columns: Columns,
-    /// The XZ extent and the resolution the terrain was built for.
+    /// The XZ extent (m) and the resolution the terrain was built for.
     pub extent_m: Vec2,
-    /// Column tops (world metres) and the held snow depths, on `columns.grid`.
+    /// Column tops (field units: the world's for a `VoxelGround`) and the held snow depths (field
+    /// units), on `columns.grid`.
     pub top: Arc<[f32]>,
     pub snow: Arc<[f32]>,
     /// The terrain entity a `VoxelGround` volume owns; `None` for a `VoxelSnow` volume.
@@ -206,6 +207,7 @@ pub(crate) fn voxel_ground_maintain(
 pub(crate) fn voxel_ground_build(
     mut commands: Commands,
     quality: Res<ElementsQuality>,
+    units: Res<ElementsUnits>,
     mut images: ResMut<Assets<Image>>,
     mut volumes: Query<(Entity, &mut VoxelVolume, &VoxelGround), Without<VoxelGroundState>>,
     built: Query<&VoxelGroundState>,
@@ -235,10 +237,18 @@ pub(crate) fn voxel_ground_build(
         }
         let cell = volume.layout.cell_size();
         check_cell_size(cell, &mut warnings);
+        // The columns are in field space, which for a ground is world space (world units); the
+        // terrain under it is in metres.
+        let u = units.per_metre();
         let extent = Vec2::new(max[0] - min[0], max[2] - min[2]);
         let centre = Vec2::new(0.5 * (max[0] + min[0]), 0.5 * (max[2] + min[2]));
-        let (size, terrain_cell, _) =
-            resolve_resolution(extent, ground.resolution, quality.terrain_max_resolution());
+        let extent_m = extent / u;
+        let (size, terrain_cell_m, _) = resolve_resolution(
+            extent_m,
+            ground.resolution,
+            quality.terrain_max_resolution(),
+        );
+        let terrain_cell = terrain_cell_m * u;
         // The terrain centres its grid on its transform exactly this way.
         let grid = crate::terrain::TerrainGrid {
             origin: centre - size.as_vec2() * terrain_cell * 0.5,
@@ -256,6 +266,7 @@ pub(crate) fn voxel_ground_build(
         let base = Arc::clone(&volume.field);
         scan_columns(&*base, &columns, 0..columns.len(), &mut tops);
 
+        let heights_m: Vec<f32> = tops.iter().map(|top| top / u).collect();
         let image = images.add(Image::new(
             Extent3d {
                 width: size.x,
@@ -263,7 +274,7 @@ pub(crate) fn voxel_ground_build(
                 depth_or_array_layers: 1,
             },
             TextureDimension::D2,
-            bytemuck::cast_slice(&tops).to_vec(),
+            bytemuck::cast_slice(&heights_m).to_vec(),
             TextureFormat::R32Float,
             RenderAssetUsages::default(),
         ));
@@ -271,7 +282,7 @@ pub(crate) fn voxel_ground_build(
             .spawn((
                 Name::new("Voxel ground"),
                 Terrain::from_heightmap(image, 0.0..1.0)
-                    .with_extent(extent)
+                    .with_extent(extent_m)
                     .with_resolution(size)
                     .external(),
                 Transform::from_xyz(centre.x, 0.0, centre.y),
@@ -283,7 +294,7 @@ pub(crate) fn voxel_ground_build(
             base,
             installed: Arc::clone(&volume.field),
             columns,
-            extent_m: extent,
+            extent_m,
             top: tops.into(),
             snow: vec![0.0_f32; columns.len()].into(),
             terrain: Some(terrain),
@@ -456,6 +467,7 @@ pub(crate) fn voxel_ground_edits(
 pub(crate) fn voxel_ground_snow(
     mut commands: Commands,
     snapshot: Res<EnvironmentSnapshot>,
+    units: Res<ElementsUnits>,
     mut volumes: Query<(Entity, &mut VoxelVolume, &mut VoxelGroundState)>,
     chunks: Query<(Entity, &VoxelChunk)>,
 ) {
@@ -476,19 +488,23 @@ pub(crate) fn voxel_ground_snow(
         }
         let columns = state.columns;
         let grid = columns.grid;
+        // The map is in the metre frame, the columns in field (= world) units.
+        let u = units.per_metre();
+        let (origin_m, cell_m, extent_m) = (grid.origin / u, grid.cell_m / u, grid.extent() / u);
         // A snapshot of another terrain (a rebuild in flight) is not ours.
-        let same_box = cover.grid.origin.distance(grid.origin) < 1e-3 * grid.cell_m
-            && cover.grid.extent().distance(grid.extent()) < 1e-3 * grid.cell_m;
+        let same_box = cover.grid.origin.distance(origin_m) < 1e-3 * cell_m
+            && cover.grid.extent().distance(extent_m) < 1e-3 * cell_m;
         if !same_box || cover.depth.len() != cover.grid.size.x as usize * cover.grid.size.y as usize
         {
             continue;
         }
         state.last_depth = Some(Arc::clone(&cover.depth));
+        // Snow depth in metres from the map, in field units for the slab.
         let fresh = |i: usize| {
-            if cover.grid.size == grid.size {
+            u * if cover.grid.size == grid.size {
                 cover.depth[i]
             } else {
-                cover.grid.sample(&cover.depth, columns.centre(i))
+                cover.grid.sample(&cover.depth, columns.centre(i) / u)
             }
         };
         let Some(swap) = hold_swap(&columns, &state.top, &state.snow, fresh) else {
@@ -515,6 +531,7 @@ pub(crate) fn voxel_ground_snow(
 pub(crate) fn voxel_snow_refresh(
     mut commands: Commands,
     snapshot: Res<EnvironmentSnapshot>,
+    units: Res<ElementsUnits>,
     ground: Option<Res<SurfaceWeathering>>,
     settings: Option<Res<SnowSettings>>,
     mut volumes: Query<
@@ -528,6 +545,7 @@ pub(crate) fn voxel_snow_refresh(
     >,
     chunks: Query<(Entity, &VoxelChunk)>,
 ) {
+    let u = units.per_metre();
     let pack_m = ground.map_or(0.0, |g| g.pack_seed().x);
     let shed_deg = settings.map_or(SnowSettings::default().shed_slope_deg, |s| s.shed_slope_deg);
     let cover = snapshot.cover.as_ref();
@@ -546,7 +564,7 @@ pub(crate) fn voxel_snow_refresh(
         };
         // `last_pack_m` is NaN until the first refresh.
         let pack_moved = state.last_pack_m.is_nan()
-            || (pack_m - state.last_pack_m).abs() > 0.25 * columns.cell * scale;
+            || (pack_m - state.last_pack_m).abs() > 0.25 * columns.cell * scale / u;
         if !new_map && !pack_moved {
             continue;
         }
@@ -560,12 +578,14 @@ pub(crate) fn voxel_snow_refresh(
             }
             let local = columns.centre(i);
             let world = transform.transform_point(Vec3::new(local.x, top, local.y));
-            let at = Vec2::new(world.x, world.z);
+            let at_m = units.point_to_metres(world);
+            let at = Vec2::new(at_m.x, at_m.z);
             let source_m = cover
                 .filter(|c| c.grid.contains(at))
                 .and_then(|c| c.depth_at(at))
                 .unwrap_or(pack_m);
-            source_m * top_exposure(&columns, &tops, i, shed_deg) / scale
+            // Metres of snow in the volume's field units: world units, then the volume's scale.
+            source_m * top_exposure(&columns, &tops, i, shed_deg) * u / scale
         };
         let Some(swap) = hold_swap(&columns, &tops, &state.snow, fresh) else {
             continue;
@@ -592,6 +612,7 @@ pub(crate) fn voxel_ground_sync(
     terrain: Option<Res<TerrainState>>,
     gpu: Option<ResMut<TerrainGpu>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
+    units: Res<ElementsUnits>,
 ) {
     let (Some(terrain), Some(mut gpu)) = (terrain, gpu) else {
         return;
@@ -607,8 +628,10 @@ pub(crate) fn voxel_ground_sync(
         let Some(mut buffer) = buffers.get_mut(&terrain.bedrock) else {
             continue;
         };
+        // The terrain's heights are metres; the tops are field (= world) units.
+        let heights_m: Vec<f32> = state.top.iter().map(|top| units.metres(*top)).collect();
         buffer.clear();
-        buffer.extend_from_slice(&state.top);
+        buffer.extend_from_slice(&heights_m);
         gpu.changes += 1;
         state.tops_dirty = false;
     }

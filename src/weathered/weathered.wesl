@@ -61,7 +61,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var wet = g.weather.x * exposure;
     let rain = g.weather.z * exposure;
     if rain > 0.0 {
-        wet = wet + rain_streak(in.world_position.xyz, n, rain, g.wind.z);
+        // The streak noise is in metres; the fragment's world position is in world units.
+        wet = wet + rain_streak(in.world_position.xyz / g.units.x, n, rain, g.wind.z);
     }
     let snow = mesh_snow_cover(g.weather.y, n.y) * exposure;
     if wet > 0.0 || snow > 0.0 {
@@ -85,7 +86,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // the shadow's transmittance against the camera's. Outside the map, or without one, the
     // transmittance is 1 (and the camera's is 1 without clouds, so the scale is exactly 1).
     var t = 1.0;
-    let lookup = cloud_shadow_uv(g, in.world_position.xyz);
+    let lookup = cloud_shadow_uv(g, in.world_position.xyz / g.units.x);
     if lookup.z > 0.5 {
         t = textureSampleLevel(cloud_map, cloud_sampler, lookup.xy, 0.0).r;
     }

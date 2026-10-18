@@ -66,6 +66,8 @@ fn drive_wind(
     for gust in gusts.read() {
         next.launch_gust(
             GustFront {
+                // World units, as `WindGust::origin` is (the wind scales it by `ElementsUnits`);
+                // speed and width stay metres (`bevy_flora::FloraUnits`).
                 origin: gust.origin,
                 direction: gust.direction,
                 speed: gust.speed,

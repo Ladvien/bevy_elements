@@ -12,12 +12,12 @@
 
 import bevy_elements::noise::{hash33, perlin3};
 
-/// The shared globals buffer, five `vec4<f32>` (80 B). Mirrors the Rust `ElementsGlobals`.
+/// The shared globals buffer, six `vec4<f32>` (96 B). Mirrors the Rust `ElementsGlobals`.
 struct ElementsGlobals {
     /// x wetness 0–1, y snow cover 0–1 (both of exposed flat ground), z rain intensity
     /// `min(1, R_liquid / 20)`, w the mean cloud transmittance the lights carry.
     weather: vec4<f32>,
-    /// xy cloud shadow map origin (world XZ, m), z extent (m), w 1 when a map is bound.
+    /// xy cloud shadow map origin (metre-frame XZ, m), z extent (m), w 1 when a map is bound.
     shadow: vec4<f32>,
     /// Phase of each of the four ripple layers, 0–1.
     ripple: vec4<f32>,
@@ -25,6 +25,10 @@ struct ElementsGlobals {
     wind: vec4<f32>,
     /// xyz unit direction toward the light the shadow map was made for.
     light: vec4<f32>,
+    /// x world units per metre (`ElementsUnits`); the rest 0. A shader that takes a world position
+    /// from Bevy divides it by this before the metre-based functions below (`rain_streak`,
+    /// `ripple_offset`, `cloud_shadow_uv`).
+    units: vec4<f32>,
 }
 
 /// Linear albedo of snow; bit-equal to `bevy_flora`'s `SNOW_ALBEDO` (`common.wesl:388`).
@@ -79,7 +83,7 @@ fn mesh_snow_cover(snow: f32, normal_y: f32) -> f32 {
 
 /// Wetness a rain streak adds on top of a vertical face's film: `0.4 · min(1, f / 0.2) · s ·
 /// (1 − n_y²)` with `s` a noise stretched down the wall that flows with `phase`. `world` is the
-/// fragment's position, `normal` its geometric world normal, `intensity` the rain intensity `f`.
+/// fragment's position in metres, `normal` its geometric world normal, `intensity` the rain intensity `f`.
 /// The noise lattice repeats every 4096 units, so a `phase` wrapped at 8192 s is seamless.
 fn rain_streak(world: vec3<f32>, normal: vec3<f32>, intensity: f32, phase: f32) -> f32 {
     let vertical = 1.0 - normal.y * normal.y;
@@ -178,8 +182,8 @@ fn weather_surface(
     return s;
 }
 
-/// Where the cloud shadow map is sampled for world position `p`: `xy` the texture coordinate,
-/// `z` 1 when the point lies inside a bound map (else its transmittance is 1).
+/// Where the cloud shadow map is sampled for position `p` in metres (world ÷ `g.units.x`): `xy`
+/// the texture coordinate, `z` 1 when the point lies inside a bound map (else its transmittance is 1).
 fn cloud_shadow_uv(g: ElementsGlobals, p: vec3<f32>) -> vec3<f32> {
     let l = g.light.xyz;
     if g.shadow.w > 0.5 && l.y > 0.1 {

@@ -326,7 +326,7 @@ fn rain_intensity_is_the_liquid_fraction() {
     );
 }
 
-/// The buffer the shader reads is `surface_cover::ElementsGlobals`, five `vec4<f32>`, field for
+/// The buffer the shader reads is `surface_cover::ElementsGlobals`, six `vec4<f32>`, field for
 /// field.
 #[test]
 fn the_globals_pack_as_the_shader_struct() {
@@ -342,6 +342,7 @@ fn the_globals_pack_as_the_shader_struct() {
         wind: Vec2::new(12.0, 13.0),
         streak_phase: 14.0,
         light_direction: Vec3::new(15.0, 16.0, 17.0),
+        units_per_metre: 3.2808,
     };
     assert_eq!(
         globals.pack(),
@@ -351,14 +352,15 @@ fn the_globals_pack_as_the_shader_struct() {
             [8.0, 9.0, 10.0, 11.0],
             [12.0, 13.0, 14.0, 0.0],
             [15.0, 16.0, 17.0, 0.0],
+            [3.2808, 0.0, 0.0, 0.0],
         ]
     );
     let source = include_str!("../surface_cover.wesl");
     let body = &source[source.find("struct ElementsGlobals").expect("the struct")..];
     let body = &body[..body.find("\n}").expect("its end")];
-    assert_eq!(body.matches("vec4<f32>,").count(), 5, "five vec4 fields");
+    assert_eq!(body.matches("vec4<f32>,").count(), 6, "six vec4 fields");
     // Without clouds the mean transmittance is 1 and no map is bound.
-    let none = ElementsGlobals::gather(None, &Weather::default(), None, 0.0);
+    let none = ElementsGlobals::gather(None, &Weather::default(), None, 0.0, 1.0);
     assert_eq!(none.mean_transmittance, 1.0);
     assert!(!none.shadow_enabled);
 }

@@ -25,7 +25,9 @@ use bevy::render::render_resource::{
 use bevy::render::storage::ShaderBuffer;
 
 use crate::gpu::grid::zeroed_buffer;
-use crate::plugin::{ElementsQuality, ElementsSystems, ElementsView, ensure_gpu_core};
+use crate::plugin::{
+    ElementsQuality, ElementsSystems, ElementsUnits, ElementsView, ensure_gpu_core,
+};
 use crate::query::Environment;
 use crate::terrain::{TerrainGpu, TerrainParamsGpu, TerrainState};
 use crate::trails::model::window_origin;
@@ -290,6 +292,7 @@ fn run_waves(
     mut runtime: ResMut<WaveRuntime>,
     contacts: Query<(Entity, &WaterContact, &GlobalTransform)>,
     env: Environment,
+    units: Res<ElementsUnits>,
 ) {
     let (Some(terrain), Some(terrain_gpu), Some(mut gpu)) = (terrain, terrain_gpu, gpu) else {
         return;
@@ -310,6 +313,8 @@ fn run_waves(
     let mut keyed: Vec<(f32, Entity, ContactGpu)> = contacts
         .iter()
         .filter_map(|(entity, contact, transform)| {
+            // The body in the metre frame: its half extents × scale and its height are metres.
+            let transform = units.to_metres(transform);
             let (scale, rotation, translation) = transform.to_scale_rotation_translation();
             let half = contact.half_extents * scale;
             let mut upload = ContactGpu::new(translation, half, rotation)?;
@@ -317,8 +322,8 @@ fn run_waves(
             seen.insert(entity, translation.y);
             if let (Some(prev), Some(ground), Some(depth)) = (
                 runtime.last.get(&entity),
-                env.terrain_height(xz),
-                env.water_depth(xz),
+                env.terrain_height_metres(xz),
+                env.water_depth_metres(xz),
             ) {
                 upload.m1.z = entry_head(
                     *prev,

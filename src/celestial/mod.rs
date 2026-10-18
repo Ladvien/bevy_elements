@@ -17,7 +17,7 @@ pub use clock::{CivilDate, GeoLocation, WorldClock};
 use crate::climate::Weather;
 use crate::clouds::CloudShadows;
 use crate::plugin::{
-    ElementsCamera, ElementsSystems, ElementsView, SkyBackground, ensure_gpu_core,
+    ElementsCamera, ElementsSystems, ElementsUnits, ElementsView, SkyBackground, ensure_gpu_core,
 };
 
 /// Marks the sun's `DirectionalLight`.
@@ -210,11 +210,12 @@ pub(crate) const MOON_TINT: Vec3 = Vec3::new(0.88, 0.92, 1.0);
 /// toward the horizon; the cascades cover the ground-fog volume (±400 m) with margin.
 const SUN_SHADOW_DISTANCE_M: f32 = 600.0;
 
-/// The sun's shadow cascades for a perspective view: four, out to [`SUN_SHADOW_DISTANCE_M`].
-fn sun_cascades() -> CascadeShadowConfig {
+/// The sun's shadow cascades for a perspective view: four, out to [`SUN_SHADOW_DISTANCE_M`],
+/// as world distances (`u` world units to the metre).
+fn sun_cascades(u: f32) -> CascadeShadowConfig {
     CascadeShadowConfigBuilder {
-        maximum_distance: SUN_SHADOW_DISTANCE_M,
-        first_cascade_far_bound: 15.0,
+        maximum_distance: SUN_SHADOW_DISTANCE_M * u,
+        first_cascade_far_bound: 15.0 * u,
         ..default()
     }
     .build()
@@ -226,19 +227,23 @@ fn sun_cascades() -> CascadeShadowConfig {
 /// pixel is the same size at every depth, so one cascade, [`SUN_SHADOW_DISTANCE_M`] deep and
 /// centred on the focus, serves the whole view evenly (`docs/research/view-anchor.md`
 /// Deviation 2).
-fn orthographic_cascades(focus_depth_m: f32) -> CascadeShadowConfig {
+fn orthographic_cascades(focus_depth_m: f32, u: f32) -> CascadeShadowConfig {
     let near = (focus_depth_m - 0.5 * SUN_SHADOW_DISTANCE_M).max(0.0);
     CascadeShadowConfigBuilder {
         num_cascades: 1,
-        minimum_distance: near,
-        first_cascade_far_bound: near + SUN_SHADOW_DISTANCE_M,
-        maximum_distance: near + SUN_SHADOW_DISTANCE_M,
+        minimum_distance: near * u,
+        first_cascade_far_bound: (near + SUN_SHADOW_DISTANCE_M) * u,
+        maximum_distance: (near + SUN_SHADOW_DISTANCE_M) * u,
         ..default()
     }
     .build()
 }
 
-fn spawn_lights(mut commands: Commands, settings: Res<CelestialSettings>) {
+fn spawn_lights(
+    mut commands: Commands,
+    settings: Res<CelestialSettings>,
+    units: Res<ElementsUnits>,
+) {
     if !settings.lights {
         return;
     }
@@ -250,7 +255,7 @@ fn spawn_lights(mut commands: Commands, settings: Res<CelestialSettings>) {
             shadow_maps_enabled: true,
             ..default()
         },
-        sun_cascades(),
+        sun_cascades(units.per_metre()),
         VolumetricLight,
         Transform::default(),
     ));
@@ -277,6 +282,7 @@ type CelestialCascades<'w, 's> =
 fn fit_shadow_cascades(
     settings: Res<CelestialSettings>,
     view: Res<ElementsView>,
+    units: Res<ElementsUnits>,
     cameras: Query<(&Projection, &GlobalTransform)>,
     mut lights: CelestialCascades,
 ) {
@@ -288,14 +294,16 @@ fn fit_shadow_cascades(
             .and_then(|e| cameras.get(e).ok())
             .and_then(|(projection, transform)| match projection {
                 Projection::Orthographic(_) => Some(orthographic_cascades(
-                    (view.position - transform.translation()).dot(*transform.forward()),
+                    (view.position - units.point_to_metres(transform.translation()))
+                        .dot(*transform.forward()),
+                    units.per_metre(),
                 )),
                 _ => None,
             });
     for (mut config, is_sun) in &mut lights {
         let want = orthographic.clone().unwrap_or_else(|| {
             if is_sun {
-                sun_cascades()
+                sun_cascades(units.per_metre())
             } else {
                 CascadeShadowConfig::default()
             }
@@ -790,6 +798,29 @@ fn sky_background(mut cameras: Query<(&mut Camera, Option<&Exposure>), With<SkyB
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
+
+    /// A world in feet: the cascades reach the same metres, so their world distances are the
+    /// metre ones times the units (issue #8). The default 1.0 is the metre scene itself.
+    #[test]
+    fn the_shadow_cascades_reach_the_same_metres_in_a_world_of_feet() {
+        let feet = 3.2808_f32;
+        let (m, f) = (sun_cascades(1.0), sun_cascades(feet));
+        assert_eq!(m.bounds.len(), f.bounds.len());
+        for (a, b) in m.bounds.iter().zip(&f.bounds) {
+            assert!((a * feet - b).abs() <= 1e-3 * b, "{a} {b}");
+        }
+        assert!(
+            (m.bounds.last().copied().unwrap_or_default() - SUN_SHADOW_DISTANCE_M).abs() < 1e-2
+        );
+        let (m, f) = (
+            orthographic_cascades(1500.0, 1.0),
+            orthographic_cascades(1500.0, feet),
+        );
+        assert_eq!(m.bounds.len(), 1);
+        assert!((m.minimum_distance * feet - f.minimum_distance).abs() < 1e-2);
+        assert!((m.bounds[0] * feet - f.bounds[0]).abs() < 1e-2);
+        assert_eq!(m.minimum_distance, 1500.0 - 0.5 * SUN_SHADOW_DISTANCE_M);
+    }
 
     #[test]
     fn exposure_targets_match_the_research_note() {

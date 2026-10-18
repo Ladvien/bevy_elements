@@ -5,8 +5,10 @@
 //!
 //! One terrain exists at a time (a second `Terrain` entity logs a warning and is ignored). It is
 //! centred on its entity's `Transform`: the grid's minimum corner is `translation.xz − extent / 2`
-//! and a stored height `h` is the world height `translation.y + h`. Rotation and scale are not
-//! supported.
+//! and a stored height `h` is the height `translation.y + h` above the entity's origin, all in
+//! the metre frame (world ÷ [`ElementsUnits::units_per_metre`](crate::ElementsUnits): the
+//! entity's translation is read through it, the patches are written ×units). Rotation and scale
+//! are not supported.
 
 mod gpu;
 #[cfg(test)]
@@ -22,7 +24,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::gpu::grid::zeroed_buffer;
 use crate::gpu::readback::{Readbacks, decode};
-use crate::plugin::{ElementsQuality, ElementsSystems, ElementsView, ensure_gpu_core};
+use crate::plugin::{
+    ElementsQuality, ElementsSystems, ElementsUnits, ElementsView, ensure_gpu_core,
+};
 use crate::query::EnvironmentSnapshot;
 use bevy::asset::{RenderAssetUsages, embedded_asset};
 use bevy::camera::primitives::Aabb;
@@ -151,8 +155,9 @@ pub enum TerrainRender {
 }
 
 /// The terrain. Spawn one entity with it. It is centred on the entity's `Transform` (the grid's
-/// minimum corner is `translation.xz − extent / 2`, a stored height `h` is the world height
-/// `translation.y + h`); rotation and scale are ignored. One terrain exists at a time: a second
+/// minimum corner is `translation.xz − extent / 2` and a stored height `h` is the height
+/// `translation.y + h`, both read through [`ElementsUnits`](crate::ElementsUnits): `Terrain`'s
+/// own lengths are metres); rotation and scale are ignored. One terrain exists at a time: a second
 /// `Terrain` entity logs a warning and is ignored.
 #[derive(Component, Clone, Debug, PartialEq)]
 #[require(Transform, Visibility)]
@@ -442,6 +447,7 @@ fn ensure_terrain(
     mut commands: Commands,
     quality: Res<ElementsQuality>,
     terrains: Query<(Entity, &Terrain, &Transform, Option<&GlobalTransform>)>,
+    units: Res<ElementsUnits>,
     asset_server: Res<AssetServer>,
     images: Res<Assets<Image>>,
     state: Option<ResMut<TerrainState>>,
@@ -478,6 +484,8 @@ fn ensure_terrain(
         runtime.warned_extra = true;
     }
     let transform = global.map_or(*local, |g| g.compute_transform());
+    // The grid lives in the metre frame; the entity's translation is in world units.
+    let translation = units.point_to_metres(transform.translation);
     if !runtime.warned_transform
         && (transform.rotation.angle_between(Quat::IDENTITY) > 1e-4
             || (transform.scale - Vec3::ONE).abs().max_element() > 1e-4)
@@ -494,10 +502,10 @@ fn ensure_terrain(
     // The grid follows the transform every frame; the layers are rebuilt only when what they
     // were built from changes.
     let grid = TerrainGrid {
-        origin: transform.translation.xz() - size.as_vec2() * cell * 0.5,
+        origin: translation.xz() - size.as_vec2() * cell * 0.5,
         cell_m: cell,
         size,
-        y0: transform.translation.y,
+        y0: translation.y,
     };
     if runtime.active.as_ref() == Some(&wanted) {
         if let (Some(mut state), Some(mut gpu)) = (state, gpu) {
@@ -667,8 +675,8 @@ fn ensure_terrain(
         });
         // Hidden until the first selection puts a patch in a slot.
         let analytic = Aabb::from_min_max(
-            Vec3::new(0.0, low - 2.0, 0.0),
-            Vec3::new(1.0, high + 2.0, 1.0),
+            Vec3::new(0.0, units.world(low - 2.0), 0.0),
+            Vec3::new(1.0, units.world(high + 2.0), 1.0),
         );
         let mut slots = Vec::with_capacity(POOL_CAPACITY);
         commands.entity(entity).with_children(|parent| {
@@ -807,6 +815,7 @@ pub(crate) fn update_patches(
     mut runtime: ResMut<TerrainRuntime>,
     state: Option<Res<TerrainState>>,
     view: Res<ElementsView>,
+    units: Res<ElementsUnits>,
     snapshot: Res<EnvironmentSnapshot>,
     mut patches: Query<(&mut Transform, &mut Visibility, &mut MeshTag, &mut Aabb)>,
 ) {
@@ -888,7 +897,12 @@ pub(crate) fn update_patches(
         let Ok((mut transform, mut visibility, mut tag, mut aabb)) = patches.get_mut(entity) else {
             continue;
         };
+        // The patch is placed in the world: its metre-frame corner and edge × units.
         let (translation, scale) = patch_transform(&lod, extent, patch);
+        let (translation, scale) = (
+            units.point_to_world(translation),
+            Vec3::new(units.world(scale.x), scale.y, units.world(scale.z)),
+        );
         if transform.translation != translation || transform.scale != scale {
             transform.translation = translation;
             transform.scale = scale;
@@ -898,8 +912,8 @@ pub(crate) fn update_patches(
         }
         let (low, high) = tree.get(patch.level, patch.ix, patch.iz);
         let bounds = Aabb::from_min_max(
-            Vec3::new(0.0, low - model::AABB_PAD_M, 0.0),
-            Vec3::new(1.0, high + model::AABB_PAD_M, 1.0),
+            Vec3::new(0.0, units.world(low - model::AABB_PAD_M), 0.0),
+            Vec3::new(1.0, units.world(high + model::AABB_PAD_M), 1.0),
         );
         if *aabb != bounds {
             *aabb = bounds;

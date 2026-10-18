@@ -32,13 +32,14 @@ fn cloud_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         view.world_position,
         is_orthographic(view.clip_from_view),
         params.camera.xyz,
+        params.units.x,
     );
     let cam = ray.origin;
     let dir = ray.dir;
     if depth > 0.0 {
         let big_r = params.camera.w;
         let shell = shell_range(big_r + cam.y, dir.y, params.layer.x, params.layer.y, big_r);
-        if scene_distance(in.uv, depth, view.world_from_clip, ray) < shell.x {
+        if scene_distance(in.uv, depth, view.world_from_clip, ray, params.units.x) < shell.x {
             return vec4<f32>(0.0, 0.0, 0.0, 1.0);
         }
     }

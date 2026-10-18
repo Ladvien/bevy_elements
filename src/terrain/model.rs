@@ -24,17 +24,18 @@ pub(crate) const R_SPAN: f32 = 0.71;
 /// Leaf patches' bounding boxes are padded by this many metres.
 pub(crate) const AABB_PAD_M: f32 = 2.0;
 
-/// Placement of the terrain's grid in the world: row-major `size.x × size.y` cells, cell `(0, 0)`
-/// centred at `origin + 0.5 · cell_m`, the row index running along world +Z.
+/// Placement of the terrain's grid in the metre frame (world ÷ `ElementsUnits::units_per_metre`):
+/// row-major `size.x × size.y` cells, cell `(0, 0)` centred at `origin + 0.5 · cell_m`, the row
+/// index running along +Z.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TerrainGrid {
-    /// World XZ of the minimum corner, m.
+    /// XZ of the minimum corner in the metre frame, m.
     pub origin: Vec2,
     /// Cell edge, m (cells are square).
     pub cell_m: f32,
     /// Cells per axis.
     pub size: UVec2,
-    /// World height of a stored height of 0, m (the terrain transform's `y`).
+    /// Height of a stored height of 0 in the metre frame, m (the terrain transform's `y` ÷ units).
     pub y0: f32,
 }
 
@@ -44,7 +45,7 @@ impl TerrainGrid {
         self.size.as_vec2() * self.cell_m
     }
 
-    /// Whether `p` (world XZ) lies inside the grid.
+    /// Whether `p` (metre-frame XZ) lies inside the grid.
     pub fn contains(&self, p: Vec2) -> bool {
         let local = p - self.origin;
         local.cmpge(Vec2::ZERO).all() && local.cmple(self.extent()).all()
@@ -121,13 +122,13 @@ pub struct TerrainSnapshot {
 }
 
 impl TerrainSnapshot {
-    /// World height of the ground at `p` (world XZ), `None` outside the grid.
+    /// Height of the ground at `p` (metre-frame XZ), m; `None` outside the grid.
     pub fn height(&self, p: Vec2) -> Option<f32> {
         self.grid.contains(p).then(|| self.height_clamped(p))
     }
 
-    /// World height of the ground at `p`, with the edge cells extended outward: defined
-    /// everywhere, for callers (such as `bevy_flora`'s ground) that cannot take `None`.
+    /// Height of the ground at `p` (metre-frame XZ), m, with the edge cells extended outward:
+    /// defined everywhere, for callers (such as `bevy_flora`'s ground) that cannot take `None`.
     pub fn height_clamped(&self, p: Vec2) -> f32 {
         self.grid.y0 + self.grid.sample(&self.surface, p)
     }

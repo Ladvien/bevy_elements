@@ -28,7 +28,7 @@ struct WaterParams {
     lod: array<vec4<f32>, 16>,
     // x: coarsest level.
     top: vec4<f32>,
-    // xy: cloud shadow map origin (world XZ), z: its extent, w: the lights' mean transmittance.
+    // xy: cloud shadow map origin (metre-frame XZ), z: its extent, w: the lights' mean transmittance.
     shadow: vec4<f32>,
     // xyz: unit direction toward the light the map was made for. w: 1 when a map is bound.
     light: vec4<f32>,
@@ -46,6 +46,9 @@ struct WaterParams {
     foam: vec4<f32>,
     // x: the finest wave cascade's texel (m). y: texels a side. z: 1 when a field is bound.
     waves: vec4<f32>,
+    // World units to the metre (`ElementsUnits`): the shader divides the positions Bevy gives it
+    // by this and multiplies the ones it hands back.
+    units: f32,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> water: WaterParams;
@@ -105,23 +108,25 @@ fn morph_k(distance: f32, lod: u32) -> f32 {
 }
 
 // The terrain's CDLOD vertex with the morph measured against the terrain surface (so the water
-// morphs with the ground under it), lifted by the water depth.
+// morphs with the ground under it), lifted by the water depth. In the metre frame: the instance
+// matrix's translation (world units) is divided by `units`.
 fn water_vertex_position(local: vec3<f32>, instance_index: u32) -> vec4<f32> {
     let m = mesh_functions::get_world_from_local(instance_index);
     let lod = mesh_functions::get_tag(instance_index);
+    let origin = vec3<f32>(m[3].x, m[3].y, m[3].z) / water.units;
     let gi = round(local.xz * 32.0);
     let step = water.terrain.grid.cell * f32(1u << lod);
-    var wxz = vec2<f32>(m[3].x, m[3].z) + gi * step;
-    let d = distance(view.lod_view_world_position, vec3<f32>(wxz.x, m[3].y + terrain_height(wxz), wxz.y));
+    var wxz = origin.xz + gi * step;
+    let d = distance(view.lod_view_world_position / water.units, vec3<f32>(wxz.x, origin.y + terrain_height(wxz), wxz.y));
     let odd = gi - 2.0 * floor(gi * 0.5);
     wxz = wxz - odd * step * morph_k(d, lod);
-    return vec4<f32>(wxz.x, m[3].y + terrain_height(wxz) + water_depth_at(wxz) + LIFT, wxz.y, 1.0);
+    return vec4<f32>(wxz.x, origin.y + terrain_height(wxz) + water_depth_at(wxz) + LIFT, wxz.y, 1.0);
 }
 
 @vertex
 fn vertex(v: WaterVertex) -> VertexOutput {
     var out: VertexOutput;
-    let world = water_vertex_position(v.position, v.instance_index);
+    let world = vec4<f32>(water_vertex_position(v.position, v.instance_index).xyz * water.units, 1.0);
     out.world_position = world;
     out.position = position_world_to_clip(world.xyz);
     out.world_normal = vec3<f32>(0.0, 1.0, 0.0);
@@ -271,7 +276,7 @@ fn wave_field(xz: vec2<f32>, footprint: f32) -> vec3<f32> {
         let t = water.waves.x * pow(4.0, f32(c));
         let extent = t * n;
         // The window spans N texels from `floor(camera / t) − N/2`.
-        let middle = floor(view.world_position.xz / t) * t;
+        let middle = floor(view.world_position.xz / water.units / t) * t;
         let reach = abs(xz - middle) / (0.5 * extent);
         let inside = 1.0 - smoothstep(0.85, 0.93, max(reach.x, reach.y));
         let detail = 1.0 - smoothstep(0.6, 1.2, footprint / t);
@@ -286,7 +291,8 @@ fn wave_field(xz: vec2<f32>, footprint: f32) -> vec3<f32> {
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
-    let p = in.world_position.xyz;
+    let world_p = in.world_position.xyz;
+    let p = world_p / water.units;
     // Derivatives of the tile coordinate, taken before the discard (uniform control flow).
     let gx = dpdx(p.xz / water.flow.y);
     let gy = dpdy(p.xz / water.flow.y);
@@ -303,7 +309,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let ripple = flow.normal.xz / flow.normal.y;
     let waves = wave_field(p.xz, footprint);
     let flat_n = normalize(vec3<f32>(ripple.x - waves.x, 1.0, ripple.y - waves.y));
-    let v_dir = normalize(view.world_position - p);
+    let v_dir = normalize(view.world_position / water.units - p);
     // A face steep enough to reflect below the horizon sees, in a real scene, the water and the
     // far shore; the environment map holds only Bevy's ground disc there (tan, with a hard edge
     // at the horizon). Hold its reflection at the horizon: the normal becomes the half vector of
@@ -318,10 +324,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let f = fresnel(cos_v);
 
     // Thickness from the depth prepass: the opaque scene under the water along the view ray.
-    let view_pos = position_world_to_view(p);
+    let view_pos = position_world_to_view(world_p);
     let ray = normalize(view_pos);
     let z_scene = depth_ndc_to_view_z(max(prepass_depth(in.position, 0u), 1e-9));
-    let t_ray = clamp((view_pos.z - z_scene) / max(-ray.z, 1e-3), 0.0, MAX_THICKNESS);
+    let t_ray = clamp((view_pos.z - z_scene) / max(-ray.z, 1e-3) / water.units, 0.0, MAX_THICKNESS);
     let t_eff = refracted_thickness(t_ray, cos_v, water.absorption.w);
 
     // Foam: fast flow, the contact with anything the water meets (shoreline, rocks, posts), and

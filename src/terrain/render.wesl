@@ -37,7 +37,7 @@ struct TerrainMaterialParams {
     lod: array<vec4<f32>, 16>,
     // x: coarsest level.
     top: vec4<f32>,
-    // xy: cloud shadow map origin (world XZ), z: its extent, w: the lights' mean transmittance.
+    // xy: cloud shadow map origin (metre-frame XZ), z: its extent, w: the lights' mean transmittance.
     shadow: vec4<f32>,
     // xyz: unit direction toward the light the map was made for. w: 1 when a map is bound.
     light: vec4<f32>,
@@ -53,6 +53,9 @@ struct TerrainMaterialParams {
     trail: vec4<f32>,
     // x: the beam's share of the light on a horizontal surface.
     trail_light: vec4<f32>,
+    // World units to the metre (`ElementsUnits`): the shader divides the positions Bevy gives it
+    // by this and multiplies the ones it hands back.
+    units: f32,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> material: TerrainMaterialParams;
@@ -108,29 +111,32 @@ fn morph_k(distance: f32, lod: u32) -> f32 {
     return clamp((distance - range.x) / (range.y - range.x), 0.0, 1.0);
 }
 
-// World position of a patch vertex with the CDLOD morph applied (Strugar's morphVertex): the
-// instance matrix's translation is the patch origin (x, terrain y, z); `MeshTag` is the level.
+// Metre-frame position of a patch vertex with the CDLOD morph applied (Strugar's morphVertex): the
+// instance matrix's translation is the patch origin in world units (x, terrain y, z), divided by
+// `units`; `MeshTag` is the level.
 fn terrain_vertex_position(local: vec3<f32>, instance_index: u32) -> vec4<f32> {
     let m = mesh_functions::get_world_from_local(instance_index);
     let lod = mesh_functions::get_tag(instance_index);
+    let origin = vec3<f32>(m[3].x, m[3].y, m[3].z) / material.units;
     let gi = round(local.xz * 32.0);
     let step = material.terrain.grid.cell * f32(1u << lod);
-    var wxz = vec2<f32>(m[3].x, m[3].z) + gi * step;
-    let d = distance(view.lod_view_world_position, vec3<f32>(wxz.x, m[3].y + terrain_height(wxz), wxz.y));
+    var wxz = origin.xz + gi * step;
+    let d = distance(view.lod_view_world_position / material.units, vec3<f32>(wxz.x, origin.y + terrain_height(wxz), wxz.y));
     let odd = gi - 2.0 * floor(gi * 0.5);
     wxz = wxz - odd * step * morph_k(d, lod);
     // The snow lies on the surface: the same depth in the prepass, so the depths agree.
-    return vec4<f32>(wxz.x, m[3].y + terrain_height(wxz) + snow_depth(wxz), wxz.y, 1.0);
+    return vec4<f32>(wxz.x, origin.y + terrain_height(wxz) + snow_depth(wxz), wxz.y, 1.0);
 }
 
 @vertex
 fn vertex(v: TerrainVertex) -> VertexOutput {
     var out: VertexOutput;
-    let world = terrain_vertex_position(v.position, v.instance_index);
+    let metres = terrain_vertex_position(v.position, v.instance_index);
+    let world = vec4<f32>(metres.xyz * material.units, 1.0);
     out.world_position = world;
     out.position = position_world_to_clip(world.xyz);
     @if(!PREPASS_PIPELINE || NORMAL_PREPASS_OR_DEFERRED_PREPASS) {
-        let g = terrain_gradient(world.xz);
+        let g = terrain_gradient(metres.xz);
         out.world_normal = normalize(vec3<f32>(-g.x, 1.0, -g.y));
     }
     @if(PREPASS_PIPELINE && MOTION_VECTOR_PREPASS)
@@ -242,7 +248,7 @@ fn brightest_light() -> vec3<f32> {
 // The trail field at the fragment `p` on ground of slope `g` (∂y/∂x, ∂y/∂z): a flat no-op
 // outside the window or without trails.
 fn trail_at(p: vec3<f32>, g: vec2<f32>) -> TrailHit {
-    let eye = view.world_position;
+    let eye = view.world_position / material.units;
     let fade = trail_fade(p.xz, eye.xz, material.trail);
     if fade <= 0.0 {
         return trail_none(p.xz);
@@ -254,7 +260,7 @@ fn trail_at(p: vec3<f32>, g: vec2<f32>) -> TrailHit {
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
     var pbr_input = pbr_input_from_standard_material(in, is_front);
-    let p = in.world_position.xyz;
+    let p = in.world_position.xyz / material.units;
 
     // Cell fetch: sediment and water bilinear; the normal from the stored gradient.
     let t = grid_taps(material.terrain.grid, p.xz);
@@ -290,7 +296,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let rough = mix(0.9, 0.95, w.z);
 
     // Detail: 3D noise at the visible position (a procedural function has no projection axis).
-    let dist = distance(view.world_position, pv);
+    let dist = distance(view.world_position / material.units, pv);
     albedo = albedo * (1.0 + 0.25 * fbm3(pv * 0.8, 3u) * (1.0 - smoothstep(40.0, 120.0, dist)));
     let grad = perlin3_d(pv * 0.8).yzw * 0.8;
     let bump = 0.04 * (1.0 - smoothstep(0.0, 60.0, dist));
@@ -337,7 +343,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     pbr_input.material.reflectance = surface.reflectance;
     pbr_input.world_normal = n;
     pbr_input.N = n;
-    pbr_input.world_position = vec4<f32>(pv, 1.0);
+    pbr_input.world_position = vec4<f32>(pv * material.units, 1.0);
     pbr_input.diffuse_occlusion = pbr_input.diffuse_occlusion * trail.open;
 
     let ratio = vec3<f32>(cloud_shadow_ratio(p)) * bed_transmittance(water_depth);

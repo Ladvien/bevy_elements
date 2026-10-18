@@ -49,6 +49,10 @@ struct CloudParams {
     /// x: extinction of the weather's air above clear air, m⁻¹; the composite fogs sky pixels
     /// with it, so the sky converges on `haze.xyz` as the ground does. 0 for clear air.
     air: vec4<f32>,
+    /// x: world units per metre (`ElementsUnits`). Everything above is in metres; Bevy's view
+    /// matrices and depth are in world units, so the shaders divide what they take from them by
+    /// this and multiply what they hand back.
+    units: vec4<f32>,
 }
 
 const PI: f32 = 3.14159265358979;
@@ -214,9 +218,10 @@ fn is_orthographic(clip_from_view: mat4x4<f32>) -> bool {
     return clip_from_view[3].w == 1.0;
 }
 
-/// The ray through screen position `uv` (0–1, top-left origin). A perspective view's starts at
-/// the eye `cam`. An orthographic view's runs along the view direction from the pixel's point on
-/// the plane through `focus` across it (Marschner & Shirley §4.3.1, view-anchor.md Model 3 and
+/// The ray through screen position `uv` (0–1, top-left origin), in metres: the view matrices
+/// are in world units, `units` of them to the metre. A perspective view's starts at
+/// the eye `cam` (world). An orthographic view's runs along the view direction from the pixel's point on
+/// the plane through `focus` (metres) across it (Marschner & Shirley §4.3.1, view-anchor.md Model 3 and
 /// Deviation 5): an isometric camera's stand-off is not air, and a camera far back and high up
 /// would otherwise start its rays inside or above a low deck that is not between the viewer and
 /// the scene. Without a focus `focus` is the camera and the plane is its own. The direction
@@ -227,32 +232,35 @@ fn view_ray(
     cam: vec3<f32>,
     orthographic: bool,
     focus: vec3<f32>,
+    units: f32,
 ) -> ViewRay {
     let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
     let n = world_from_clip * vec4<f32>(ndc, 1.0, 1.0);
-    let on_near = n.xyz / n.w;
+    let on_near = n.xyz / n.w / units;
     if orthographic {
         let m = world_from_clip * vec4<f32>(ndc, 0.5, 1.0);
-        let dir = normalize(m.xyz / m.w - on_near);
+        let dir = normalize(m.xyz / m.w / units - on_near);
         return ViewRay(on_near + dir * dot(focus - on_near, dir), dir);
     }
-    return ViewRay(cam, normalize(on_near - cam));
+    let eye = cam / units;
+    return ViewRay(eye, normalize(on_near - eye));
 }
 
-/// Distance along the ray from its `origin` to the surface seen at `uv` with reverse-Z `depth`,
-/// negative for a surface in front of the origin; a huge value for the sky (depth 0).
+/// Distance along the ray (metres) from its `origin` to the surface seen at `uv` with reverse-Z
+/// `depth`, negative for a surface in front of the origin; a huge value for the sky (depth 0).
 fn scene_distance(
     uv: vec2<f32>,
     depth: f32,
     world_from_clip: mat4x4<f32>,
     ray: ViewRay,
+    units: f32,
 ) -> f32 {
     if depth <= 0.0 {
         return NO_SURFACE;
     }
     let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
     let p = world_from_clip * vec4<f32>(ndc, depth, 1.0);
-    return dot(p.xyz / p.w - ray.origin, ray.dir);
+    return dot(p.xyz / p.w / units - ray.origin, ray.dir);
 }
 
 /// Offset of the pixel a march texel owns this frame inside its k×k block: the Bayer order

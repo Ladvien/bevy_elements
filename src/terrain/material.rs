@@ -12,6 +12,7 @@ use bevy::shader::ShaderRef;
 
 use super::lod::{LodConfig, MAX_LEVELS};
 use super::{TerrainParamsGpu, TerrainState};
+use crate::ElementsUnits;
 use crate::clouds::CloudShadows;
 use crate::cover::{CoverState, WetnessSettings};
 use crate::trails::TrailState;
@@ -33,7 +34,7 @@ pub(crate) fn insert_placeholder(buffers: &mut Assets<ShaderBuffer>) {
 }
 
 /// Uniform of the owned terrain material. Mirrors `TerrainMaterialParams` of `render.wesl`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, ShaderType, Reflect)]
+#[derive(Clone, Copy, Debug, PartialEq, ShaderType, Reflect)]
 #[reflect(opaque)]
 pub struct TerrainMaterialParams {
     pub(crate) terrain: TerrainParamsGpu,
@@ -41,7 +42,7 @@ pub struct TerrainMaterialParams {
     pub(crate) lod: [Vec4; MAX_LEVELS],
     /// x: coarsest level.
     pub(crate) top: Vec4,
-    /// Cloud shadow map origin xy, extent, the lights' mean transmittance.
+    /// Cloud shadow map origin xy (metre frame), extent, the lights' mean transmittance.
     pub(crate) shadow: Vec4,
     /// Unit direction toward the light; w = 1 with a map.
     pub(crate) light: Vec4,
@@ -59,6 +60,28 @@ pub struct TerrainMaterialParams {
     /// x: the share of the light on a horizontal surface carried by the sun or moon's beam, which
     /// a trail's self-shadow removes.
     pub(crate) trail_light: Vec4,
+    /// World units to the metre ([`ElementsUnits`](crate::ElementsUnits)): the vertex and
+    /// fragment stages divide the positions Bevy gives them by it and multiply the ones they
+    /// hand back.
+    pub(crate) units: f32,
+}
+
+impl Default for TerrainMaterialParams {
+    fn default() -> Self {
+        Self {
+            terrain: TerrainParamsGpu::default(),
+            lod: [Vec4::ZERO; MAX_LEVELS],
+            top: Vec4::ZERO,
+            shadow: Vec4::ZERO,
+            light: Vec4::ZERO,
+            absorption: Vec4::ZERO,
+            cover: Vec4::ZERO,
+            ripple: Vec4::ZERO,
+            trail: Vec4::ZERO,
+            trail_light: Vec4::ZERO,
+            units: 1.0,
+        }
+    }
 }
 
 /// The extension that turns a `StandardMaterial` into the terrain's displaced, layer-blended
@@ -115,7 +138,7 @@ pub type TerrainMaterial = ExtendedMaterial<StandardMaterial, TerrainExtension>;
 #[reflect(opaque)]
 pub struct GroundParams {
     pub(crate) terrain: TerrainParamsGpu,
-    /// Cloud shadow map origin xy, extent, the lights' mean transmittance.
+    /// Cloud shadow map origin xy (metre frame), extent, the lights' mean transmittance.
     pub(crate) shadow: Vec4,
     /// Unit direction toward the light; w = 1 with a map.
     pub(crate) light: Vec4,
@@ -132,6 +155,8 @@ pub struct GroundParams {
     pub(crate) trail: Vec4,
     /// As `TerrainMaterialParams::trail_light`.
     pub(crate) trail_light: Vec4,
+    /// As `TerrainMaterialParams::units`.
+    pub(crate) units: f32,
 }
 
 /// `GroundParams::gate.x` for a ground that is not gated by depth below the column top.
@@ -149,6 +174,7 @@ impl Default for GroundParams {
             gate: Vec4::new(NO_COLUMN_GATE, 0.0, 0.0, 0.0),
             trail: Vec4::ZERO,
             trail_light: Vec4::ZERO,
+            units: 1.0,
         }
     }
 }
@@ -299,6 +325,7 @@ pub(super) fn update_materials(
     state: Option<Res<TerrainState>>,
     runtime: Res<super::TerrainRuntime>,
     shadows: Option<Res<CloudShadows>>,
+    units: Res<ElementsUnits>,
     cover: Option<Res<CoverState>>,
     wetness: Option<Res<WetnessSettings>>,
     globals: Option<Res<ElementsGlobals>>,
@@ -336,6 +363,7 @@ pub(super) fn update_materials(
             ripple,
             trail: trail_window,
             trail_light,
+            units: units.per_metre(),
         };
         let ids: Vec<_> = terrain_materials.iter().map(|(id, _)| id).collect();
         for id in ids {
@@ -369,6 +397,7 @@ pub(super) fn update_materials(
         gate: GroundParams::default().gate,
         trail: trail_window,
         trail_light,
+        units: units.per_metre(),
     };
     let ids: Vec<_> = ground_materials.iter().map(|(id, _)| id).collect();
     for id in ids {

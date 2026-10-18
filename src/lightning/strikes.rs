@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use super::bolt::{self, Strokes};
 use crate::climate::{Climate, Weather, hash64};
 use crate::clouds::CloudLayer;
-use crate::plugin::ElementsView;
+use crate::plugin::{ElementsUnits, ElementsView};
 use crate::query::EnvironmentSnapshot;
 
 /// Decouples the strike streams from the hourly weather scheduler, which hashes the same way:
@@ -18,12 +18,12 @@ pub const STRIKE_RADIUS_M: f32 = 8000.0;
 /// Speed of sound used for the thunder delay, m/s.
 pub const SPEED_OF_SOUND_MS: f32 = 343.0;
 
-/// Script a strike: lightning hits `at` (the attachment point; its `y` is the ground height) on
-/// the next frame.
+/// Script a strike: lightning hits `at` (the attachment point, in world units; its `y` is the
+/// ground height) on the next frame.
 #[derive(Message, Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct StrikeLightning {
-    /// Where the bolt attaches, world space, m.
+    /// Where the bolt attaches, world units.
     pub at: Vec3,
 }
 
@@ -31,7 +31,7 @@ pub struct StrikeLightning {
 #[derive(Message, Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LightningStrike {
-    /// The attachment point, world space, m.
+    /// The attachment point, world units.
     pub position: Vec3,
     /// The bolt's shape seed: the same seed and attachment point give the same bolt.
     pub seed: u64,
@@ -42,7 +42,7 @@ pub struct LightningStrike {
 #[derive(Message, Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Thunder {
-    /// Where the strike hit, world space, m.
+    /// Where the strike hit, world units.
     pub position: Vec3,
     /// Distance from the followed camera to the strike when it struck, m.
     pub distance_m: f32,
@@ -114,7 +114,7 @@ impl StrikeProcess {
 pub(crate) struct ActiveBolt {
     pub bolt: bolt::Bolt,
     pub strokes: Strokes,
-    /// The followed camera's position when the bolt struck, m.
+    /// The followed camera's position when the bolt struck, metre frame, m.
     pub view: Vec3,
     /// Seconds since the first stroke at the start of this frame; negative when the strike falls
     /// inside the frame that spawned it.
@@ -166,6 +166,7 @@ pub(crate) struct Clocks<'w> {
 pub(crate) fn run_strikes(
     clocks: Clocks,
     weather: Res<Weather>,
+    units: Res<ElementsUnits>,
     climate: Res<Climate>,
     view: Res<ElementsView>,
     snapshot: Res<EnvironmentSnapshot>,
@@ -197,19 +198,29 @@ pub(crate) fn run_strikes(
             (at, d.seed, start - d.time)
         })
         .collect();
+    // The process works in the metre frame; a scripted strike's `at` is in world units.
     for strike in io.scripted.read() {
         let n = strikes.scripted;
         strikes.scripted += 1;
-        fired.push((strike.at, hash64(climate.seed ^ DOMAIN, (1 << 63) | n), 0.0));
+        fired.push((
+            units.point_to_metres(strike.at),
+            hash64(climate.seed ^ DOMAIN, (1 << 63) | n),
+            0.0,
+        ));
     }
     let base_m = CloudLayer::from_weather(&weather).base_m;
     for (position, seed, age) in fired {
-        io.strikes.write(LightningStrike { position, seed });
+        // Messages carry world positions; the distance is in metres.
+        let world = units.point_to_world(position);
+        io.strikes.write(LightningStrike {
+            position: world,
+            seed,
+        });
         let distance_m = position.distance(view.position);
         strikes.pending.push(PendingThunder {
             due: now_real + f64::from(distance_m / SPEED_OF_SOUND_MS),
             thunder: Thunder {
-                position,
+                position: world,
                 distance_m,
                 loudness: 1.0 / (1.0 + distance_m / 1000.0),
             },
