@@ -275,7 +275,7 @@ pub(crate) struct HydroParams {
     /// x: rain quantum, m. y: evaporation quantum, m. z: terrain y0 − reference elevation, m.
     /// w: air temperature at the reference elevation, °C.
     weather: Vec4,
-    /// x: lapse, °C/m. y: speed clamp, m/s. z: 1 in a bake. w: unused.
+    /// x: lapse, °C/m. y: speed clamp, m/s. z: 1 in a bake. w: `Weather::snow_possible`.
     misc: Vec4,
     /// x: closed boundary. y: erosion on. z: sources uploaded. w: blockers uploaded.
     flags: UVec4,
@@ -765,7 +765,7 @@ fn run_hydrology(
             LAPSE_RATE_C_PER_M,
             speed_cap_ms(cell, step_s),
             f32::from(u8::from(runtime.bake.is_some())),
-            0.0,
+            weather.snow_possible,
         ),
         flags: UVec4::new(
             u32::from(settings.boundary == HydrologyBoundary::Closed),
