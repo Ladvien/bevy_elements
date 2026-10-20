@@ -1732,3 +1732,140 @@ band's compositing before the gradation can be measured. Files: `/tmp/i28/findin
 5. **The ground's large-scale variation** (patches of longer and shorter grass, bare earth,
    trampled areas) — the masks vary only with slope and sediment, so a plain is one colour at
    200 m. A low-frequency, contrast-only modulation driven by the same noise would fix it.
+
+## Iteration 29 — 2026-10-20 — rock has a material, and the ground has a place in it
+
+**Focus:** the ground, the earth, the mountains — the stuff that's stood on.
+
+**Commits:** `578b9e1` (the research note `docs/research/rock-material.md`), `11b1490` (the
+implementation), `71794da` (the split: the turf off the faces, the rock's material), `c0871aa`
+(the rock's colour, the relief and the scree), `ebc5c9b` (the docs, the changelog and the
+showcase images), this log. **Sibling repos:** none. **Not released.**
+
+### Candidates
+
+| Rank | Candidate | Class | Decision |
+|---|---|---|---|
+| 1 | The rock faces were a woven herringbone (coherence 0.71 at a fixed 43.5° world direction) and the rock had no material of its own (one flat colour, saturation 15.6 against the grass's 54.8) | 1 | **this iteration** |
+| 2 | The plain at 6 m was one uniform green — the layer masks vary only with slope and sediment | 2 | **this iteration** (the same change) |
+| 3 | The slope band's soil drew a red-brown contour line round every rock | 1 | **this iteration** (the same change) |
+| 4 | The isometric town at night is black (22 h, Rain: mean 1 DN) | 1 | carried |
+| 5 | The overcast dome is flat (1.08:1 against CIE's 2:1–3:1), with its blocker diagnosed in iteration 28 | 1 | carried |
+
+Rank 1 beat rank 4 because it is in every outdoor frame of the game the crate ships in — a
+player looks at rock whenever the terrain is steep, and the mountains *are* the domain the focus
+names. Rank 2 and 3 turned out to be the same defect family (the layer masks) and were taken
+with it.
+
+### What changed
+
+- **The ground's turf and the rock's material are two different noises.** The turf — grass, soil
+  and sand — is the crate's 2D noise in the world XZ plane, which is the *projection* of the
+  surface onto that plane, and it is right on the near-horizontal surfaces where the plane's
+  projection is the surface. It must not reach a slope: the plane's lattice is stretched along
+  the slope and shows through as a weave at a fixed world direction. So the turf is gated off
+  (`turf_gate`, closed at 37°, open at 23°) and the rock's ramp opens at 30°, and the rock's
+  material is the crate's **3D noise at the 3D point**, which has no projection at all.
+- **The rock has a material:** beds on a *tilted* plane, a second warmer bed tone, a fracture
+  network of ridged noise (a Worley cell network bounds cells and read as a giraffe's hide), the
+  rock's own grain, and a relief so the light does work on the face.
+- **The ground has a place in it:** a low-frequency field takes soil from the grass, so a plain
+  gets patches of bare earth. Andersson's Overlay detail cannot do this — it "does not affect
+  areas where the base procedural mask is 0.0 or 1.0", and a plain's grass mask is 1 everywhere.
+- **The slope band's soil is broken into patches and tapers into the rock**, so the warm brown
+  that ringed every grass patch is gone.
+
+### Sources
+
+- **Lagae, Lefèbvre, Cook, DeRose, Drettakis, Ebert, Lewis, Perlin & Zwicker (2010)**, *A survey
+  of procedural noise functions*, CGF 29(8), `10.1111/j.1467-8659.2010.01827.x` (corpus; §3.2.1
+  wavelet noise, §5.2.1 frequency clamping, §5 on sampling a noise on a surface).
+- **Cook & DeRose (2005)**, *Wavelet noise*, ACM TOG 24(3), `10.1145/1073204.1073264` — read
+  through the survey's account; the PDF at `graphics.pixar.com` returned HTML and the ACM copy
+  is paywalled. **Not indexed.**
+- **Lagae, Vangorp, Lenaerts & Dutré (2010)**, *Procedural isotropic stochastic textures by
+  example*, Computers & Graphics 34(3), `10.1016/j.cag.2010.05.004` — downloaded to
+  `/tmp/research/pdf/lagae2010.pdf` (9.5 MB) and read with `pdftotext -layout` (715 lines).
+  **Not indexed.**
+- **Weiß, Bayer & Westermann (2020)**, *Triplanar displacement mapping for terrain rendering*,
+  Eurographics 2020, `10.2312/egs.20201016` — the preprint downloaded to
+  `/tmp/research/pdf/weiss2020.pdf` and read with `pdftotext -layout` (295 lines). **Not
+  indexed.**
+- **Andersson (2007)**, *Terrain rendering in Frostbite using procedural shader splatting*,
+  SIGGRAPH 2007 *Advances* ch. 5 (corpus `10.1145_1281500.1281668`) — the Overlay blend and its
+  "does not affect areas where the base procedural mask is 0.0 or 1.0".
+- **Söderlund (2015)**, *Procedural Modeling of Rocks*, Uppsala University MSc thesis — the record
+  and the abstract were read; the PDF did not download. **Not obtained.**
+
+### The critique and the verdicts (`/tmp/i29/critique.md`)
+
+| Round | Finding | Verdict |
+|---|---|---|
+| 1 | The surface-frame projection put a herringbone moiré over every face (the normal comes from the terrain's 2 m cell gradient, so the frame rotates per pixel and the noise's lattice swims in it); the Worley fractures were a giraffe's hide; the rock was one flat colour; the plain was one colour | FAIL |
+| 2 | The 3D noise at the 3D point removed the weave, but the beds on the world's height made the massif a topographic map, and a fine corduroy came back at 700 m | NOT YET |
+| 3 | The tilted beds and the split fixed the corduroy, but the rock was too light, the pink patches covered 16.75 % of the 2 m face, and the grass had an orange rim | NOT YET |
+| 4 | The rock's grain was too contrasty (sandpaper), the saturation 7.6, and the scree was missing | NOT YET |
+| 5 | The grain's contrast down, the relief up, the rock's hue in, the scree in: the face is stone, the massif is grey stone with scree, the plain has patches, the pink and the orange are gone | **GREAT** (the scree and the grass's own colour are NOT YET — see below) |
+
+| Feature | Verdict |
+|---|---|
+| The rock's face (the weave) | **GREAT** |
+| The mountain from 700 m | **GREAT** |
+| The plain at 6 m | **GREAT** |
+| The hills' ground at 6 m | **GREAT** |
+| The scree at the grass's foot | NOT YET (a graded band, not a scatter) |
+| The grass's own colour | NOT YET (a pure green with no dryness — not this change's business) |
+
+**The change as a whole: GREAT.** The two blockers — the weave and the rock with no material —
+are fixed, the colour defects are gone, and the cost went *down*.
+
+### Measurements
+
+- **The weave.** The structure tensor's coherence of the near band, and its direction:
+
+  | | 2 m | 6 m |
+  |---|---|---|
+  | before | 0.709 at 43.3° | 0.655 at 45.2° |
+  | after | 0.580 at 33.8° | 0.675 at 33.0° |
+
+  The before's two bands shared a *world* direction (43.3° and 45.2°) — the signature of a
+  lattice. The after's do not (33.8° and 33.0°), and the remaining anisotropy is the terrain's
+  own relief: a 9 px high-pass of the face keeps the coherence at 0.676, and the *baseline* has
+  the same at 0.625, because the terrain's 2 m cells' normals are anisotropic on a slope. The
+  note's target of a coherence below 0.45 was therefore wrong — it asked the whole band to be
+  isotropic when the terrain's relief cannot be — and is amended in the note with the
+  measurement that replaces it.
+- **The colour defects.** Pink (a warm brown mixed with a cool grey) and orange (a warm brown
+  ring round the grass): 16.75 % and 9.67 % of the mountain's 2 m and 6 m faces before, **0.00 %
+  and 0.00 %** after; the orange rim from 1415 pixels to none; the hills' pink from 0.32 % to
+  0.04 %.
+- **The plain.** The 60 px block standard deviation 2.83 → 3.34 DN, the mean within 0.02 DN.
+- **The flat ground is unchanged.** The near-field standard deviation 6.11 → 5.86 DN, the mean
+  133.66 → 133.31 DN.
+- **Cost.** `bench_elements`, High, 1920 × 1080, `mountains`, the minimum over the
+  diagnostic history, two runs of each build alternating in one session, the GPU at
+  1695–1725 MHz: **`main_opaque_pass_3d` 0.136 ms on the baseline build, 0.127 ms on this
+  one** — the mask's fBm went from four octaves to one and that pays for the rock's material.
+  The GPU was contended for part of the session (vLLM at 94 %); the llama-swap models were
+  evicted with the `gpu-tenant` lease's own recipe and the numbers are from the clean runs.
+- **The full gate.** `cargo test` 252, clippy, doc, wasm, the GPU integration suite (22 files),
+  the lib GPU modules clouds (10), terrain (8), cover (8) and dust (6), and `the_horizon_sky`
+  alone: all pass.
+
+### The next five items, ranked
+
+1. **The scree is a graded band, not a scatter** — the grass meets the stone in a smooth wash
+   where it should be stones of many sizes with turf between them. The idea and the place are
+   right; the scatter is not there. The natural next piece of work on this material, and the
+   rock's grain needs a *cell* structure for it (a Worley network of *stones*, not of walls).
+2. **The grass has no dryness.** A pure green (RGB 120, 147, 92, saturation 55) with no dry
+   grass, no litter and no yellowing at the edges. It is the crate's grass albedo and this
+   change did not touch it, but against the rock's grey it reads as a colour change rather than
+   as a place, and a meadow at a stone's foot wants some dryness in it.
+3. **The isometric town at night is black** (22 h, Rain: mean 1 DN), carried three iterations.
+4. **The overcast dome is flat**, with its blocker diagnosed in iteration 28 (the `sky_gain` leak
+   at grazing); it carries its Eddington implementation and its measurements in `/tmp/i28`.
+5. **A 25 mm/h storm hides the whole town under an orthographic camera**, carried. The rain's
+   *readable* look is also less legible than the physical one (measured in the last iteration:
+   the readable streaks carry 32 DN of contrast against the grass where the physical ones carry
+   44), which is the defect the town capture keeps showing.
