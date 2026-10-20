@@ -11,7 +11,7 @@
 // and four loads; the world height is `misc.x + surface`.
 
 import bevy_elements::grid::GridParams;
-import bevy_elements::noise::{perlin3_d, seed_offset};
+import bevy_elements::noise::{perlin2_d, perlin3_d, seed_offset};
 
 struct TerrainParams {
     grid: GridParams,
@@ -33,19 +33,14 @@ const DETAIL_COARSE_M: f32 = 1.25;
 /// Feature size of the fine detail's base octave, m: the near-field grain.
 const DETAIL_FINE_M: f32 = 0.09;
 /// Amplitude of the coarse detail as a fraction of the albedo.
-///
-/// The detail is the crate's **3D** noise now (see `detail_scale`), and the 3D noise's rms is
-/// 0.2268 where the 2D one's was 0.3035 — measured in the crate's own mirror — so the
-/// amplitudes carry the factor 1.338 that keeps the ground's grain at the level iteration 28
-/// fitted it to. Without it the near field's standard deviation fell from 6.11 to 4.37 DN.
-const DETAIL_COARSE_AMP: f32 = 0.268;
+const DETAIL_COARSE_AMP: f32 = 0.20;
 /// Amplitude of the fine detail as a fraction of the albedo.
-const DETAIL_FINE_AMP: f32 = 1.138;
+const DETAIL_FINE_AMP: f32 = 0.85;
 /// Height amplitude of each scale's base octave, m: the bump gradient is the gradient of a
 /// height field of this amplitude, so the coarse scale reproduces the old
 /// `0.04 × 0.8 = 0.032` per unit of the noise's derivative (`ground-detail.md` Parameters).
-const DETAIL_COARSE_HEIGHT_M: f32 = 0.060;
-const DETAIL_FINE_HEIGHT_M: f32 = 0.024;
+const DETAIL_COARSE_HEIGHT_M: f32 = 0.045;
+const DETAIL_FINE_HEIGHT_M: f32 = 0.018;
 /// Octaves of each scale.
 const DETAIL_COARSE_OCTAVES: u32 = 4u;
 const DETAIL_FINE_OCTAVES: u32 = 3u;
@@ -79,25 +74,56 @@ struct ScaleDetail {
 /// One detail scale: `octaves` Perlin octaves from `base_m` down by halving (persistence 0.5, as
 /// `fbm3` in `noise.wesl`), each band-limited by its own feature size.
 ///
-/// The octaves are the crate's **3D** gradient noise, evaluated at the 3D surface point. This is
-/// the fix for the weave, and the two earlier attempts are the two ways to get it wrong:
+/// The octaves are the crate's **2D** gradient noise in the world XZ plane, and the gradient is
+/// carried back to the world as a surface gradient. This is the ground's *turf*, and the turf
+/// is on the near-horizontal surfaces, where the plane's projection is the surface.
 ///
-/// - A 2D noise in the **world XZ plane** is the *projection* of the surface onto the plane, so
-///   on a slope the plane's lattice is stretched along the slope and the lattice shows through
-///   as a weave at a fixed world direction: 43.5 degrees at 2 m and 44.0 degrees at 6 m on a 45
-///   degree face (`rock-material.md` Model 1). That was iteration 28's fix for the streak below.
-/// - A per-pixel **surface frame** — projecting into the frame of the surface's own normal —
-///   is isotropic in principle, but the normal comes from the terrain's 2 m cell gradient and so
-///   changes from pixel to pixel: the frame rotates, the noise's lattice swims in it, and the
-///   result is a herringbone moiré. Measured on the capture: a fine diagonal hatch over the
-///   whole face.
-/// - The 3D noise at the 3D point has **no projection at all**, so it is the same field seen
-///   from every direction and stays put on the surface. Lagae et al. 2010 §5's warning is
-///   about *slicing* a 3D noise onto a 2D surface (taking `z = const`), not about evaluating
-///   the 3D function at the surface's own point; the crate's 3D noise has 3D lattice gradients
-///   and so does not have the compressed-axis defect that made the slice streak
-///   (`ground-detail.md` Deviation 1).
+/// It must not reach a slope. A 2D noise in the world XZ plane is the *projection* of the
+/// surface onto that plane, so on a slope the plane's lattice is stretched along the slope and
+/// the lattice shows through as a weave at a fixed world direction: 43.5 degrees at 2 m and
+/// 44.0 degrees at 6 m on a 45 degree face (`rock-material.md` Model 1). The upness gate in
+/// `render.wesl` keeps the turf off the faces, and the rock's own material — the 3D noise at the
+/// 3D point, which has no projection at all — takes over there.
 fn detail_scale(
+    p: vec3<f32>,
+    base_m: f32,
+    octaves: u32,
+    footprint_m: f32,
+    seed: u32,
+) -> ScaleDetail {
+    var out = ScaleDetail(0.0, 0.0, vec3<f32>(0.0), 0.0);
+    var feature = base_m;
+    var weight = 0.5;
+    var q = p.xz / base_m;
+    for (var o = 0u; o < octaves; o += 1u) {
+        let keep = detail_keep(feature, footprint_m);
+        if keep > 0.0 {
+            let off = seed_offset(seed + o);
+            let n = perlin2_d(q + off.xz);
+            out.sum += weight * keep * n.x;
+            // The gradient is in the plane; the bump tilts the surface by it.
+            out.grad += weight * keep * vec3<f32>(n.y, 0.0, n.z) / feature;
+            out.present = max(out.present, keep);
+        }
+        out.norm += weight;
+        weight *= 0.5;
+        feature *= 0.5;
+        q *= 2.0;
+    }
+    return out;
+}
+
+/// One detail scale in the crate's **3D** noise, evaluated at the 3D surface point: the same
+/// octave sum as `detail_scale`, but with no projection, so it is the same field seen from every
+/// direction and it stays put on the surface.
+///
+/// This is what the rock's material is made of. A per-pixel *surface frame* was tried and
+/// rejected: the normal comes from the terrain's 2 m cell gradient, so the frame rotates from
+/// pixel to pixel, the noise's lattice swims in it, and the result is a herringbone moiré
+/// (measured on the capture: a fine diagonal hatch over the whole face). Lagae et al. 2010 §5's
+/// warning is about *slicing* a 3D noise onto a 2D surface (taking `z = const`), not about
+/// evaluating the 3D function at the surface's own point.
+fn detail_scale_3d(
     p: vec3<f32>,
     base_m: f32,
     octaves: u32,
@@ -125,65 +151,38 @@ fn detail_scale(
     return out;
 }
 
-/// The rock's fracture network: a ridged sum of the crate's 3D noise, `1 - |n|`, which is near
-/// zero on a *line* where the noise crosses zero and large away from it. The lines are the
-/// joints along which rock breaks; a Worley cell network bounds cells instead and reads as a
-/// giraffe's hide (`rock-material.md`, Model 2).
-///
-/// The octaves are band-limited by their own feature size, like the ground's detail (Lagae et
-/// al. 2010 section 5.2.1). The result is 0 on a joint and 1 in the rock between them.
-fn rock_ridge(p: vec3<f32>, base_m: f32, octaves: u32, footprint_m: f32, seed: u32) -> f32 {
-    var sum = 0.0;
-    var norm = 0.0;
-    var feature = base_m;
-    var weight = 0.5;
-    var q = p / base_m;
-    for (var o = 0u; o < octaves; o += 1u) {
-        let keep = detail_keep(feature, footprint_m);
-        if keep > 0.0 {
-            let off = seed_offset(seed + o);
-            let n = perlin3_d(q + off).x;
-            // The ridge: 1 where the noise is zero, 0 where it is at its extreme. Squaring the
-            // absolute value sharpens the line without moving it.
-            let r = 1.0 - abs(n) * abs(n);
-            sum += weight * keep * r;
-        }
-        norm += weight;
-        weight *= 0.5;
-        feature *= 0.5;
-        q *= 2.0;
-    }
-    return sum / max(norm, 1e-6);
-}
-
 // ---------------------------------------------------------------------------------------------
 // Rock's own material (`docs/research/rock-material.md`)
 // ---------------------------------------------------------------------------------------------
 
 /// Spacing of the beds, m of world height. A bed is a *thick* band of rock, and a cliff shows a
 /// few of them, not a hatch: at 3.5 m a 20 m face shows six beds, at 12 m it shows under two.
-const ROCK_BED_M: f32 = 12.0;
+/// At 4.5 m the face a player stands at — four metres of it — shows one or two bands, which is
+/// what reads as bedding; at 12 m it showed none and the rock was a wash.
+const ROCK_BED_M: f32 = 4.5;
 /// How far the beds dip and undulate, m of height.
 const ROCK_BED_WARP_M: f32 = 3.5;
-/// The scale of the dip's undulation, m.
-const ROCK_BED_WARP_SCALE_M: f32 = 60.0;
+/// The bedding plane's tilt: the direction the beds run and how steeply they rise. A bed is a
+/// surface inside the rock, and it is *tilted* — the world's height is not the rock's bedding,
+/// and a massif banded by its own contours is a topographic map, not a mountain.
+const ROCK_BED_TILT: vec3<f32> = vec3<f32>(0.32, 0.90, 0.28);
 /// The second rock tone, relative to the first: a *darker*, browner bed. Bedded rock alternates
 /// light and dark bands, and the dark one is darker rather than lighter: the crate's rock
 /// albedo is already 0.10 linear, and a brighter second tone only washed the face further.
-const ROCK_SECOND_TONE: vec3<f32> = vec3<f32>(0.72, 0.66, 0.60);
-/// How far the beds' tone is mixed in, 0 to 1.
-const ROCK_BED_MIX: f32 = 0.55;
-/// The scale of the fracture network, m: the feature size of its coarsest octave.
-const ROCK_FRACTURE_M: f32 = 1.6;
-/// The fracture's width, as a fraction of the ridge's range.
-const ROCK_FRACTURE_WIDTH: f32 = 0.16;
-/// How dark the fractures are, as a multiplier on the rock's albedo.
-const ROCK_FRACTURE_DARKEN: f32 = 0.58;
-/// The rock's own grain amplitude, as a fraction of the rock's albedo.
-const ROCK_GRAIN_AMP: f32 = 0.55;
-/// The rock's grain scales, m.
-const ROCK_GRAIN_COARSE_M: f32 = 1.1;
+const ROCK_SECOND_TONE: vec3<f32> = vec3<f32>(0.86, 0.78, 0.70);
+/// How far the beds' tone is mixed in, 0 to 1. The tone itself is 0.72, so at 0.85 the beds
+/// span a 20 % albedo drop — enough to read as bands on a lit face.
+const ROCK_BED_MIX: f32 = 0.34;
+/// The rock's own grain scales, m: the coarse one is the field the fractures are ridges of.
+const ROCK_GRAIN_COARSE_M: f32 = 2.6;
 const ROCK_GRAIN_FINE_M: f32 = 0.12;
+/// The fracture's width, as a fraction of the ridge's range.
+const ROCK_FRACTURE_WIDTH: f32 = 0.22;
+/// How dark the fractures are, as a multiplier on the rock's albedo. A crack is a shadow: the
+/// face beside it sees less sky.
+const ROCK_FRACTURE_DARKEN: f32 = 0.34;
+/// The rock's own grain amplitude, as a fraction of the rock's albedo.
+const ROCK_GRAIN_AMP: f32 = 0.75;
 
 /// Rock's own material: the colour the rock's texture gives it, the grain's bump gradient, and
 /// whether the grain survives the pixel's footprint. A cliff face is bedded, jointed and
@@ -199,43 +198,55 @@ struct RockMaterial {
     present: f32,
 }
 
-/// The rock's material at the world point `p`, for the surface's normal `n` and a pixel footprint
-/// of `footprint_m` metres.
+/// The rock's material at the world point `p`, for a pixel footprint of `footprint_m` metres.
 ///
 /// The **beds** are bands of the world height, warped by a low-frequency field so they dip and
-/// undulate like real bedding instead of ruling a stripe pattern; a second, warmer tone is mixed
-/// in by them, so the cliff has two rock colours. The **fractures** are the walls of a Worley
-/// cell network — the joints along which rock breaks — and they are the one feature of a cliff a
-/// player reads as solid at a distance. The **grain** is the ground's own band-limited octaves
-/// with rock's amplitude and rock's own seed, so the rock's surface does not carry the grass's
-/// tufts, and it is sampled in the surface's frame so it is round on a slope.
-fn rock_material(p: vec3<f32>, footprint_m: f32) -> RockMaterial {
-    // The beds: the world height, warped. The warp is a 3D noise, so it is one field seen from
-    // every angle and the beds stay in the same place on the rock.
-    let warp = perlin3_d(p / ROCK_BED_WARP_SCALE_M + seed_offset(31u)).x;
-    let bed = (p.y + warp * ROCK_BED_WARP_M) / ROCK_BED_M;
+/// undulate like real bedding instead of ruling a stripe pattern; a second, darker tone is mixed
+/// in by them, so the cliff has two rock colours. The **fractures** are *lines* — the joints
+/// along which rock breaks — and they are the one feature of a cliff a player reads as "solid" at
+/// a distance. The **grain** is the rock's own band-limited octaves, so the rock's surface does
+/// not carry the grass's tufts.
+///
+/// The grain's octaves and the fractures' octaves are **one** set of noise evaluations: a
+/// fracture is a ridge of the same field the grain is made of, so the ridged transform is
+/// applied to the noise the grain already has. That is half the noise the two would cost
+/// separately, and the opaque pass is the crate's hot path (measured: the mountains' opaque
+/// pass went from 0.145 ms to 0.309 ms with the two sums separate).
+fn rock_material(p: vec3<f32>, warp: f32, footprint_m: f32) -> RockMaterial {
+    // The beds: the rock's *own* bedding plane, not the world's height. A bed is a surface
+    // inside the rock, and it is usually tilted — and if the beds followed the world height
+    // they would be the terrain's own contours, which is a topographic map: the massif came
+    // out banded with rings round every hill (measured: the mountain from 700 m was a set of
+    // concentric contour bands, and no rock is bedded in the shape of the hill above it).
+    // The bed's coordinate is a *tilted* height, so the beds cut across the terrain at an
+    // angle, and the warp tilts them further.
+    let tilted = dot(p, ROCK_BED_TILT);
+    let bed = (tilted + warp * ROCK_BED_WARP_M) / ROCK_BED_M;
     // A bed's own value: a triangle wave, so each bed has a distinct top and bottom rather
-    // than the bands fading into one another.
+    // than the bands fading into one another. The mask is sharp: a bed is a *band* of rock
+    // with an edge, not a gradient.
     let band = abs(fract(bed) - 0.5) * 2.0;
-    let bed_mask = smoothstep(0.25, 0.75, band);
-    // The fractures: **lines**, and a Worley cell network cannot make them — its walls bound
-    // cells, so a face reads as a giraffe's hide (measured: the cell pattern dominated the
-    // face at 2 m, and a strong domain warp turned it into coral). A fracture is a *ridge* of
-    // the rock's own field, and a ridged noise makes ridges: `1 - |n|` is near zero on a line
-    // where the noise crosses zero, and the line is thin because the noise is smooth across
-    // it. Two octaves of it give a network of joints of two scales, and a third, finer octave
-    // gives the hairline cracks between them.
-    let ridged = rock_ridge(p, ROCK_FRACTURE_M, 3u, footprint_m, 71u);
-    let fracture_keep = detail_keep(ROCK_FRACTURE_M, footprint_m);
-    let crack = (1.0 - smoothstep(ROCK_FRACTURE_WIDTH, ROCK_FRACTURE_WIDTH * 3.0, ridged)) * fracture_keep;
-    // The grain: the ground's own octaves with rock's amplitude and seed.
-    let coarse = detail_scale(p, ROCK_GRAIN_COARSE_M, 2u, footprint_m, 51u);
-    let fine = detail_scale(p, ROCK_GRAIN_FINE_M, 2u, footprint_m, 61u);
+    let bed_mask = smoothstep(0.30, 0.52, band);
+    // The rock's own field: two octaves, one coarse and one fine, band-limited by their own
+    // feature sizes. The fractures are the ridges of the coarse one.
+    let coarse = detail_scale_3d(p, ROCK_GRAIN_COARSE_M, 1u, footprint_m, 51u);
+    let fine = detail_scale_3d(p, ROCK_GRAIN_FINE_M, 1u, footprint_m, 61u);
     let coarse_norm = max(coarse.norm, 1e-6);
     let fine_norm = max(fine.norm, 1e-6);
     let grain_value = 0.5 * (coarse.sum / coarse_norm + fine.sum / fine_norm);
     let present = max(coarse.present, fine.present);
     let world_grad = 0.5 * (coarse.grad / coarse_norm + fine.grad / fine_norm);
+    // The fractures: the ridge of the coarse octave, which is near zero on a line where the
+    // noise crosses zero. A Worley cell network cannot make them — it bounds *cells*, so a face
+    // reads as a giraffe's hide (measured: the cell pattern dominated the face at 2 m, and a
+    // strong domain warp turned it into coral).
+    // The fractures are band-limited by *their own* width, not by the cell they live in: a
+    // crack is a line a fraction of a cell wide, so it aliases long before the cell does.
+    // Band-limited by the cell, the cracks survived as a fine corduroy over the whole massif
+    // at 700 m (measured: the mountain read as fabric, not stone).
+    let fracture_keep = detail_keep(ROCK_GRAIN_COARSE_M * ROCK_FRACTURE_WIDTH, footprint_m);
+    let ridged = 1.0 - abs(coarse.sum / coarse_norm) * abs(coarse.sum / coarse_norm);
+    let crack = (1.0 - smoothstep(ROCK_FRACTURE_WIDTH, ROCK_FRACTURE_WIDTH * 3.0, ridged)) * fracture_keep;
     // The colour: the beds' second tone, the fractures' darkening, and the grain's modulation.
     let tint = mix(vec3<f32>(1.0), ROCK_SECOND_TONE, bed_mask * ROCK_BED_MIX);
     let dark = mix(1.0, ROCK_FRACTURE_DARKEN, crack);

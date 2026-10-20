@@ -105,7 +105,7 @@ pub(crate) fn detail_keep(feature_m: f32, footprint_m: f32) -> f32 {
 /// The four layer weights `(rock, sand, soil, grass)` of `render.wesl` for a slope angle
 /// (degrees), a sediment depth (m) and a detail value in [0, 1] (0.5: none).
 pub(crate) fn layer_weights(slope_deg: f32, sediment_m: f32, detail: f32) -> [f32; 4] {
-    let rock = overlay(smoothstep(35.0, 45.0, slope_deg), detail);
+    let rock = overlay(smoothstep(30.0, 42.0, slope_deg), detail);
     let sand = overlay(smoothstep(0.3, 0.7, sediment_m), detail)
         * (1.0 - smoothstep(26.0, 30.0, slope_deg))
         * (1.0 - rock);
@@ -125,11 +125,9 @@ pub(crate) const NOISE_RMS: f32 = 0.2268;
 
 /// The ground's large-scale variation of the layer weights (`render.wesl`): a low-frequency
 /// field that takes soil from the grass, so a plain — where the soil's weight is zero — gets
-/// patches instead of one colour.
-pub(crate) fn layer_variation(p: Vec3, w: [f32; 4]) -> [f32; 4] {
-    let field = (crate::gpu::noise_mirror::perlin3_d(p / LAYER_VARIATION_M + crate::gpu::noise_mirror::seed_offset(71)).x
-        / NOISE_RMS)
-        .clamp(-1.0, 1.0);
+/// patches instead of one colour. The field is the `ground_fields` function's large one.
+pub(crate) fn layer_variation(field: f32, w: [f32; 4]) -> [f32; 4] {
+    let field = field.clamp(-1.0, 1.0);
     let shift = field * LAYER_VARIATION_DEPTH * w[3];
     let mut v = w;
     // The shift is taken from the grass and given to the soil, and both ends are clamped: a
@@ -307,9 +305,14 @@ mod tests {
             assert_eq!(layer_weights(50.0, 0.0, d)[0], 1.0);
             assert_eq!(layer_weights(10.0, 0.0, d)[3], 1.0);
         }
-        // Inside a transition the detail spans the whole range: at 40° rock goes 0 → 1.
-        assert_eq!(layer_weights(40.0, 0.0, 0.0)[0], 0.0);
-        assert_eq!(layer_weights(40.0, 0.0, 1.0)[0], 1.0);
+        // Inside a transition the detail spans the whole range. The rock's ramp is 30° to 42°,
+        // so 36° is its middle: there the detail takes the rock from 0 to 1.
+        assert_eq!(layer_weights(36.0, 0.0, 0.0)[0], 0.0);
+        assert_eq!(layer_weights(36.0, 0.0, 1.0)[0], 1.0);
+        // The rock's ramp starts at 30°, so a slope is already half rock at 36°: the ground's
+        // turf is the crate's 2D noise in the world XZ plane, and it must be gone before the
+        // surface is steep enough to weave it (`rock-material.md` Model 1).
+        assert!(layer_weights(36.0, 0.0, 0.5)[0] > 0.3, "the rock must be there by 36°");
     }
 
     /// The ground's large-scale variation must reach a **plain**, where the soil's weight is
@@ -328,7 +331,12 @@ mod tests {
         let mut min_soil = 1.0f32;
         for k in 0..200 {
             let p = Vec3::new(k as f32 * 3.0, 0.0, 0.0);
-            let w = layer_variation(p, plain);
+            let field = crate::gpu::noise_mirror::perlin3_d(
+                p / LAYER_VARIATION_M + crate::gpu::noise_mirror::seed_offset(71),
+            )
+            .x
+                / NOISE_RMS;
+            let w = layer_variation(field, plain);
             assert!(
                 (w.iter().sum::<f32>() - 1.0).abs() < 1e-5,
                 "the weights do not sum to one at {p:?}: {w:?}"
@@ -348,7 +356,12 @@ mod tests {
         // The rock and the sand are where the terrain's shape put them, and the variation must
         // not move them.
         let steep = layer_weights(50.0, 0.0, 0.5);
-        let w = layer_variation(Vec3::new(30.0, 0.0, 0.0), steep);
+        let field = crate::gpu::noise_mirror::perlin3_d(
+            Vec3::new(30.0, 0.0, 0.0) / LAYER_VARIATION_M + crate::gpu::noise_mirror::seed_offset(71),
+        )
+        .x
+            / NOISE_RMS;
+        let w = layer_variation(field, steep);
         assert_eq!(w[0], 1.0, "the variation moved the rock");
     }
 
