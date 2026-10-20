@@ -6,6 +6,22 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ### Changed
 
+- **The water's surface is a mirror with a skin on it, not a bowl of jello.** The ripple normal
+  map's spectrum was an open-ocean statistic applied to sheltered water: 52 % of its slope
+  energy sat in the 1 m octave, and a 6.2° rms tilt on the water's near-mirror surface (0.089
+  perceptual roughness, 0.0079 linear) swung the reflected ray 12.4° — nine texels of the 128²
+  environment cube — so the clouds in the reflection were torn into blobs. The map's slope
+  spectrum is now flat (every octave the same slope, Lagae et al. 2010 §4) over three octaves
+  from 0.25 m to 6.25 cm, the metre band is left to the wave field that already computes it from
+  Airy's dispersion, and the still-water strength drops from 0.25 to 0.06, because a sheltered
+  pond is a mirror and the open sea is not. The map's total rms slope is unchanged (Cox & Munk
+  1954, 0.150, checked by the CPU and GPU oracles), so the surface is as rough as the wind
+  statistic says and the glitter it makes is the same. Measured on `examples/waves` at 16:30
+  under `PartlyCloudy`: the water band is 2.23× noisier than the sky it mirrors before, 1.37×
+  after, and the water's mean brightness is unchanged (97.15 against 97.11 DN). The wakes are
+  untouched (`gpu_waves` passes unchanged). `WaterSettings::ripple_scale` and the flow's own
+  strength are unchanged, so a running current is as rough as before.
+
 - **The ground has surface detail at a metre** (below): the terrain and `GroundExtension` shade
   with two band-limited octave scales instead of one 0.8 m⁻¹ noise band faded by distance. Each
   octave is cancelled once the pixel footprint cannot resolve it (Lagae et al. 2010's frequency
