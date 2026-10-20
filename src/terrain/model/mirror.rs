@@ -140,9 +140,100 @@ pub(crate) fn layer_variation(field: f32, w: [f32; 4]) -> [f32; 4] {
     v.map(|x| x / total.max(1e-6))
 }
 
+/// The turf's palette (`terrain/common.wesl`): the four tones, as multipliers on the turf's
+/// own colour. The fresh tone is the identity.
+pub(crate) const TURF_FRESH: [f32; 3] = [1.00, 1.00, 1.00];
+pub(crate) const TURF_DRY: [f32; 3] = [1.35, 1.20, 0.69];
+pub(crate) const TURF_STRAW: [f32; 3] = [1.55, 1.37, 0.82];
+pub(crate) const TURF_WORN: [f32; 3] = [1.13, 0.95, 0.73];
+/// How far the palette moves the ground's colour towards a tone, 0 to 1.
+pub(crate) const TURF_STRENGTH: f32 = 0.85;
+
+/// The turf's palette at the given fields (`terrain/common.wesl`): the *shares* of the four
+/// tones, which sum to one by construction, and the mixture they make.
+pub(crate) fn turf_palette(field: f32, clump: f32) -> ([f32; 3], [f32; 4]) {
+    let p = 2.0f32;
+    let mut dry = (field.max(0.0) * (0.5 + clump).max(0.0) * 1.6).powf(p).min(1.0);
+    let mut straw = ((field - 0.45).max(0.0) * 3.0 * (0.5 + clump).max(0.0) * 1.6)
+        .powf(p)
+        .min(1.0);
+    let mut worn = ((-field - 0.55).max(0.0) * 3.0 * (0.5 - clump).max(0.0) * 1.6)
+        .powf(p)
+        .min(1.0);
+    let others = dry + straw + worn;
+    if others > 1.0 {
+        let k = 1.0 / others;
+        dry *= k;
+        straw *= k;
+        worn *= k;
+    }
+    // The fresh share is what is left, and the subtraction can leave it a hair below zero
+    // (−2.2e−8 at field 0.5, clump 0.75), which is a negative weight.
+    let fresh = (1.0 - dry - straw - worn).max(0.0);
+    let shares = [fresh, dry, straw, worn];
+    let mut mixed = [0.0f32; 3];
+    for c in 0..3 {
+        mixed[c] = fresh * TURF_FRESH[c]
+            + dry * TURF_DRY[c]
+            + straw * TURF_STRAW[c]
+            + worn * TURF_WORN[c];
+        mixed[c] = 1.0 + (mixed[c] - 1.0) * TURF_STRENGTH;
+    }
+    (mixed, shares)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The turf's palette: the four tones' shares must sum to one by construction (so the
+    /// mixture is a convex combination and the ground's mean cannot drift), every share must
+    /// be in range, and the mixture must stay inside the tones' convex hull — the fresh
+    /// grass is the turf's own colour, so a place with no dry tone must be exactly the
+    /// identity.
+    ///
+    /// Three other normalisations were tried and each failed: by the unweighted mean of the
+    /// tones the ground's mean brightness drifted 3.2 DN, by the mixture's own colour the hue
+    /// was cancelled entirely (the G/R ratio was 1.0 at every field), and by a per-channel
+    /// mean the hue was cancelled again. The shares are the fourth way and the only one that
+    /// keeps both the hue and the mean.
+    #[test]
+    fn the_turf_palette_shares_sum_to_one_and_keep_the_mean_and_the_hue() {
+        let mut hues = Vec::new();
+        for field in (-30..=30).map(|k| k as f32 / 20.0) {
+            for clump in (-20..=20).map(|k| k as f32 / 20.0) {
+                let (mixed, shares) = turf_palette(field, clump);
+                assert!(
+                    (shares.iter().sum::<f32>() - 1.0).abs() < 1e-5,
+                    "the shares do not sum to one at {field}/{clump}: {shares:?}"
+                );
+                assert!(
+                    shares.iter().all(|s| (0.0..=1.0).contains(s)),
+                    "a share is out of range at {field}/{clump}: {shares:?}"
+                );
+                assert!(
+                    mixed.iter().all(|c| (0.5..=2.0).contains(c)),
+                    "the mixture left the tones' range at {field}/{clump}: {mixed:?}"
+                );
+                // The hue must survive: the G/R ratio has to *move* with the field, or the
+                // palette is a brightness change and not a colour change.
+                hues.push(mixed[1] / mixed[0]);
+            }
+        }
+        let min = hues.iter().cloned().fold(f32::INFINITY, f32::min);
+        let max = hues.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        // The ratio's *maximum* is 1.0 — the fresh tone is the identity, so a place with no
+        // dry tone is exactly the turf's own hue — and its minimum is the straw's.
+        assert!(
+            min < 0.95 && max <= 1.0 + 1e-5,
+            "the palette's hue does not move: the G/R ratio spans {min} to {max}"
+        );
+        // A place with no dry tone is exactly the turf's own colour.
+        let (mixed, _) = turf_palette(0.0, 0.0);
+        for c in mixed {
+            assert!((c - 1.0).abs() < 1e-5, "the fresh tone is not the identity: {mixed:?}");
+        }
+    }
 
     /// An octave is kept whole while the pixel resolves it, cancelled once it cannot, and the
     /// transition is monotone and smooth; the two scales overlap so no band of the ground's

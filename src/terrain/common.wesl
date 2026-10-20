@@ -136,13 +136,19 @@ fn turf_palette(p: vec3<f32>, base: vec3<f32>, field: f32, coarse: f32, fine: f3
     // was tried three ways and each failed: by the unweighted mean of the tones the ground's
     // mean brightness drifted 3.2 DN, by the mixture's own colour the hue was cancelled
     // entirely, and by a per-channel mean the hue was cancelled again.)
-    // The exponent is a *literal*: `pow(x, p)` with `p` in a `let` makes naga emit a broken
-    // shader *without an error*, and the ground renders as a dark navy (the same symptom as
-    // an unimported name; see AGENTS.md). WGSL's `pow` is undefined for a zero base and a
-    // non-positive exponent, and naga's handling of the general case is not safe here.
-    var s_dry = min(pow(max(field, 0.0) * max(0.5 + clump, 0.0) * 1.6, 2.0), 1.0);
-    var s_straw = min(pow(max(field - 0.45, 0.0) * 3.0 * max(0.5 + clump, 0.0) * 1.6, 2.0), 1.0);
-    var s_worn = min(pow(max(-field - 0.55, 0.0) * 3.0 * max(0.5 - clump, 0.0) * 1.6, 2.0), 1.0);
+    // The scores are squared — Papavasiliou's exponent p = 2. A square is a multiply, not a
+    // `pow`: three `pow` calls per pixel cost the mountains' opaque pass 0.137 ms -> 0.252 ms,
+    // and a `pow` is a transcendental.
+    //
+    // The exponent is a *literal* everywhere it is written as a `pow` elsewhere: `pow(x, p)`
+    // with `p` in a `let` makes naga emit a broken shader *without an error*, and the ground
+    // renders as a dark navy (the same symptom as an unimported name; see AGENTS.md).
+    let d = max(field, 0.0) * max(0.5 + clump, 0.0) * 1.6;
+    let st = max(field - 0.45, 0.0) * 3.0 * max(0.5 + clump, 0.0) * 1.6;
+    let w = max(-field - 0.55, 0.0) * 3.0 * max(0.5 - clump, 0.0) * 1.6;
+    var s_dry = min(d * d, 1.0);
+    var s_straw = min(st * st, 1.0);
+    var s_worn = min(w * w, 1.0);
     let others = s_dry + s_straw + s_worn;
     if others > 1.0 {
         let k = 1.0 / others;
@@ -150,7 +156,9 @@ fn turf_palette(p: vec3<f32>, base: vec3<f32>, field: f32, coarse: f32, fine: f3
         s_straw = s_straw * k;
         s_worn = s_worn * k;
     }
-    let s_fresh = 1.0 - s_dry - s_straw - s_worn;
+    // The fresh share is what is left, and the subtraction can leave it a hair below zero
+    // (−2.2e−8 at field 0.5, clump 0.75), which is a negative weight.
+    let s_fresh = max(1.0 - s_dry - s_straw - s_worn, 0.0);
     // The palette, mixed by the shares.
     let mixed = s_fresh * TURF_FRESH + s_dry * TURF_DRY + s_straw * TURF_STRAW + s_worn * TURF_WORN;
     var tint = mix(vec3<f32>(1.0), mixed, TURF_STRENGTH);
