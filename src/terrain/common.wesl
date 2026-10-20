@@ -52,9 +52,12 @@ struct GroundDetail {
     grad: vec3<f32>,
     /// 1 where any octave survived the footprint test, 0 in the distance.
     present: f32,
-    /// The fine scale's own value, in [-1, 1]: the field at a metre that the turf's grain is
-    /// made of. The palette uses it as the *clump* of a tone, so the near field has colour
-    /// variation in it without another noise evaluation (`ground-colour.md` Model 3).
+    /// The coarse scale's own value, in [-1, 1]: the field at 1.25 m that the turf's grain is
+    /// made of. The palette uses it as the *clump* of a tone, so a patch's edge is broken and
+    /// the near field has colour variation in it without another noise evaluation
+    /// (`ground-colour.md` Model 3).
+    coarse: f32,
+    /// The fine scale's own value, in [-1, 1]: the field at nine centimetres.
     fine: f32,
 }
 
@@ -99,7 +102,7 @@ const TURF_STRENGTH: f32 = 0.85;
 /// where the ground is already the soil's brown does not also get the straw's yellow, and a
 /// shadow does not turn the grass into straw (Papavasiliou's weight vector, which drops the
 /// lightness for exactly that reason).
-fn turf_palette(p: vec3<f32>, base: vec3<f32>, field: f32, fine: f32) -> vec3<f32> {
+fn turf_palette(p: vec3<f32>, base: vec3<f32>, field: f32, coarse: f32, fine: f32) -> vec3<f32> {
     // The distribution field — how much of each tone there is around — is the ground's own
     // large-scale field, which the caller already has: the palette is given it, so the
     // palette's only new evaluation is the *selection* field below. (The two extra 3D noise
@@ -111,7 +114,11 @@ fn turf_palette(p: vec3<f32>, base: vec3<f32>, field: f32, fine: f32) -> vec3<f3
     // grain — is the clump's finer octave, so the near field has variation in it without
     // another noise evaluation.
     let patch_field = perlin3_d(p / TURF_PATCH_M + seed_offset(97u)).x / 0.2268;
-    let clump = clamp(patch_field + fine * 0.75, -1.0, 1.0);
+    // The clump is the patch's field at five metres *plus* the turf's own fine field. The fine
+    // field is at nine centimetres, which is far too fine to break a five-metre edge on its
+    // own, but it is what makes the edge ragged rather than a smooth curve: a dry patch's
+    // edge is broken, and the mixture of the two gives that.
+    let clump = clamp(patch_field + coarse * 0.55 + fine * 0.45, -1.0, 1.0);
     // The score of each tone: how much of it belongs here. The field is the *distribution* (the
     // amount of the tone around) and the clump the *selection* (this piece of ground), and the
     // score is their product, so a tone is common where the field is high and present where the
@@ -390,6 +397,7 @@ fn ground_detail(p: vec3<f32>, footprint_m: f32) -> GroundDetail {
         1.0 + DETAIL_COARSE_AMP * coarse_value + DETAIL_FINE_AMP * fine_value,
         world_grad,
         max(coarse.present, fine.present),
+        coarse_value,
         fine_value,
     );
 }

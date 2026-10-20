@@ -198,7 +198,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // field — the ground material has no layer masks, so there is no field to share — and the
     // detail's own fine field as the palette's clump.
     let field = perlin3_d(pv / 38.0 + seed_offset(91u)).x / 0.2268;
-    let base = m.base_color.rgb * grain.albedo * turf_palette(pv, m.base_color.rgb, field, grain.fine);
+    let base = m.base_color.rgb * grain.albedo * turf_palette(pv, m.base_color.rgb, field, grain.coarse, grain.fine);
     let surface = weather_surface(
         base, m.perceptual_roughness, m.metallic, m.reflectance, n,
         cover.y, puddle, snow_cover, ripple,
