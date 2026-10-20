@@ -108,6 +108,8 @@ The crate works in metres. A game whose world unit is something else inserts `El
 
 ![The same hills, clouds and rain in metres (left) and in feet (right)](docs/units.png)
 
+![A grassy hillside 6 m above the ground. Left, before: a flat green wash, near-patch standard deviation 1.07 of 255. Right, after: turf grain and clumps from two band-limited octave scales, each octave cancelled once the pixel footprint cannot resolve it, so the distance is unchanged](docs/ground_detail.png)
+
 ### Clock, sun, moon and stars
 
 `WorldClock` holds the local date and hour and advances by `Time<Virtual>` × `time_scale`; `GeoLocation` places the observer. `SunState` has the sun's and moon's directions, true altitudes, the synodic phase and the lit fraction. The `astro` module exposes the ephemeris functions (Meeus ch. 7–48: sidereal time, nutation, the sun at 0.01°, the moon from a 51 + 34-term series, phase, refraction, the USNO total-illuminance factor), each tested against the book's worked examples and the SPA reference case. Stars are the 8404 Yale Bright Star Catalogue stars to V = 6.5, precessed to the date, coloured from B−V; the moon is a Lommel–Seeliger-shaded disc from NASA's LROC map. See [`src/celestial/PROVENANCE.md`](src/celestial/PROVENANCE.md).

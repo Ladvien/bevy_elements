@@ -6,6 +6,17 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ### Changed
 
+- **The ground has surface detail at a metre** (below): the terrain and `GroundExtension` shade
+  with two band-limited octave scales instead of one 0.8 m⁻¹ noise band faded by distance. Each
+  octave is cancelled once the pixel footprint cannot resolve it (Lagae et al. 2010's frequency
+  clamping), so the near field reads as turf and granular sand (near-patch standard deviation
+  1.07 → 4.26 DN on `terrain_tour` hills at 6 m) while ground beyond 120 m is unchanged to
+  0.002 DN. The detail is a 2D noise in the ground plane, not a 3D noise sampled on the surface:
+  the 3D slice is anisotropic on slopes and streaked the cliff faces. `bevy_elements::noise`
+  gains `perlin2_d` (2D gradient noise with its analytic derivative); `terrain::common` gains
+  `ground_detail`, `detail_keep` and `detail_scale`. No public Rust API changes: the shaders'
+  `terrain::common` imports are the interface.
+
 - **The followed camera's sky light and reflections come from the clouds' sky probe** (below): its `AmbientLight` no longer carries the cloud-scattered light while the probe is live, and the terrain's and `WeatheredMaterial`'s overcast shade factor keeps only its relief cue, `overcast_relief` in `bevy_elements::surface_cover` (the dome's own shading now comes through the environment map; `snow-cover.md` Deviation 16). Overcast scenes lose the flat white sheen the uniform ambient's boosted specular laid over every surface: grass under the `waves` overcast reads 115 DN against 134, a metal box's sides mirror the ground (101 DN) under a top that mirrors the sky (193 DN). `CloudQuality` has a `probe_edge` field; a struct literal needs it.
 - **`ElementsGlobals` is 128 bytes** (a sixth `vec4` whose `x` is `ElementsUnits::units_per_metre`; a seventh and eighth carrying the trail window, its centre, the beam's share of the light and the snow depth, `trail` and `trail_light` in the WESL struct): a game material binding `ELEMENTS_GLOBALS_BUFFER` declares the new fields, and a struct literal of `ElementsGlobals` needs `snow_depth_m`, `trail_texel_m`, `trail_texels`, `trail_centre` and `trail_direct_share`. `LightningStrike::position`, `Thunder::position`, `LightningFlash::position`, `WindGust::origin`, `ElementsFocus::Point` and the `Environment` query positions are world units (unchanged at the default), and the grids the crate publishes (`WindState`'s window, `TerrainGrid`, `CloudShadows`) are in the metre frame. The WESL import `elements_wind` takes a world position (its `WindFieldParams` gained `units`).
 - **`TrailSettings` has a `texel_m` field** (a struct literal needs `..default()`), and the WESL `bevy_elements::trails::surface::trail_fade` takes the window's centre (`TrailState::centre`, also in the terrain and ground uniforms' `trail_light.yz` and the globals' `trail_light.yz`) instead of the eye. `SurfaceWeathering::with_snowpack` replaces nothing public.
