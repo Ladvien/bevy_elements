@@ -105,11 +105,11 @@ pub(crate) fn detail_keep(feature_m: f32, footprint_m: f32) -> f32 {
 /// The four layer weights `(rock, sand, soil, grass)` of `render.wesl` for a slope angle
 /// (degrees), a sediment depth (m) and a detail value in [0, 1] (0.5: none).
 pub(crate) fn layer_weights(slope_deg: f32, sediment_m: f32, detail: f32) -> [f32; 4] {
-    let rock = overlay(smoothstep(30.0, 42.0, slope_deg), detail);
+    let rock = overlay(smoothstep(30.0, 38.0, slope_deg), detail);
     let sand = overlay(smoothstep(0.3, 0.7, sediment_m), detail)
         * (1.0 - smoothstep(26.0, 30.0, slope_deg))
         * (1.0 - rock);
-    let band = overlay(smoothstep(26.0, 36.0, slope_deg), detail);
+    let band = overlay(smoothstep(16.0, 26.0, slope_deg), detail) * (1.0 - smoothstep(22.0, 29.0, slope_deg));
     let rest = (1.0 - rock) * (1.0 - sand);
     [rock, sand, rest * band, rest * (1.0 - band)]
 }
@@ -298,21 +298,34 @@ mod tests {
         assert!(layer_weights(45.0, 0.0, 0.5)[0] >= 0.99);
         assert!(layer_weights(20.0, 1.0, 0.5)[1] >= 0.99);
         assert_eq!(layer_weights(10.0, 0.0, 0.5)[3], 1.0);
-        let soil = layer_weights(31.0, 0.0, 0.5)[2];
-        assert!((0.3..0.7).contains(&soil), "soil at 31°: {soil}");
+        // The soil band is 20° to 30°, tapering from 26° as the rock's ramp opens, and it must
+        // sit *below* the rock's ramp (30° to 38°): where the two overlap, a mix of a warm
+        // brown and a cool grey is a pink patch, and the ground showed them on the hills
+        // (measured: 0.32 % of the frame).
+        let soil = layer_weights(21.0, 0.0, 0.5)[2];
+        assert!((0.3..0.7).contains(&soil), "soil at 21°: {soil}");
+        assert!(layer_weights(31.0, 0.0, 0.5)[2] < 0.4, "the soil must be gone by 31°");
+        // The taper: the soil thins as the rock rises, so the grass meets the stone without a
+        // warm brown rim (measured: 1415 orange pixels at RGB 148, 121, 100 in one frame, and
+        // none after).
+        assert!(layer_weights(28.0, 0.0, 0.5)[2] < 0.35, "the soil must taper into the rock");
         // Fully on or off stays put under any detail: rock at 50°, grass at 10°.
         for d in [0.0, 0.3, 0.7, 1.0] {
             assert_eq!(layer_weights(50.0, 0.0, d)[0], 1.0);
             assert_eq!(layer_weights(10.0, 0.0, d)[3], 1.0);
         }
-        // Inside a transition the detail spans the whole range. The rock's ramp is 30° to 42°,
-        // so 36° is its middle: there the detail takes the rock from 0 to 1.
-        assert_eq!(layer_weights(36.0, 0.0, 0.0)[0], 0.0);
-        assert_eq!(layer_weights(36.0, 0.0, 1.0)[0], 1.0);
-        // The rock's ramp starts at 30°, so a slope is already half rock at 36°: the ground's
+        // Inside a transition the detail spans the whole range. The rock's ramp is 30° to 38°,
+        // so 34° is its middle: there the detail takes the rock from 0 to 1.
+        assert_eq!(layer_weights(34.0, 0.0, 0.0)[0], 0.0);
+        assert_eq!(layer_weights(34.0, 0.0, 1.0)[0], 1.0);
+        // The rock's ramp starts at 30°, so a slope is already half rock at 34°: the ground's
         // turf is the crate's 2D noise in the world XZ plane, and it must be gone before the
         // surface is steep enough to weave it (`rock-material.md` Model 1).
-        assert!(layer_weights(36.0, 0.0, 0.5)[0] > 0.3, "the rock must be there by 36°");
+        assert!(layer_weights(34.0, 0.0, 0.5)[0] > 0.3, "the rock must be there by 34°");
+        // The ramp is narrow on purpose: a wide one has the rock's *partial* weight mixing
+        // with the soil's, and a warm brown mixed with a cool grey is a pink patch (measured:
+        // 9.67 % of the mountain's frame was pink before, 0.01 % after).
+        assert!(layer_weights(31.0, 0.0, 0.5)[0] < 0.2, "the rock must not creep below 30°");
     }
 
     /// The ground's large-scale variation must reach a **plain**, where the soil's weight is

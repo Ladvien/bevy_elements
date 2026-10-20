@@ -169,7 +169,7 @@ const ROCK_BED_TILT: vec3<f32> = vec3<f32>(0.32, 0.90, 0.28);
 /// The second rock tone, relative to the first: a *darker*, browner bed. Bedded rock alternates
 /// light and dark bands, and the dark one is darker rather than lighter: the crate's rock
 /// albedo is already 0.10 linear, and a brighter second tone only washed the face further.
-const ROCK_SECOND_TONE: vec3<f32> = vec3<f32>(0.86, 0.78, 0.70);
+const ROCK_SECOND_TONE: vec3<f32> = vec3<f32>(1.06, 0.93, 0.76);
 /// How far the beds' tone is mixed in, 0 to 1. The tone itself is 0.72, so at 0.85 the beds
 /// span a 20 % albedo drop — enough to read as bands on a lit face.
 const ROCK_BED_MIX: f32 = 0.34;
@@ -177,12 +177,12 @@ const ROCK_BED_MIX: f32 = 0.34;
 const ROCK_GRAIN_COARSE_M: f32 = 2.6;
 const ROCK_GRAIN_FINE_M: f32 = 0.12;
 /// The fracture's width, as a fraction of the ridge's range.
-const ROCK_FRACTURE_WIDTH: f32 = 0.22;
+const ROCK_FRACTURE_WIDTH: f32 = 0.30;
 /// How dark the fractures are, as a multiplier on the rock's albedo. A crack is a shadow: the
 /// face beside it sees less sky.
-const ROCK_FRACTURE_DARKEN: f32 = 0.34;
+const ROCK_FRACTURE_DARKEN: f32 = 0.26;
 /// The rock's own grain amplitude, as a fraction of the rock's albedo.
-const ROCK_GRAIN_AMP: f32 = 0.75;
+const ROCK_GRAIN_AMP: f32 = 0.60;
 
 /// Rock's own material: the colour the rock's texture gives it, the grain's bump gradient, and
 /// whether the grain survives the pixel's footprint. A cliff face is bedded, jointed and
@@ -235,7 +235,12 @@ fn rock_material(p: vec3<f32>, warp: f32, footprint_m: f32) -> RockMaterial {
     let fine_norm = max(fine.norm, 1e-6);
     let grain_value = 0.5 * (coarse.sum / coarse_norm + fine.sum / fine_norm);
     let present = max(coarse.present, fine.present);
-    let world_grad = 0.5 * (coarse.grad / coarse_norm + fine.grad / fine_norm);
+    // The relief's gradient is the *coarse* octave's alone. The fine octave's gradient is
+    // anisotropic on a slope: a 3D noise's gradient has a vertical component, and the surface
+    // compresses it, so the fine relief was a directional weave (measured: the near band of a
+    // rock face had a structure-tensor coherence of 0.71 at 29-39 degrees, against the flat
+    // ground's 0.36). The fine octave stays in the albedo, where a direction is invisible.
+    let world_grad = coarse.grad / coarse_norm;
     // The fractures: the ridge of the coarse octave, which is near zero on a line where the
     // noise crosses zero. A Worley cell network cannot make them — it bounds *cells*, so a face
     // reads as a giraffe's hide (measured: the cell pattern dominated the face at 2 m, and a
@@ -251,9 +256,14 @@ fn rock_material(p: vec3<f32>, warp: f32, footprint_m: f32) -> RockMaterial {
     let tint = mix(vec3<f32>(1.0), ROCK_SECOND_TONE, bed_mask * ROCK_BED_MIX);
     let dark = mix(1.0, ROCK_FRACTURE_DARKEN, crack);
     let grain_tint = 1.0 + ROCK_GRAIN_AMP * grain_value;
+    // The rock's relief. A face with no relief is a painted colour: the light does no work on
+    // it, and it reads as fog or as concrete. The grain's own gradient gives the surface its
+    // small relief, and the fractures give it the *step* a crack has: the ridge's gradient
+    // turns the crack from a drawn line into a groove the sun rakes.
+    let relief = world_grad * (ROCK_GRAIN_AMP * 0.20);
     return RockMaterial(
         tint * dark * grain_tint,
-        world_grad * (ROCK_GRAIN_AMP * 0.02),
+        relief,
         present,
     );
 }

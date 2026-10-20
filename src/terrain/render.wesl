@@ -157,7 +157,7 @@ fn vertex(v: TerrainVertex) -> VertexOutput {
 // *warm* grey, and the noon sun is warm too, so a face lit by it renders pink (measured: the
 // face at 2 m read at RGB 155, 147, 138 — warmer than the sky that lit it, and pale). A stone
 // face under a blue sky is grey with the blue in it.
-const ROCK: vec3<f32> = vec3<f32>(0.072, 0.069, 0.067);
+const ROCK: vec3<f32> = vec3<f32>(0.076, 0.071, 0.066);
 const SOIL: vec3<f32> = vec3<f32>(0.0732, 0.0397, 0.0196);
 const SAND: vec3<f32> = vec3<f32>(0.5382, 0.3931, 0.1960);
 const GRASS: vec3<f32> = vec3<f32>(0.0397, 0.0835, 0.0134);
@@ -185,13 +185,31 @@ fn layer_weights(slope_deg: f32, sediment: f32, detail: f32) -> vec4<f32> {
     // to be there before the turf goes — otherwise the turf shows on a slope steep enough to
     // weave it (at 44° the turf was at 44 % and the rock at 53 %, so 21 % of the 2D turf was
     // still on the face: the weave).
-    let rock = overlay(smoothstep(30.0, 42.0, slope_deg), detail);
+    let rock = overlay(smoothstep(30.0, 38.0, slope_deg), detail);
     let sand = overlay(smoothstep(0.3, 0.7, sediment), detail) * (1.0 - smoothstep(26.0, 30.0, slope_deg)) * (1.0 - rock);
     // The soil and the grass share what the rock and the sand left, and they divide it at the
     // soil band — which the detail also moves, so the two boundaries are the same field.
-    let band = overlay(smoothstep(26.0, 36.0, slope_deg), detail);
+    //
+    // The soil's band *tapers* as the rock's ramp opens. A slope band that runs up to the
+    // rock's edge puts the soil at its full weight right where the rock begins, and the two
+    // meet in a hard step: a warm brown rim round every grass patch against the stone (the
+    // rim measured 1415 orange pixels at RGB 148, 121, 100 in one frame, and it read as a
+    // cartoon outline at 2×). The taper is scree: the soil thins as the rock rises.
+    let band = overlay(smoothstep(16.0, 26.0, slope_deg), detail) * (1.0 - smoothstep(22.0, 29.0, slope_deg));
     let rest = (1.0 - rock) * (1.0 - sand);
     return vec4<f32>(rock, sand, rest * band, rest * (1.0 - band));
+}
+
+/// The rock's sky occlusion: how much of the sky a face with normal component `n_y` sees.
+/// A horizontal surface sees the whole dome; a steep face sees a strip of it, and a face in a
+/// valley sees barely any.
+///
+/// The curve is the crate's own `overcast_relief`'s dome term, `1 − 0.30 (1 − n_y)`, measured
+/// on the sky probe's irradiance map (a side 0.70 and an underside 0.40 of a top,
+/// `sky-light.md` Deviation 9): the sky's irradiance on a surface of that normal. A face at 45°
+/// sees 0.65 of what the ground does, and at 60° half.
+fn rock_sky_occlusion(n_y: f32) -> f32 {
+    return 1.0 - 0.30 * max(1.0 - n_y, 0.0);
 }
 
 /// The ground's turf gate: how much of the ground's own grain a surface wears, by its
@@ -442,11 +460,23 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         tint = tint * mix(1.0, grain.albedo, turf);
         grad = grad + grain.grad * turf;
     }
+    // The scree: where the rock's ramp opens, the stone that has weathered off it lies below.
+    // Without it the grass meets the rock in a single step, and a mountain's foot is never a
+    // clean line — it is a scatter of stones thinning into the turf.
+    let scree = smoothstep(0.0, 0.55, alpha - 22.0) * (1.0 - rockness) * (1.0 - turf * 0.5);
+    if scree > 0.01 {
+        tint = tint * mix(vec3<f32>(1.0), ROCK, scree * 0.55);
+    }
     if rockness > 0.01 {
         let rock = rock_material(pv, fields.large, footprint);
         tint = tint * mix(vec3<f32>(1.0), rock.tint, rockness);
         grad = grad + rock.grad * rockness;
     }
+    // A face sees less of the sky than the ground does, and a steep face sees much less. The
+    // crate's `overcast_relief` does the same under a cloud deck; here it is the rock's own
+    // occlusion, and without it a cliff is lit at 3.4 times its albedo and reads as fog (a face
+    // at 6 m rendered at 137 DN with a saturation of 8 — a washed-out grey, not stone).
+    tint = tint * mix(1.0, rock_sky_occlusion(n.y), rockness);
     albedo = albedo * tint;
     n = normalize(n - (grad - dot(grad, n) * n));
 
