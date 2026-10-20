@@ -71,8 +71,9 @@ No system is implemented without its `docs/research/<system>.md`, committed firs
   `common.wesl` exports but that `render.wesl` does not import compiles *without an error* — naga
   emits a broken shader, no `failed to process shader` line appears, and the surface renders as a
   dark navy (the terrain's ground at 1 DN). The same symptom comes from a local that **shadows**
-  another local in the same scope. When a surface goes dark for no reason, check the import list
-  and the shadowing first, not the maths.
+  another local in the same scope, and from **`pow(x, p)` with `p` in a `let`** (a literal
+  exponent works). When a surface goes dark for no reason, check the import list, the shadowing
+  and the `pow` first, not the maths.
 - **`SpecializedMeshPipelineError` has only `MissingVertexAttribute`**, so a material extension cannot reject a view without a depth prepass; the water shader needs `DEPTH_PREPASS` and fails to compile on a view without it.
 - **`AlphaMode::Multiply` and `Add` need premultiplied output**: Bevy's `premultiply_alpha` runs in `main_pass_post_lighting_processing`; a shader that writes the result itself (the water's absorb pass) must write `(X·a, a)` for Multiply, because the blend is `dst·src.rgb + (1 − src.a)·dst`.
 - **A displaced mesh needs its own `Aabb` and `NoAutoAabb`**, and `MeshTag::new(level)` (the struct has a debug-only private field). The terrain's vertex shader reads the patch origin from the instance matrix's translation, so patches are children of the terrain entity and the terrain `Transform` has no rotation or scale.
