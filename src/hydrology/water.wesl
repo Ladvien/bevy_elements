@@ -77,7 +77,10 @@ const FOAM_THICKNESS_RAMP: f32 = 0.03;
 // Offset of the second flow layer, in tiles (Vlachos 2010: layers are offset against repetition).
 const LAYER_OFFSET: vec2<f32> = vec2<f32>(0.37, 0.59);
 const PHASE_NOISE_M: f32 = 37.0;
-const STILL_RIPPLE: f32 = 0.25;
+/// The slope a body with no flow keeps: a sheltered pond is a mirror with a skin on it, not a
+/// wind sea (`docs/research/water-surface.md`, Model 3). A floor of zero would make still water
+/// read as glass, with no surface at all.
+const STILL_RIPPLE: f32 = 0.06;
 const MAX_THICKNESS: f32 = 1000.0;
 
 struct WaterVertex {
