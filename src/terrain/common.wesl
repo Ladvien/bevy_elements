@@ -133,9 +133,9 @@ fn turf_palette(p: vec3<f32>, base: vec3<f32>, field: f32, fine: f32) -> vec3<f3
     // shader *without an error*, and the ground renders as a dark navy (the same symptom as
     // an unimported name; see AGENTS.md). WGSL's `pow` is undefined for a zero base and a
     // non-positive exponent, and naga's handling of the general case is not safe here.
-    var s_dry = min(pow(max(field, 0.0) * max(0.5 + clump, 0.0), 2.0), 1.0);
-    var s_straw = min(pow(max(field - 0.45, 0.0) * 3.0 * max(0.5 + clump, 0.0), 2.0), 1.0);
-    var s_worn = min(pow(max(-field - 0.55, 0.0) * 3.0 * max(0.5 - clump, 0.0), 2.0), 1.0);
+    var s_dry = min(pow(max(field, 0.0) * max(0.5 + clump, 0.0) * 1.6, 2.0), 1.0);
+    var s_straw = min(pow(max(field - 0.45, 0.0) * 3.0 * max(0.5 + clump, 0.0) * 1.6, 2.0), 1.0);
+    var s_worn = min(pow(max(-field - 0.55, 0.0) * 3.0 * max(0.5 - clump, 0.0) * 1.6, 2.0), 1.0);
     let others = s_dry + s_straw + s_worn;
     if others > 1.0 {
         let k = 1.0 / others;
