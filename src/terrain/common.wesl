@@ -52,6 +52,10 @@ struct GroundDetail {
     grad: vec3<f32>,
     /// 1 where any octave survived the footprint test, 0 in the distance.
     present: f32,
+    /// The fine scale's own value, in [-1, 1]: the field at a metre that the turf's grain is
+    /// made of. The palette uses it as the *clump* of a tone, so the near field has colour
+    /// variation in it without another noise evaluation (`ground-colour.md` Model 3).
+    fine: f32,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -95,20 +99,19 @@ const TURF_STRENGTH: f32 = 0.85;
 /// where the ground is already the soil's brown does not also get the straw's yellow, and a
 /// shadow does not turn the grass into straw (Papavasiliou's weight vector, which drops the
 /// lightness for exactly that reason).
-fn turf_palette(p: vec3<f32>, base: vec3<f32>) -> vec3<f32> {
-    // The distribution field: how much of each tone there is around. It is the ground's own
-    // large-scale field, read at a second frequency, so the cost is one extra evaluation of a
-    // field the ground already computes.
-    let field = perlin3_d(p / TURF_FIELD_M + seed_offset(91u)).x / 0.2268;
-    // The clump: which tone this piece of ground wears. A second, finer field picks it, and the
-    // two together give the *mixture* of tones a meadow has: a region where the dry grass is
-    // common and another where it is not, with patches of it in both.
+fn turf_palette(p: vec3<f32>, base: vec3<f32>, field: f32, fine: f32) -> vec3<f32> {
+    // The distribution field — how much of each tone there is around — is the ground's own
+    // large-scale field, which the caller already has: the palette is given it, so the
+    // palette's only new evaluation is the *selection* field below. (The two extra 3D noise
+    // evaluations the palette first carried cost the mountains' opaque pass 0.132 ms -> 0.148
+    // ms, and the ground's field and the palette's were the same field at 45 m and 38 m.)
+    //
+    // The clump: which tone this piece of ground wears. A field at five metres picks it, and
+    // the ground's own *detail* — a field at a metre, which the turf already evaluates for its
+    // grain — is the clump's finer octave, so the near field has variation in it without
+    // another noise evaluation.
     let patch_field = perlin3_d(p / TURF_PATCH_M + seed_offset(97u)).x / 0.2268;
-    // The clump's own finer octave: a patch of dry grass is made of clumps, and without it
-    // the near field (which the patch's five-metre scale does not reach) has no variation in
-    // it at all.
-    let fine_field = perlin3_d(p / (TURF_PATCH_M * 0.22) + seed_offset(103u)).x / 0.2268;
-    let clump = clamp(patch_field + fine_field * 0.75, -1.0, 1.0);
+    let clump = clamp(patch_field + fine * 0.75, -1.0, 1.0);
     // The score of each tone: how much of it belongs here. The field is the *distribution* (the
     // amount of the tone around) and the clump the *selection* (this piece of ground), and the
     // score is their product, so a tone is common where the field is high and present where the
@@ -370,5 +373,6 @@ fn ground_detail(p: vec3<f32>, footprint_m: f32) -> GroundDetail {
         1.0 + DETAIL_COARSE_AMP * coarse_value + DETAIL_FINE_AMP * fine_value,
         world_grad,
         max(coarse.present, fine.present),
+        fine_value,
     );
 }

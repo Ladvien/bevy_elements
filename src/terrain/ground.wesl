@@ -4,6 +4,7 @@
 // the consumer's. See docs/research/terrain.md ("GroundExtension").
 
 import bevy_elements::grid::{GridParams, grid_taps};
+import bevy_elements::noise::{perlin3_d, seed_offset};
 import bevy_elements::terrain::common::{TerrainParams, ground_detail, terrain_live, turf_palette};
 import bevy_elements::surface_cover::{weather_surface, ripple_weights, ripple_offset};
 import bevy_elements::trails::surface::{trail_fade, trail_march, trail_none};
@@ -193,8 +194,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     }
     let m = pbr_input.material;
     // The turf's palette: a meadow is not one green (`docs/research/ground-colour.md`). A game's
-    // own mesh gets the same variation the crate's terrain does.
-    let base = m.base_color.rgb * grain.albedo * turf_palette(pv, m.base_color.rgb);
+    // own mesh gets the same variation the crate's terrain does, with its own distribution
+    // field — the ground material has no layer masks, so there is no field to share — and the
+    // detail's own fine field as the palette's clump.
+    let field = perlin3_d(pv / 38.0 + seed_offset(91u)).x / 0.2268;
+    let base = m.base_color.rgb * grain.albedo * turf_palette(pv, m.base_color.rgb, field, grain.fine);
     let surface = weather_surface(
         base, m.perceptual_roughness, m.metallic, m.reflectance, n,
         cover.y, puddle, snow_cover, ripple,

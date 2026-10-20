@@ -459,8 +459,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         let grain = ground_detail(pv, footprint);
         tint = tint * mix(1.0, grain.albedo, turf);
         grad = grad + grain.grad * turf;
-        // The turf's palette: a meadow is not one green (`ground-colour.md`).
-        tint = tint * mix(vec3<f32>(1.0), turf_palette(pv, albedo), turf);
+        // The turf's palette: a meadow is not one green (`ground-colour.md`). The palette's
+        // *clump* is the detail's own fine field, which the turf has already evaluated for its
+        // grain, so the near field has colour variation in it for no extra noise.
+        tint = tint * mix(vec3<f32>(1.0), turf_palette(pv, albedo, fields.large, grain.fine), turf);
     }
     // The scree: where the rock's ramp opens, the stone that has weathered off it lies below.
     // Without it the grass meets the rock in a single step, and a mountain's foot is never a
