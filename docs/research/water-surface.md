@@ -101,9 +101,12 @@ shared equally by the 1 m, 0.5 m, 0.25 m, 0.125 m and 6 cm bands instead of 52 %
 the surface's roughness, and the glitter it makes, are the same.
 
 **2. The map's base band starts at the capillary end.** The base octave's lattice goes from 8
-cells to 32 cells across the 8 m tile, so the map's wavelengths run 0.25 m → 1.6 cm rather than
-1 m → 6 cm. A pond has no metre-scale wind chop; the metre band belongs to the wave field
-(`waves`), which computes its own bands from Airy's dispersion and is already there.
+cells to 16 cells across the 8 m tile, and the ladder loses its coarsest octave: the map's
+wavelengths run 0.25 m → 6.25 cm (three octaves, the finest at the kernel's four-texel limit)
+rather than 1 m → 6 cm. A pond has no metre-scale wind chop; the metre band belongs to the wave
+field (`waves`), which computes its own bands from Airy's dispersion and is already there. The
+kernel's four-texel limit is what fixes the count: with a ratio-2 ladder the finest band must
+stay at four texels, so a 16-texel base leaves exactly three octaves.
 
 **3. The still-water floor is the pond's own, and it is small.** `STILL_RIPPLE` (the strength a
 body with no flow keeps) drops from 0.25 to 0.06: a sheltered pond is a mirror with a skin on
@@ -123,9 +126,10 @@ the metre one, so the far water stays smooth.
 | Parameter | Before | After | Source |
 |---|---|---|---|
 | Height amplitude ratio per octave | 0.35 | **0.5** | Lagae et al. 2010 §4 (a flat slope spectrum) |
-| Base octave's lattice over the 8 m tile | 8 cells (1 m) | **32 cells (0.25 m)** | §Sources: a pond has no fetch; the metre band is `waves`' |
-| Octaves | 5 | 5 | unchanged |
-| Wavelength range | 1 m → 6 cm | **0.25 m → 1.6 cm** | derived |
+| Base octave's lattice over the 8 m tile | 8 cells (1 m) | **16 cells (0.25 m)** | §Sources: a pond has no fetch; the metre band is `waves`' |
+| Octaves | 5 | **3** | the kernel's four-texel limit (Deviation 4) |
+| Wavelength range | 1 m → 6 cm | **0.25 m → 6.25 cm** | derived |
+| Slope gain `NORMAL_SLOPE_GAIN` | 4.7 | **1.8575** | refitted so mip 0 keeps the Cox & Munk rms slope (Deviation 3) |
 | `STILL_RIPPLE` | 0.25 | **0.06** | Vlachos 2010 (a still surface is near-mirror) |
 | Map rms slope (mip 0) | 0.150 | 0.150 | Cox & Munk 1954, unchanged |
 | Slope share per octave | 52 / 26 / 13 / 6 / 3 % | **20 % each** | derived |
@@ -174,6 +178,25 @@ constants and its slope test is the oracle.
 6. **Cost.** The water's shading passes unchanged (`elements_waves_*` and
    `main_transparent_pass_3d` within 5 % of their logged minima; the map is generated once).
 
+## Measured
+
+On `examples/waves` at 16:30, camera 8.7 m up, `PartlyCloudy` (`/tmp/review28/cap/`), the
+high-pass standard deviation of the sky band and of the water band that mirrors it:
+
+| Frame | sky | water | ratio | water mean |
+|---|---|---|---|---|
+| before (shipped) | 1.99 | 4.44 | **2.23×** | 97.20 |
+| after (this change) | 1.99 | 2.73 | **1.37×** | 97.15 |
+| reference: the ripples off (a bare mirror) | 1.99 | 1.35 | 0.68× | 97.11 |
+
+The water is no longer noisier than the sky it mirrors, and its mean brightness is unchanged
+(97.15 against 97.11), so the ripples now perturb the reflection rather than replace it. The
+near band alone reads 1.81 against the bare mirror's 1.75.
+
+The wakes are untouched: `examples/waves` with `ELEMENTS_FOLLOW=4,2.5,8` shows the hull's
+transverse crests and foam as sharp as before (`cmp_wake.png`), and `gpu_waves`'s three tests
+pass unchanged.
+
 ## Deviations from this plan
 
 1. **The Cox & Munk formula is unchanged, only the spectrum's shape over the map's octaves
@@ -190,6 +213,12 @@ constants and its slope test is the oracle.
 3. **The change is in the ripple map, not in the water's shading.** The water's own roughness
    (0.089 perceptual) and the wave field are untouched: the wave field is already at the fine
    scale, and the two together are what a surface needs.
+4. **The map's slope gain is refitted (4.7 → 1.8575) and the octave count drops (5 → 3).** A flat
+   slope spectrum over three octaves has a smaller total gradient than the old one over five, so
+   the gain that turns the height's central difference into the slope has to grow the other way;
+   the *resulting* rms slope is unchanged at 0.150 (Cox & Munk 1954), which the CPU and GPU
+   oracles both check. The mip chain's octave filter follows the new ladder
+   (`octaves_kept`: all three down to level 1, one fewer at level 3, none from level 4).
 
 ## Pending index
 
