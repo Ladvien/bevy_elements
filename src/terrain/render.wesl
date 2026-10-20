@@ -8,7 +8,7 @@
 
 import bevy_elements::grid::{GridParams, grid_taps};
 import bevy_elements::noise::{perlin3_d, fbm3, seed_offset};
-import bevy_elements::terrain::common::{TerrainParams, ground_detail, rock_material, terrain_live};
+import bevy_elements::terrain::common::{TerrainParams, ground_detail, rock_material, terrain_live, turf_palette};
 import bevy_elements::surface_cover::{weather_surface, ripple_weights, ripple_offset, overcast_relief};
 import bevy_elements::trails::surface::{TrailHit, trail_fade, trail_march, trail_none};
 import bevy_pbr::render::{
@@ -459,6 +459,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         let grain = ground_detail(pv, footprint);
         tint = tint * mix(1.0, grain.albedo, turf);
         grad = grad + grain.grad * turf;
+        // The turf's palette: a meadow is not one green (`ground-colour.md`).
+        tint = tint * mix(vec3<f32>(1.0), turf_palette(pv, albedo), turf);
     }
     // The scree: where the rock's ramp opens, the stone that has weathered off it lies below.
     // Without it the grass meets the rock in a single step, and a mountain's foot is never a

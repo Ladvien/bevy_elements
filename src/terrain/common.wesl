@@ -54,6 +54,91 @@ struct GroundDetail {
     present: f32,
 }
 
+// ---------------------------------------------------------------------------------------------
+// The ground's colour (`docs/research/ground-colour.md`)
+// ---------------------------------------------------------------------------------------------
+
+/// The palette of ground tones, as multipliers on the turf's albedo: fresh grass, the yellow of
+/// a dry patch, the straw of a bleached one, and the earth of a worn place.
+///
+/// A meadow is not one green. Papavasiliou 2015 §3.3 is the model: each terrain type has a
+/// reference colour, and a point's score for that type is the inverse distance of the
+/// reference colour to the point's base map colour; the scores are the weights of a palette
+/// blend. The tones here are the *variation* of one material rather than four materials, so the
+/// palette is mixed in the material's own hue and its mean is the material's own colour.
+const TURF_FRESH: vec3<f32> = vec3<f32>(0.90, 1.00, 0.88);
+const TURF_DRY: vec3<f32> = vec3<f32>(1.22, 1.08, 0.62);
+const TURF_STRAW: vec3<f32> = vec3<f32>(1.40, 1.24, 0.74);
+const TURF_WORN: vec3<f32> = vec3<f32>(1.02, 0.86, 0.66);
+
+/// The scale of the palette's patch, m: a patch is a clump of grass a couple of metres across.
+const TURF_PATCH_M: f32 = 5.0;
+/// The scale of the palette's *distribution* field, m: the field decides how much of each tone
+/// there is around, over tens of metres, so the variation reaches the far field.
+const TURF_FIELD_M: f32 = 38.0;
+/// How far the palette moves the ground's colour towards a tone, 0 to 1.
+const TURF_STRENGTH: f32 = 0.85;
+
+/// The ground's colour: a multiplier on the turf's albedo.
+///
+/// The palette is chosen per *patch*, not per pixel: at 2 m a pixel is a centimetre and a straw
+/// blade is a decimetre, so a per-pixel choice of a tone is a dithered speckle. The patch is
+/// selected by a field, and the boundary between two tones is soft, so the tones' grain crosses
+/// it (Lefèbvre & Neyret 2003's dithering of a low-resolution areas map, done with a smooth
+/// boundary instead of a dither so the transition is not a speckle).
+///
+/// The result is normalised so that its mean is 1: a game's lighting is balanced around its
+/// ground's colour, so the change must be a *variation* and not a shift (the measured hue's
+/// spread over a near-ground patch was 0.010 on the plains before this note).
+///
+/// `base` is the ground's own colour, and its *chroma* decides how far the tone goes: a place
+/// where the ground is already the soil's brown does not also get the straw's yellow, and a
+/// shadow does not turn the grass into straw (Papavasiliou's weight vector, which drops the
+/// lightness for exactly that reason).
+fn turf_palette(p: vec3<f32>, base: vec3<f32>) -> vec3<f32> {
+    // The distribution field: how much of each tone there is around. It is the ground's own
+    // large-scale field, read at a second frequency, so the cost is one extra evaluation of a
+    // field the ground already computes.
+    let field = perlin3_d(p / TURF_FIELD_M + seed_offset(91u)).x / 0.2268;
+    // The clump: which tone this piece of ground wears. A second, finer field picks it, and the
+    // two together give the *mixture* of tones a meadow has: a region where the dry grass is
+    // common and another where it is not, with patches of it in both.
+    let patch_field = perlin3_d(p / TURF_PATCH_M + seed_offset(97u)).x / 0.2268;
+    // The clump's own finer octave: a patch of dry grass is made of clumps, and without it
+    // the near field (which the patch's five-metre scale does not reach) has no variation in
+    // it at all.
+    let fine_field = perlin3_d(p / (TURF_PATCH_M * 0.22) + seed_offset(103u)).x / 0.2268;
+    let clump = clamp(patch_field + fine_field * 0.75, -1.0, 1.0);
+    // The score of each tone: how much of it belongs here. The field is the *distribution* (the
+    // amount of the tone around) and the clump the *selection* (this piece of ground), and the
+    // score is their product, so a tone is common where the field is high and present where the
+    // clump is.
+    let s_fresh = max(1.0 - abs(field) * 1.6, 0.0);
+    let s_dry = max(field, 0.0) * max(0.5 + clump, 0.0);
+    let s_straw = max(field - 0.45, 0.0) * 3.0 * max(0.5 + clump, 0.0);
+    let s_worn = max(-field - 0.55, 0.0) * 3.0 * max(0.5 - clump, 0.0);
+    let total = s_fresh + s_dry + s_straw + s_worn;
+    if total < 1e-4 {
+        return vec3<f32>(1.0);
+    }
+    // The palette, mixed by the scores.
+    var tint = (s_fresh * TURF_FRESH + s_dry * TURF_DRY + s_straw * TURF_STRAW + s_worn * TURF_WORN) / total;
+    // The mean is the turf's own colour: the palette's average is pulled back to 1, so the
+    // ground's mean brightness and mean hue do not move and only the spread does.
+    let mean = (TURF_FRESH + TURF_DRY + TURF_STRAW + TURF_WORN) * 0.25;
+    tint = mix(vec3<f32>(1.0), tint / mean, TURF_STRENGTH);
+    // The base colour's own chroma decides how far the tone goes.
+    // The base colour's own chroma decides how far the tone goes. The chroma is measured
+    // *relative* to the colour's own brightness: a dark albedo has a small absolute chroma by
+    // construction (the crate's grass is (0.0397, 0.0835, 0.0134), whose chroma is 0.065), and
+    // an absolute measure would leave the palette at 39 % of its strength on the ground and
+    // nowhere near it on a bright one.
+    let lum = dot(base, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let chroma = length(base - vec3<f32>(lum)) / max(lum, 1e-4);
+    let carry = clamp(chroma * 1.6, 0.0, 1.0);
+    return mix(vec3<f32>(1.0), tint, carry);
+}
+
 /// Weight of an octave of feature size `feature_m` in a pixel whose footprint is `footprint_m`
 /// wide: 1 while the octave is resolved (at least two footprints per feature), falling to 0 over
 /// the band where it is not. Lagae et al. 2010 §5.2.1, frequency clamping: a band the pixel

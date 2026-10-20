@@ -4,7 +4,7 @@
 // the consumer's. See docs/research/terrain.md ("GroundExtension").
 
 import bevy_elements::grid::{GridParams, grid_taps};
-import bevy_elements::terrain::common::{TerrainParams, ground_detail, terrain_live};
+import bevy_elements::terrain::common::{TerrainParams, ground_detail, terrain_live, turf_palette};
 import bevy_elements::surface_cover::{weather_surface, ripple_weights, ripple_offset};
 import bevy_elements::trails::surface::{trail_fade, trail_march, trail_none};
 import bevy_pbr::render::{
@@ -192,7 +192,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         ripple = ripple_offset(xz, ground.ripple, ripple_weights(ground.cover.y));
     }
     let m = pbr_input.material;
-    let base = m.base_color.rgb * grain.albedo;
+    // The turf's palette: a meadow is not one green (`docs/research/ground-colour.md`). A game's
+    // own mesh gets the same variation the crate's terrain does.
+    let base = m.base_color.rgb * grain.albedo * turf_palette(pv, m.base_color.rgb);
     let surface = weather_surface(
         base, m.perceptual_roughness, m.metallic, m.reflectance, n,
         cover.y, puddle, snow_cover, ripple,
