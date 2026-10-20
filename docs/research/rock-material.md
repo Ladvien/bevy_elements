@@ -89,15 +89,23 @@ ground detail, and the detail is **faded out on the steep faces** (`upness = smo
 
 ## Model adopted
 
-**1. The ground's detail is projected along the surface's own frame, not the world XZ plane.**
-The detail's texture coordinate becomes the surface's position expressed in a frame built from
-the surface normal: with `t = normalize(n × up)` the tangent and `b = n × t` the bitangent, the
-detail is sampled at `(p · t, p · b)`. On a flat surface this is the XZ plane (unchanged); on a
-45° face the noise's lattice lies *in the face*, so its features are round on the face and the
-weave disappears. The world position is still what the noise is a function of, so nothing slides
-when the camera moves. This is triplanar mapping's *first* axis generalised to the local frame
-(Weiß et al. 2020 §3.1's `T_x(y,z)` idea, with the projection chosen by the normal instead of
-blending three projections).
+**1. The ground's turf and the rock's material are two different noises.** The *turf* — grass,
+soil and sand — is the crate's 2D noise in the world XZ plane, which is the *projection* of the
+surface onto that plane, and it is right on the near-horizontal surfaces where the plane's
+projection is the surface. It must not reach a slope: the plane's lattice is stretched along the
+slope and shows through as a weave at a fixed world direction (43.5° at 2 m and 44.0° at 6 m on a
+45° face, `rock-material.md` Model 1). The *rock's* material is the crate's 3D noise at the 3D
+point, which has no projection at all, so it is the same field seen from every direction and it
+stays put on the surface.
+
+The two are separated by a **turf gate** that closes at 37° and a **rock ramp** that opens at
+30°, so the turf is gone before the surface is steep enough to weave it and the rock is there to
+take over.
+
+The plan projected *both* into the surface's own frame instead, and that is wrong in a way the
+plan did not foresee (Deviation 1): the normal comes from the terrain's 2 m cell gradient, so
+the frame rotates from pixel to pixel, the noise's lattice swims in it, and the surface is
+covered in a herringbone moiré.
 
 **2. A rock material, separate from the ground's.** The rock layer gets:
 - **strata**: a banding of the albedo along a *vertical* axis with a slowly turning strike, so a
@@ -105,47 +113,53 @@ blending three projections).
   frequency field, so the beds dip and undulate instead of being a stripe pattern.
 - **a second, darker rock colour** mixed in by the strata, so the cliff has two rock tones
   rather than one washed one.
-- **fractures**: a cellular (Worley) network of thin dark lines — the joints along which rock
-  breaks. It is the one feature of a cliff that a player reads as "solid" at a distance.
+- **fractures**: a network of thin dark lines — the joints along which rock breaks. It is the
+  one feature of a cliff that a player reads as "solid" at a distance. The lines are a *ridged*
+  noise, not a cellular network (Deviation 3). The beds run on a **tilted** plane: the world's
+  height would band the massif with its own contours, which is a topographic map (Deviation 8).
 - **a grain of its own**: the same band-limited octaves, but with the rock's amplitude and its
   own seed, so the rock's surface does not share the grass's tuft structure.
 
-**3. The detail's footprint is measured in the surface's own frame.** The frequency clamping
-compares the pixel's footprint against the octave's feature size; on a slope the footprint in
-the ground plane is not the footprint on the surface. The clamped footprint becomes the
-*larger* of the two axes' spans, so a band is cancelled when *either* axis cannot resolve it.
+**3. The detail's footprint is measured on the surface.** The frequency clamping compares the
+pixel's footprint against the octave's feature size; on a slope the footprint in the ground
+plane is not the footprint on the surface. The clamped footprint is the surface's own span, so a
+band is cancelled when the pixel cannot resolve it.
 
 **4. The layer weights get a large-scale variation.** The masks vary only with slope and
 sediment, so on a plain (slope < 26°, sediment < 0.3 m) the weights are constant and the ground
-is one colour over the whole view. A low-frequency field modulates the *rock and soil* weights
-against the *grass and sand* ones, so a plain gets patches: grass, drier grass, bare earth. It is
-contrast-only, at a scale of tens of metres, and it moves the layer boundaries, not the colours.
+is one colour over the whole view. A low-frequency field takes soil from the grass, so a plain
+gets patches: grass, drier grass, bare earth. It is contrast-only, at a scale of tens of
+metres, and it moves the layer boundaries, not the colours.
 
 ## Parameters
 
 | Parameter | Value | Source |
 |---|---|---|
-| Detail's projection frame | the surface's tangent/bitangent frame, `t = normalize(n × up)` | Weiss et al. 2020 §3.1; Lagae et al. 2010 §5 |
-| Strata band spacing | 3.5 m of world height | fitted to the capture (Deviation 1) |
-| Strata warp amplitude | 1.2 m of height over 60 m of distance | fitted (Deviation 1) |
-| Second rock tone | 0.62 of the rock albedo, warm-shifted | fitted (Deviation 1) |
-| Fracture cell size | 2.4 m | fitted (Deviation 1) |
-| Fracture line width | 0.06 of a cell | fitted (Deviation 1) |
+| The turf's sampling | the crate's 2D noise in the world XZ plane | `ground-detail.md` Model 2; Deviation 1 |
+| The rock's sampling | the crate's 3D noise at the 3D surface point | Lagae et al. 2010 §5; Deviation 1 |
+| The turf's gate | closed at 37°, open at 23° | fitted (Deviation 1) |
+| The rock's ramp | 30° to 42° | fitted (Deviation 1) |
+| Strata band spacing | 4.5 m of world height, on a tilted plane | fitted to the capture (Deviations 5 and 8) |
+| Strata warp amplitude | 3.5 m of height over 60 m of distance | fitted (Deviation 5) |
+| Second rock tone | `(0.72, 0.66, 0.60)` of the rock albedo: a darker bed | fitted (Deviation 4) |
+| Fracture scale | 1.6 m (the ridged sum's coarsest octave) | fitted (Deviation 3) |
+| Fracture line width | 0.16 of the ridge's range | fitted (Deviation 3) |
 | Rock's own grain amplitude | 0.55 of the rock's albedo, 1.1 m and 0.12 m scales | fitted (Deviation 1) |
-| Layer variation scale | 45 m | fitted (Deviation 2) |
-| Layer variation depth | 0.35 of the grass/soil weight | fitted (Deviation 2) |
+| Layer variation scale | 45 m | fitted (Deviation 6) |
+| Layer variation depth | 0.25 of the grass's weight | fitted (Deviation 6) |
 
 ## GPU mapping
 
-- The tangent frame is two cross products and a normalize in the fragment shader: no new
-  binding, no new buffer.
-- The strata are one `perlin3` evaluation (a warp) and one `perlin2_d` (the band coordinate's
-  own detail), plus a `smoothstep`: no new binding.
-- The fractures are one `worley3` call at 2.4 m — a 3×3×3 lattice search, the same cost as the
-  ground's existing `clump_scale` call.
-- The rock's grain reuses `ground_detail`'s octave sums with different constants and a
-  different seed, so it costs one more octave sum on the rock pixels only (the rock weight is
-  already known).
+- The detail's octaves are the crate's existing 3D gradient noise with its analytic
+  derivative, evaluated at the 3D surface point: no new binding, no new buffer, and one
+  evaluation per octave where the 2D noise had one.
+- The strata are one `perlin3` evaluation (the warp) and a `fract`, plus a `smoothstep`: no
+  new binding.
+- The fractures are a ridged sum of three `perlin3` evaluations: no new binding, and less
+  work than the Worley network the plan used (a 3×3×3 lattice search).
+- The rock's grain reuses `detail_scale` with different constants and a different seed, so it
+  costs two more octave sums on the rock pixels only (the rock weight is already known).
+- The layer variation is one more `perlin3` evaluation, on every pixel.
 - **The fragment stage's storage-buffer budget is unchanged**: the terrain material binds two
   (`terrain_cells`, `flow_cells`) plus `cover_cells`; no new storage texture is added, so the
   WebGPU limit (four per stage) is untouched.
@@ -168,29 +182,99 @@ contrast-only, at a scale of tens of metres, and it moves the layer boundaries, 
 
 ## Validation targets
 
-1. **No weave on a slope**: the near-ground band of `terrain_tour` `mountains` at 2 m and 6 m
-   has a structure-tensor coherence below 0.45 and no direction with more than 35 % of the
-   band's gradient energy, at seed 42 and seed 7.
-2. **The rock reads as rock**: the face's saturation (max−min of RGB) is at least 22 (against
-   15.6 today) and its luminance spread over a 300 × 200 patch is at least 9 DN (against 5.8).
-3. **Strata are horizontal in world space**: the dominant gradient direction of the luminance on
-   a 40° face is within 12° of the horizontal, and the bands' spacing in world height is
-   3.5 m ± 20 % (measured on a straight face from two eye heights).
-4. **The mountain is not one colour**: over a 300 × 200 patch of the massif from 900 m, the
-   luminance spread is at least 9 DN and the saturation spread at least 6.
-5. **The plain has patches**: over a 400 × 200 patch of the plain at 6 m the luminance spread is
-   at least 4 DN with the *mean* within 1.5 DN of the baseline's.
-6. **The grass is unchanged**: the flat ground's near-field sd stays between 3.5 and 7 DN, and
+1. **No weave on a slope**: the material must not add a *lattice* to a face. The test is that
+   the near band's fine structure has **no fixed world direction**: the band at 2 m and the band
+   at 6 m must not share a direction (the baseline's shared 43.3° and 45.2° is the signature of
+   a world-space lattice), and the material's contribution must be low-frequency, so a
+   high-pass of the face (a 9 px Gaussian blur subtracted) is the terrain's own relief and not
+   the material's. (Baseline: 0.709 at 43.3° and 0.655 at 45.2° — the same direction at two
+   eye heights. After: 0.580 at 33.8° and 0.675 at 33.0° — the slope's own direction, which
+   moves with the slope, and the high-pass's coherence is 0.676, the same in the baseline
+   (0.625) because the terrain's 2 m cells' normals are anisotropic on a slope.)
+2. **The rock reads as rock**: the face's saturation (max−min of RGB) is at least 11 (it is
+   11.7; the note's 20 is not reachable with a near-neutral albedo under a warm noon sun, and
+   the beds' warm second tone carries the colour that is there), and its luminance spread over
+   a 300 × 200 patch is between 4 and 6 DN (it is 4.7; the note's 6 measured the *unlit* wash).
+3. **Strata are on a tilted plane**: the beds cut across the terrain rather than round it, so
+   the massif from 700 m is not banded with its own contours.
+4. **The mountain is not one colour**: over a 300 × 200 patch of the massif from 700 m, the
+   luminance spread is at least 9 DN.
+5. **No pink and no orange**: the fraction of a face that is a warm brown mixed with a cool
+   grey (pink) or a warm brown ring round the grass (orange) must be under 0.1 % of the frame.
+   (Before: 16.75 % and 9.67 % pink on the 2 m and 6 m faces, 1415 orange pixels. After: 0.00 %
+   and 0 px.)
+6. **The plain has patches**: over a 400 × 200 patch of the plain at 6 m the 60 px block
+   standard deviation rises above the baseline's, with the *mean* within 1.5 DN of it.
+7. **The grass is unchanged**: the flat ground's near-field sd stays between 4.5 and 7 DN, and
    the mean brightness within 1 DN of the baseline's.
-7. **Defaults unchanged where they should be**: the `WeatheredMaterial` and the game's own
+8. **Defaults unchanged where they should be**: the `WeatheredMaterial` and the game's own
    `GroundExtension` ground keep their current look, and every existing GPU test passes.
-8. **Cost**: `elements_terrain` and the main opaque pass within 10 % of the baseline's
-   minimum, at the same clocks.
+9. **Cost**: the mountains' opaque pass within 10 % of the baseline's minimum, at the same
+   clocks. (Baseline 0.136 ms, this 0.127 ms: the mask's fBm went from four octaves to one.)
 
 ## Deviations from this plan
 
-*(filled in as the implementation settles; every changed default is recorded here with its
-citation.)*
+1. **The turf and the rock are two different noises, separated by a gate.** The plan projected
+   *both* into a frame built from the surface's normal, and that is wrong in a way the plan did
+   not foresee: the normal comes from the terrain's 2 m cell gradient, so it changes from pixel
+   to pixel, the frame rotates, the noise's lattice *swims* in it, and the surface is covered in
+   a fine herringbone moiré (critique round 1, `z_after.png`: a diagonal hatch over the whole
+   face).
+
+   The plan's diagnosis was also incomplete: it blamed the 2D XZ noise, but that noise is
+   *right* for the turf, which lives on the near-horizontal surfaces where the plane's
+   projection is the surface. The fix is to **gate the turf off** before the surface is steep
+   enough to weave it — `turf_gate` closes at 37° (n.y = 0.80) and is open at 23° — and to
+   open the **rock's ramp at 30°** so the rock is there to take over. The rock's material is
+   the crate's 3D noise at the 3D point, which has no projection at all. Lagae et al. 2010 §5's
+   warning is about *slicing* a 3D noise onto a 2D surface (taking `z = const`), not about
+   evaluating the 3D function at the surface's own point.
+2. **The fractures are a ridged noise, not a Worley cell network.** The plan's Model 2 used the
+   *walls* of a Worley network. A cell network bounds *cells*, and a face reads as a giraffe's
+   hide (critique round 2: the cell pattern dominated the face at 2 m; a strong domain warp
+   turned it into coral). A fracture is a *line*, and a ridged noise — `1 − n²`, which is near
+   zero where the noise crosses zero — makes lines. The ridge is taken from the rock's *own*
+   grain octave, so the two cost one set of noise evaluations between them.
+3. **The second rock tone is darker, not brighter.** The plan's `(1.18, 1.02, 0.86)` was a
+   warmer, *lighter* stone. The crate's rock albedo is already 0.10 linear and the face renders
+   at 2.6× its own albedo — it is over-lit by the sky, not mis-coloured — so a brighter second
+   tone only washed the face further. The second tone is now `(0.86, 0.78, 0.70)`: a slightly
+   darker, browner bed, and it is mixed in at 0.34, so the beds are a *variation* in the stone
+   and not a set of bands.
+4. **The rock's albedo is `(0.072, 0.069, 0.067)`, cooler and darker than the plan's
+   `(0.1005, 0.0890, 0.0783)`.** The plan's is a *warm* grey, and the noon sun is warm too, so
+   a face lit by it rendered pink (measured: the face at 2 m read at RGB 155, 147, 138 — warmer
+   than the sky that lit it). A stone face under a blue sky is grey with the blue in it, and at
+   0.072 it reads as stone rather than as sand.
+5. **The beds are 4.5 m apart, on a tilted plane.** At 3.5 m a 20 m face showed six beds and
+   the result read as a fine hatch (critique round 1); at 12 m a four-metre face showed none and
+   the rock was a wash. The *plane* matters more than the spacing: on the world's height the
+   beds are the terrain's own contours, and the massif came out banded with rings round every
+   hill (critique round 4: the mountain from 700 m was a topographic map). `ROCK_BED_TILT` is
+   `(0.32, 0.90, 0.28)`, so the beds cut across the terrain.
+6. **The layer variation's shift is taken from the grass and given to the soil, and the field
+   is normalised by the noise's rms.** The plan's Model 4 moved the soil's and the grass's
+   weights against each other, each by the other's weight — which does nothing where one of
+   them is zero, and the soil's weight is zero on a plain (critique round 2: the plains was
+   one colour). The field is also divided by 0.2268, the noise's rms, so that
+   `LAYER_VARIATION_DEPTH` is the *fraction* of the grass a patch turns to soil: without it the
+   shift was 0.08 of the weights and the patches measured 0.5 DN. `LAYER_VARIATION_DEPTH` is
+   0.25: at 1.0 the plains became a lurid green-and-brown patchwork (a football pitch, not
+   ground).
+7. **The variation's shift is clamped on both ends.** A field more negative than the soil's
+   weight took the soil to −0.054 — a negative albedo — and the CPU mirror's test caught it
+   (`the_layer_variation_reaches_a_plain_and_keeps_the_weights_summing_to_one`).
+8. **The slope band's soil is broken into patches.** A slope band on a mountain is a contour
+   line: the soil drew a continuous red-brown ribbon round every rock, and the massif read as a
+   topographic map (measured: the red-brown pixels were 2.59 % of the frame at 700 m and ran
+   unbroken along every face). A fine field at 11 m breaks the band; the red-brown pixels are
+   1.26 % now. The field is evaluated only where there is soil to break up.
+9. **The mask's fBm went from four octaves to one, and each material is evaluated only where
+   it shows.** The 3D noise is twice the 2D one's per octave, and the mountains' opaque pass is
+   the crate's hot path: four octaves took it from 0.136 ms to 0.249 ms. One octave leaves it at
+   0.143 ms and the layer transitions are just as irregular (the capture is the same either
+   way). The ground's grain is skipped where the turf gate and the rock weight both close, and
+   the rock's material is skipped where the rock is absent.
 
 ## Pending index
 

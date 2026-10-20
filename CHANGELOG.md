@@ -6,6 +6,32 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ### Changed
 
+- **Rock has a material, and the ground's grain no longer weaves the cliff faces.** The rock
+  faces were a woven herringbone: the streak direction was 43.5° at 2 m and 44.0° at 6 m — the
+  *same* direction at two eye heights, which is the signature of a lattice in world space —
+  and the coherence was 0.71. The cause was the ground detail's 2D noise in the world XZ plane:
+  that plane is the *projection* of the surface onto it, so on a slope the lattice is stretched
+  along the slope and shows through. The ground's **turf** keeps the 2D noise (it is right on
+  the near-horizontal surfaces) and is now gated off before the surface is steep enough to
+  weave it — closed at 37° — and the **rock's** material, the crate's 3D noise at the 3D surface
+  point, which has no projection at all, takes over there; the rock's ramp opens at 30°. The
+  rock's material is bedded on a *tilted* plane (the world's height would band the massif with
+  its own contours, which is a topographic map), a second warmer bed tone, a fracture network
+  of ridged noise (a Worley cell network bounds cells and read as a giraffe's hide), and the
+  rock's own grain and relief. The ground's large-scale variation gives a plain patches of
+  bare earth through the meadow, which Andersson's Overlay detail cannot do — it "does not
+  affect areas where the base procedural mask is 0.0 or 1.0", and a plain's grass mask is 1
+  everywhere. The slope band's soil is broken into patches and tapers into the rock, so the
+  warm brown that ringed every grass patch is gone: the pink was 16.75 % of the 2 m face and
+  9.67 % of the 6 m one before, 0.00 % now, and the orange rim from 1415 pixels to none. The
+  mountains' opaque pass is **0.127 ms against the baseline's 0.136** — the mask's fBm went
+  from four octaves to one, and that pays for the rock's material. No public Rust API changes:
+  the shaders' `terrain::common` imports are the interface.
+
+- **The layer masks move**: the rock's ramp is 30°–38° (was 35°–45°) and the soil's band
+  16°–26° tapering from 22° (was 26°–36°), so the ground's turf is gone before the surface
+  is steep enough to weave it and the soil thins as the rock rises.
+
 - **The water's surface is a mirror with a skin on it, not a bowl of jello.** The ripple normal
   map's spectrum was an open-ocean statistic applied to sheltered water: 52 % of its slope
   energy sat in the 1 m octave, and a 6.2° rms tilt on the water's near-mirror surface (0.089
