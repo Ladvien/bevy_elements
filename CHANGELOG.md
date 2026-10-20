@@ -6,6 +6,30 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ### Changed
 
+- **The ground has more than one colour: a meadow is not one green.** The crate's grass was a
+  single green — the hue's spread over a near-ground patch was 0.010 on the plains and 0.016 on
+  the hills — so the ground was one colour from the near grain to the horizon. The turf is now a
+  **palette of four tones** (fresh grass, the yellow of a dry patch, the straw of a bleached
+  one, the earth of a worn place) mixed by a score, exactly Papavasiliou's model (JCGT 4(1)
+  §3.3): a low-frequency field decides how much of each tone is *around* and a finer one
+  decides which tone this piece of ground *wears*, and the score is their product. The four
+  tones are mixed as *shares* that sum to one, so the mixture is a convex combination of them
+  and the ground's mean colour and brightness cannot drift — the alternatives each failed (the
+  unweighted mean of the tones drifted the mean brightness 3.2 DN, and normalising the mixture
+  by its own colour cancelled the hue entirely). The palette's two fields are the ground's
+  *own* — the large-scale field the layer variation already uses, and the turf's coarse and
+  fine detail fields — so the palette's only new noise evaluation is its selection field, and
+  the cost is **0.137 ms → 0.144 ms** on the mountains' opaque pass. Measured: the hue's
+  spread 0.0097 → 0.0226 on the plains, 0.0258 → 0.0339 on the hills, with the mean
+  brightness within 0.2 DN and the rock byte-identical. A game's own ground on
+  `GroundExtension` gets the same variation.
+
+- **The rock has a material, and the ground's grain no longer weaves the cliff faces** (below):
+  the rock faces were a woven herringbone (coherence 0.71 at a fixed 43.5° world direction),
+  the rock had no material of its own, the ground's large-scale variation gives a plain
+  patches of bare earth, and the slope band's soil is broken into patches and tapers into the
+  rock.
+
 - **Rock has a material, and the ground's grain no longer weaves the cliff faces.** The rock
   faces were a woven herringbone: the streak direction was 43.5° at 2 m and 44.0° at 6 m — the
   *same* direction at two eye heights, which is the signature of a lattice in world space —
