@@ -70,10 +70,10 @@ struct GroundDetail {
 /// reference colour to the point's base map colour; the scores are the weights of a palette
 /// blend. The tones here are the *variation* of one material rather than four materials, so the
 /// palette is mixed in the material's own hue and its mean is the material's own colour.
-const TURF_FRESH: vec3<f32> = vec3<f32>(0.90, 1.00, 0.88);
-const TURF_DRY: vec3<f32> = vec3<f32>(1.22, 1.08, 0.62);
-const TURF_STRAW: vec3<f32> = vec3<f32>(1.40, 1.24, 0.74);
-const TURF_WORN: vec3<f32> = vec3<f32>(1.02, 0.86, 0.66);
+const TURF_FRESH: vec3<f32> = vec3<f32>(1.00, 1.00, 1.00);
+const TURF_DRY: vec3<f32> = vec3<f32>(1.35, 1.20, 0.69);
+const TURF_STRAW: vec3<f32> = vec3<f32>(1.55, 1.37, 0.82);
+const TURF_WORN: vec3<f32> = vec3<f32>(1.13, 0.95, 0.73);
 
 /// The scale of the palette's patch, m: a patch is a clump of grass a couple of metres across.
 const TURF_PATCH_M: f32 = 5.0;
@@ -116,20 +116,37 @@ fn turf_palette(p: vec3<f32>, base: vec3<f32>, field: f32, fine: f32) -> vec3<f3
     // amount of the tone around) and the clump the *selection* (this piece of ground), and the
     // score is their product, so a tone is common where the field is high and present where the
     // clump is.
-    let s_fresh = max(1.0 - abs(field) * 1.6, 0.0);
-    let s_dry = max(field, 0.0) * max(0.5 + clump, 0.0);
-    let s_straw = max(field - 0.45, 0.0) * 3.0 * max(0.5 + clump, 0.0);
-    let s_worn = max(-field - 0.55, 0.0) * 3.0 * max(0.5 - clump, 0.0);
-    let total = s_fresh + s_dry + s_straw + s_worn;
-    if total < 1e-4 {
-        return vec3<f32>(1.0);
+    //
+    // The scores are raised to the power `p`, which is Papavasiliou's exponent: "using lower
+    // values for p, broader transitional regions between terrain types can be achieved while
+    // larger values create sharper, more defined transitions". At p = 1 the dry grass faded in
+    // over the whole field and the meadow read as a haze; at p = 2 the patches have an edge.
+    //
+    // The scores are *shares* of the turf's own colour: the three dry tones take what they need
+    // and the fresh grass has what is left, so the four sum to 1 and the palette is a convex
+    // combination of them. A convex combination cannot drift the ground's mean: the mixture is
+    // between the tones and the tones bracket the fresh one. (Normalising the mixture instead
+    // was tried three ways and each failed: by the unweighted mean of the tones the ground's
+    // mean brightness drifted 3.2 DN, by the mixture's own colour the hue was cancelled
+    // entirely, and by a per-channel mean the hue was cancelled again.)
+    // The exponent is a *literal*: `pow(x, p)` with `p` in a `let` makes naga emit a broken
+    // shader *without an error*, and the ground renders as a dark navy (the same symptom as
+    // an unimported name; see AGENTS.md). WGSL's `pow` is undefined for a zero base and a
+    // non-positive exponent, and naga's handling of the general case is not safe here.
+    var s_dry = min(pow(max(field, 0.0) * max(0.5 + clump, 0.0), 2.0), 1.0);
+    var s_straw = min(pow(max(field - 0.45, 0.0) * 3.0 * max(0.5 + clump, 0.0), 2.0), 1.0);
+    var s_worn = min(pow(max(-field - 0.55, 0.0) * 3.0 * max(0.5 - clump, 0.0), 2.0), 1.0);
+    let others = s_dry + s_straw + s_worn;
+    if others > 1.0 {
+        let k = 1.0 / others;
+        s_dry = s_dry * k;
+        s_straw = s_straw * k;
+        s_worn = s_worn * k;
     }
-    // The palette, mixed by the scores.
-    var tint = (s_fresh * TURF_FRESH + s_dry * TURF_DRY + s_straw * TURF_STRAW + s_worn * TURF_WORN) / total;
-    // The mean is the turf's own colour: the palette's average is pulled back to 1, so the
-    // ground's mean brightness and mean hue do not move and only the spread does.
-    let mean = (TURF_FRESH + TURF_DRY + TURF_STRAW + TURF_WORN) * 0.25;
-    tint = mix(vec3<f32>(1.0), tint / mean, TURF_STRENGTH);
+    let s_fresh = 1.0 - s_dry - s_straw - s_worn;
+    // The palette, mixed by the shares.
+    let mixed = s_fresh * TURF_FRESH + s_dry * TURF_DRY + s_straw * TURF_STRAW + s_worn * TURF_WORN;
+    var tint = mix(vec3<f32>(1.0), mixed, TURF_STRENGTH);
     // The base colour's own chroma decides how far the tone goes.
     // The base colour's own chroma decides how far the tone goes. The chroma is measured
     // *relative* to the colour's own brightness: a dark albedo has a small absolute chroma by
