@@ -171,7 +171,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let pressed = max(-trail.h, 0.0);
     var n = normalize(n0 - vec3<f32>(trail.grad.x, 0.0, trail.grad.y) * n0.y);
     // The ground's own grain, band-limited per octave exactly as the terrain material's
-    // (`docs/research/ground-detail.md`): a game's mesh gets the same near-field detail.
+    // (`docs/research/ground-detail.md`): a game's mesh gets the same near-field detail. The
+    // octaves are sampled in the surface's own frame, so a slope's grain is round on the slope
+    // (`docs/research/rock-material.md`, Model 1).
     let footprint = max(length(dpdx(pv)), length(dpdy(pv)));
     let grain = ground_detail(pv, footprint);
     n = normalize(n - (grain.grad - dot(grain.grad, n) * n));

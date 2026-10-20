@@ -114,6 +114,34 @@ pub(crate) fn layer_weights(slope_deg: f32, sediment_m: f32, detail: f32) -> [f3
     [rock, sand, rest * band, rest * (1.0 - band)]
 }
 
+/// The scale of the ground's large-scale variation, m (`render.wesl`).
+pub(crate) const LAYER_VARIATION_M: f32 = 45.0;
+/// How far the variation moves the layer weights (`render.wesl`).
+pub(crate) const LAYER_VARIATION_DEPTH: f32 = 0.25;
+/// The rms of the crate's 3D noise, measured in the crate's own mirror: the field is
+/// normalised by it so that `LAYER_VARIATION_DEPTH` is the fraction of the grass a patch turns
+/// to soil.
+pub(crate) const NOISE_RMS: f32 = 0.2268;
+
+/// The ground's large-scale variation of the layer weights (`render.wesl`): a low-frequency
+/// field that takes soil from the grass, so a plain — where the soil's weight is zero — gets
+/// patches instead of one colour.
+pub(crate) fn layer_variation(p: Vec3, w: [f32; 4]) -> [f32; 4] {
+    let field = (crate::gpu::noise_mirror::perlin3_d(p / LAYER_VARIATION_M + crate::gpu::noise_mirror::seed_offset(71)).x
+        / NOISE_RMS)
+        .clamp(-1.0, 1.0);
+    let shift = field * LAYER_VARIATION_DEPTH * w[3];
+    let mut v = w;
+    // The shift is taken from the grass and given to the soil, and both ends are clamped: a
+    // field more negative than the soil's weight would take the soil below zero (measured:
+    // −0.054 on a plain), and a negative weight is a negative albedo.
+    let taken = shift.clamp(-v[2], v[3]);
+    v[2] += taken;
+    v[3] -= taken;
+    let total = v.iter().sum::<f32>();
+    v.map(|x| x / total.max(1e-6))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,6 +310,46 @@ mod tests {
         // Inside a transition the detail spans the whole range: at 40° rock goes 0 → 1.
         assert_eq!(layer_weights(40.0, 0.0, 0.0)[0], 0.0);
         assert_eq!(layer_weights(40.0, 0.0, 1.0)[0], 1.0);
+    }
+
+    /// The ground's large-scale variation must reach a **plain**, where the soil's weight is
+    /// zero and the grass's is one. Moving the two weights against each other (each by the
+    /// other's weight) does nothing there, and the plain stayed one colour; the shift has to
+    /// be taken from the grass and given to the soil. The weights must still sum to one and
+    /// stay in range, or the ground's mean colour drifts (`rock-material.md` Model 4).
+    #[test]
+    fn the_layer_variation_reaches_a_plain_and_keeps_the_weights_summing_to_one() {
+        let plain = layer_weights(4.0, 0.0, 0.5);
+        assert_eq!(plain[2], 0.0, "a plain has no soil to start with");
+        assert_eq!(plain[3], 1.0);
+        // Walk a line across the field: the soil must appear, the grass must give it up, and
+        // the pair must still sum to one.
+        let mut max_soil = 0.0f32;
+        let mut min_soil = 1.0f32;
+        for k in 0..200 {
+            let p = Vec3::new(k as f32 * 3.0, 0.0, 0.0);
+            let w = layer_variation(p, plain);
+            assert!(
+                (w.iter().sum::<f32>() - 1.0).abs() < 1e-5,
+                "the weights do not sum to one at {p:?}: {w:?}"
+            );
+            assert!(w.iter().all(|x| (0.0..=1.0).contains(x)), "{w:?}");
+            max_soil = max_soil.max(w[2]);
+            min_soil = min_soil.min(w[2]);
+        }
+        assert!(
+            max_soil > 0.05,
+            "the variation never reaches a plain (the most soil was {max_soil})"
+        );
+        assert!(
+            min_soil < 0.02,
+            "the variation never gives the soil back (the least soil was {min_soil})"
+        );
+        // The rock and the sand are where the terrain's shape put them, and the variation must
+        // not move them.
+        let steep = layer_weights(50.0, 0.0, 0.5);
+        let w = layer_variation(Vec3::new(30.0, 0.0, 0.0), steep);
+        assert_eq!(w[0], 1.0, "the variation moved the rock");
     }
 
     /// Validation 5: on the plane `h = 0.5 x` the central-difference slope is atan(0.5) at every

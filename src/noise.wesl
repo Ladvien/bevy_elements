@@ -112,39 +112,6 @@ fn perlin3_periodic(p: vec3<f32>, period: i32) -> f32 {
     return mix(x0, x1, u.z) * 1.1547;
 }
 
-/// 2D gradient (Perlin) noise in the XZ plane, with its analytic derivative: `.x` the value in
-/// roughly [-1, 1], `.yz` = ∂/∂(x, z) per lattice unit. The gradients are unit vectors on the
-/// circle, so the noise is isotropic in the plane — a slice of `perlin3` at a fixed `y` is not
-/// (its lattice gradients point in 3D, and on a tilted surface the slice's frequency compresses
-/// along the view direction; Lagae et al. 2010 §5). Ground detail lives on a surface, so it uses
-/// this (`docs/research/ground-detail.md`, Model 2).
-fn perlin2_gradient(c: vec2<i32>) -> vec2<f32> {
-    let h = hash33(vec3<i32>(c.x, c.y, 0)).xy * 2.0 - vec2<f32>(1.0);
-    return normalize(h + vec2<f32>(1e-6));
-}
-
-fn perlin2_d(p: vec2<f32>) -> vec3<f32> {
-    let i = vec2<i32>(floor(p));
-    let f = p - floor(p);
-    let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-    let du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
-    let ga = perlin2_gradient(i);
-    let gb = perlin2_gradient(i + vec2<i32>(1, 0));
-    let gc = perlin2_gradient(i + vec2<i32>(0, 1));
-    let gd = perlin2_gradient(i + vec2<i32>(1, 1));
-    let va = dot(ga, f);
-    let vb = dot(gb, f - vec2<f32>(1.0, 0.0));
-    let vc = dot(gc, f - vec2<f32>(0.0, 1.0));
-    let vd = dot(gd, f - vec2<f32>(1.0, 1.0));
-    let k1 = vb - va;
-    let k2 = vc - va;
-    let k3 = va - vb - vc + vd;
-    let value = va + u.x * k1 + u.y * k2 + u.x * u.y * k3;
-    let grad = ga + u.x * (gb - ga) + u.y * (gc - ga) + u.x * u.y * (ga - gb - gc + gd)
-        + du * (vec2<f32>(k1, k2) + u.yx * k3);
-    return vec3<f32>(value, grad) * 1.4142;
-}
-
 /// Fractal sum of `octaves` periodic Perlin octaves (lacunarity 2, gain 0.5) that tiles with
 /// `period` lattice units at the base octave, divided by the sum of the amplitudes. Octave `o`
 /// uses lattice period `period · 2^o` and its own whole-cell hash offset.

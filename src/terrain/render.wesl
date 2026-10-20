@@ -7,8 +7,8 @@
 // depth/normal prepass fragment stays Bevy's.
 
 import bevy_elements::grid::{GridParams, grid_taps};
-import bevy_elements::noise::{perlin3_d, fbm3};
-import bevy_elements::terrain::common::{TerrainParams, ground_detail, terrain_live};
+import bevy_elements::noise::{perlin3_d, fbm3, seed_offset};
+import bevy_elements::terrain::common::{TerrainParams, ground_detail, rock_material, terrain_live};
 import bevy_elements::surface_cover::{weather_surface, ripple_weights, ripple_offset, overcast_relief};
 import bevy_elements::trails::surface::{TrailHit, trail_fade, trail_march, trail_none};
 import bevy_pbr::render::{
@@ -167,12 +167,64 @@ fn overlay(mask: f32, detail: f32) -> f32 {
 // The four layer weights (rock, sand, soil, grass) for a slope angle (degrees), a sediment depth
 // (m) and a detail value in [0, 1] (0.5: none). They sum to 1 by construction; `model/mirror.rs`
 // is the CPU copy (terrain.md Deviation 19).
+//
+// The rock and the grass meet at one boundary, and it is *one* field: the rock's mask is the
+// slope's ramp with the detail overlaid, and the grass takes what is left of it. The two must
+// not be computed separately — the rock's mask overlaid with the detail and the grass's mask
+// overlaid with the *same* detail meet at two different places, and the ground shows a hard
+// green line along the rock (measured on `mountains` from 700 m: the grass's edge was a
+// two-pixel step, and the layer weights on either side of it were 0.05 and 0.95).
 fn layer_weights(slope_deg: f32, sediment: f32, detail: f32) -> vec4<f32> {
     let rock = overlay(smoothstep(35.0, 45.0, slope_deg), detail);
     let sand = overlay(smoothstep(0.3, 0.7, sediment), detail) * (1.0 - smoothstep(26.0, 30.0, slope_deg)) * (1.0 - rock);
+    // The soil and the grass share what the rock and the sand left, and they divide it at the
+    // soil band — which the detail also moves, so the two boundaries are the same field.
     let band = overlay(smoothstep(26.0, 36.0, slope_deg), detail);
     let rest = (1.0 - rock) * (1.0 - sand);
     return vec4<f32>(rock, sand, rest * band, rest * (1.0 - band));
+}
+
+/// The scale of the ground's large-scale variation, m: the patches of longer and shorter grass,
+/// bare earth and drier ground.
+const LAYER_VARIATION_M: f32 = 45.0;
+/// How far the variation moves the layer weights, 0 to 1. At 1.0 the plains became a lurid
+/// green-and-brown patchwork (a football pitch, not ground); at 0.25 the patches are there and
+/// the ground is still a meadow.
+const LAYER_VARIATION_DEPTH: f32 = 0.25;
+
+/// The ground's large-scale variation: a low-frequency field that moves the *soil* and *grass*
+/// weights against each other. The layer masks vary only with slope and sediment, so on a plain
+/// — where the grass mask is 1 everywhere — the whole view is one colour; Andersson's Overlay
+/// detail "does not affect areas where the base procedural mask is 0.0 or 1.0" (2007 section
+/// 5.2.3), so it cannot break that up. This field does: it moves the weights themselves, so a
+/// plain gets patches of grass and bare earth (`rock-material.md` Model 4).
+///
+/// The field is a *contrast* modulation: the weights are moved against each other and then
+/// renormalised, so the sum is still 1 and the ground's mean colour is unchanged.
+fn layer_variation(p: vec3<f32>, w: vec4<f32>) -> vec4<f32> {
+    // The field is normalised by the noise's own rms (0.2268, measured in the crate's mirror)
+    // so that `LAYER_VARIATION_DEPTH` is the *fraction* of the grass that a patch turns to
+    // soil, and not a fraction of a small number. Without the normalisation the shift was
+    // 0.08 of the weights, and the soil's and the grass's albedos differ by so little in linear
+    // terms that the patches measured 0.5 DN — invisible (the plains' 60 px block standard
+    // deviation was 2.25 DN before and 2.21 after).
+    let field = perlin3_d(p / LAYER_VARIATION_M + seed_offset(71u)).x / 0.2268;
+    // Only the soil and the grass move against each other: the rock and the sand are where the
+    // terrain's shape put them, and a patch of "more rock" on a plain is not a thing.
+    //
+    // The shift is *taken from the grass and given to the soil*, so it works where the soil's
+    // weight is zero — which is everywhere on a plain. Moving the two weights against each
+    // other instead (each by the other's weight) does nothing when one of them is zero.
+    let shift = clamp(field, -1.0, 1.0) * LAYER_VARIATION_DEPTH * w.w;
+    var v = w;
+    // The shift is taken from the grass and given to the soil, and both ends are clamped: a
+    // field more negative than the soil's weight would take the soil below zero (measured:
+    // −0.054 on a plain), and a negative weight is a negative albedo.
+    let taken = clamp(shift, -v.z, v.w);
+    v.z = v.z + taken;
+    v.w = v.w - taken;
+    let total = v.x + v.y + v.z + v.w;
+    return v / max(total, 1e-6);
 }
 
 /// The raw cloud deck transmittance over the ground at `p` (1.0 outside the map or without one):
@@ -290,25 +342,30 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // The slope is the terrain's: a footprint's wall is not a cliff.
     let alpha = degrees(atan(length(g)));
     let detail = clamp(0.5 + 0.75 * fbm3(p / 48.0, 4u), 0.0, 1.0);
-    let w = layer_weights(alpha, sediment, detail);
+    let w = layer_variation(p, layer_weights(alpha, sediment, detail));
     var albedo = w.x * ROCK + w.y * SAND + w.z * SOIL + w.w * GRASS;
     // A trench through grass or soil shows the soil (sand stays sand; rock takes no imprint).
     albedo = mix(albedo, SOIL, smoothstep(0.01, 0.05, depth) * (w.z + w.w));
     let rough = mix(0.9, 0.95, w.z);
 
-    // Detail: band-limited octaves of 3D noise at the visible position (a procedural function
-    // has no projection axis), each octave cancelled once the pixel footprint cannot resolve it
-    // (`docs/research/ground-detail.md`, Model 1–4).
-    // The detail is projected on the ground plane, so its footprint is the XZ span of a pixel,
-    // not the 3D distance: on a slope the projection is compressed along the view direction and
-    // the 3D length would under-band-limit it (diagonal streaks on the faces). Relief's own
-    // grain belongs to the rock's strata, not the ground's, so the detail fades with the
-    // surface's upness (`docs/research/ground-detail.md`, Deviation 4).
-    let footprint = max(length(dpdx(pv).xz), length(dpdy(pv).xz)) / max(n.y, 0.25);
+    // The pixel's footprint on the surface, in metres. The detail is a function of the surface's
+    // own frame, so the footprint that band-limits it is the surface's, not the ground plane's.
+    let footprint = max(length(dpdx(pv)), length(dpdy(pv)));
+
+    // The ground's detail, and the rock's own material (`docs/research/rock-material.md`).
+    // The ground's grain is turf, soil and sand: it belongs on the near-horizontal surfaces,
+    // and the upness gate keeps it off the steep faces. The rock's material is bedded, jointed
+    // and two-toned, and it is what a cliff face wears; the two cross-fade over the rock
+    // weight, so a face that turns into a slope loses its bedding as it gains its turf.
     let grain = ground_detail(pv, footprint);
     let upness = smoothstep(0.55, 0.9, n.y);
-    albedo = albedo * mix(1.0, grain.albedo, upness);
-    let grad = grain.grad * upness;
+    let rock = rock_material(pv, footprint);
+    // The rock's own grain is its surface, and it is strongest where the rock is: a face's
+    // bedding is a property of the rock, not of the grass that creeps onto its ledges.
+    let rockness = w.x;
+    albedo = albedo * mix(1.0, grain.albedo, upness * (1.0 - rockness));
+    albedo = albedo * mix(vec3<f32>(1.0), rock.tint, rockness);
+    let grad = grain.grad * upness * (1.0 - rockness) + rock.grad * rockness;
     n = normalize(n - (grad - dot(grad, n) * n));
 
     // Ground cover: wet darkening and gloss, puddles with ripples while it rains, snow
