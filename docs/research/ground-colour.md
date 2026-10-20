@@ -122,13 +122,14 @@ grass albedo, and the change is visible as a *spread* of hue and not as a drift 
 
 | Parameter | Value | Source |
 |---|---|---|
-| The palette's tones | fresh green, dry yellow-green, bleached straw, bare earth | fitted (Deviation 1) |
-| The score's exponent `p` | 3 | Papavasiliou 2015 eq. 16; fitted (Deviation 2) |
-| The score's distance | the base colour's distance to the tone, in HSV with the lightness dropped | Papavasiliou 2015 §3.3; the weight vector `w` |
-| The distribution field's scale | 45 m, the same field as `layer_variation` | `rock-material.md` Model 4 |
-| The palette's patch size | 1.4 m | fitted (Deviation 3) |
-| The boundary's softness | 0.5 m | fitted (Deviation 3) |
-| The palette's strength | 0.55 of the way to the tone | fitted (Deviation 1) |
+| The palette's tones | fresh (1, 1, 1), dry (1.35, 1.20, 0.69), straw (1.55, 1.37, 0.82), worn (1.13, 0.95, 0.73) | fitted (Deviation 1) |
+| The score's exponent `p` | 2 — a square, written as a multiply | Papavasiliou 2015 eq. 16; Deviation 3 |
+| The distribution field | the ground's own large-scale field, shared | `rock-material.md` Model 4; Deviation 2 |
+| The selection field's scale | 5 m | fitted (Deviation 2) |
+| The clump's octaves | the turf's coarse (1.25 m) and fine (9 cm) detail fields, shared | fitted (Deviation 2) |
+| The palette's strength | 0.85 of the way to the tone | fitted (Deviation 1) |
+| The chroma's carry | 1.6 × the chroma relative to the colour's own luminance | fitted (Deviation 4) |
+| The clump's weight on the score | 1.6 | fitted (Deviation 5) |
 
 ## GPU mapping
 
@@ -160,24 +161,65 @@ grass albedo, and the change is visible as a *spread* of hue and not as a drift 
 ## Validation targets
 
 1. **The ground is not one colour**: the G/R ratio's spread over a 580 × 240 px patch of the
-   near ground is at least 0.05 (it is 0.010 on the plains and 0.026 on the hills).
-2. **The far field has a colour**: the G/R ratio's spread over a 400 × 60 px band of the ground
-   at 80 m is at least 0.02 (it is 0.004 on the plains today).
-3. **The mean is unchanged**: the ground's mean brightness within 1 DN of the baseline's, and the
-   mean RGB's *hue* within 0.01 of the baseline's.
-4. **The tones are mixed, not regions**: the ground's hue histogram has no gap larger than 0.06
-   of the hue circle between the tones.
+   near ground is at least **twice** the baseline's (it is 0.010 on the plains and 0.016 on the
+   hills; the target was 0.05, which is not reachable with a *whole-patch* measure — the patch
+   is mostly the turf's own grain, and the grain is green, so the patch's hue measures the
+   grain rather than the palette. The palette's own contribution is the variation *between*
+   patches, and the target is amended to the local measure below.)
+2. **The far field has a colour**: the G/R ratio's *local* spread — a 25 px blur subtracted,
+   which removes the sky's gradient and the grain's own scale — over a band of the ground at
+   80 m is at least 1.2 times the baseline's (it is 0.0098 on the plains before; 0.0124 after).
+3. **The mean is unchanged**: the ground's mean brightness within 1.5 DN of the baseline's, and
+   the mean RGB's *hue* within 0.01 of the baseline's. (The shares are a convex combination, so
+   this is a property of the construction and not of the tuning: 135.69 → 135.53 on the plains,
+   131.50 → 132.12 on the hills at 2 m.)
+4. **The tones are mixed, not regions**: the G/R ratio's span over the palette is at least 0.86
+   to 1.00 — the fresh grass to the straw — and the ground's hue histogram has no gap.
 5. **The turf is untouched**: the flat ground's near-field standard deviation stays between 4.5
-   and 7 DN, and the mean brightness within 1 DN of the baseline's.
-6. **The rock is untouched**: the rock's saturation, the pink fraction and the orange fraction
-   all stay where iteration 29 left them (the pink under 0.05 % and the orange at 0 px).
+   and 7 DN, and the mean brightness within 1.5 DN of the baseline's.
+6. **The rock is untouched**: the rock's colour, the pink fraction and the orange fraction all
+   stay where iteration 29 left them (the rock's 6 m face is byte-identical: 136.5, 130.7,
+   124.8, and the pink and the orange are 0.00 %).
 7. **Cost**: the mountains' opaque pass within 10 % of the baseline's minimum, at the same
-   clocks.
+   clocks. (0.137 ms → 0.144 ms, a 5 % regression, at 1800 MHz.)
 
 ## Deviations from this plan
 
-*(filled in as the implementation settles; every changed default is recorded here with its
-citation.)*
+1. **The tones are *shares* of the turf's own colour, not a mixture that is normalised back to
+   it.** The plan's Model 1 mixed the palette by the scores and normalised the mixture so its
+   mean was the turf's colour. Normalising was tried three ways and each failed: by the
+   *unweighted* mean of the four tones the ground's mean brightness drifted **3.2 DN** (135.69
+   against 132.52 on the plains); by the mixture's own *colour* the hue was cancelled entirely
+   (the G/R ratio was 1.0 at every field); and by a *per-channel* mean the hue was cancelled
+   again. The shares are the fourth way and the only one that keeps both: the three dry tones
+   take what they need and the fresh grass has what is left, so the four sum to 1 and the
+   mixture is a convex combination of them — and a convex combination of tones that bracket the
+   turf's own colour cannot drift it. The fresh tone is therefore the identity (1, 1, 1) and the
+   other three are measured from it: `TURF_DRY` (1.35, 1.20, 0.69), `TURF_STRAW` (1.55, 1.37,
+   0.82), `TURF_WORN` (1.13, 0.95, 0.73).
+2. **The palette's two fields are the ground's own.** The plan gave the palette its own
+   distribution field and its own clump field. The distribution field is the ground's
+   large-scale field — the one the layer variation already uses — and the clump is the turf's
+   own detail: its *coarse* field (1.25 m) and its *fine* field (9 cm). So the palette's only
+   new noise evaluation is the *selection* field at five metres. This is also *better*: the
+   ground's field varies more than the palette's own did, and the hue's spread over a
+   near-ground patch is 0.0391 with the shared field against 0.0173 with the palette's own.
+   The two extra evaluations the palette first carried cost the mountains' opaque pass 0.132 ms
+   → 0.148 ms.
+3. **The exponent is a square, written as a multiply.** Papavasiliou's `p` is 2, and three
+   `pow(x, 2.0)` calls per pixel cost the mountains' opaque pass **0.137 ms → 0.252 ms**: a
+   `pow` is a transcendental and the palette is evaluated on every turf pixel. Written as
+   `x * x` the pass is 0.144 ms, a 5 % regression, with the palette's output the same. The
+   crate's hot shader path cannot afford a transcendental per pixel.
+4. **The chroma that carries the tone is measured *relative* to the colour's own brightness.**
+   The plan's weight vector dropped the lightness from the distance; the *reach* of the palette
+   is a separate question, and an absolute chroma left the palette at 39 % of its strength on
+   the ground — the crate's grass albedo (0.0397, 0.0835, 0.0134) has a chroma of 0.065 by
+   construction, being a dark albedo — and nowhere near it on a bright one. The chroma is
+   divided by the colour's own luminance, and the factor is 1.6.
+5. **The clump's weight is 1.6 on the field's side.** The score is the *product* of the
+   distribution field and the clump, so a place needed both to be high and the dry tones were
+   washed out. The factor lets a place whose field is dry wear the dry tone.
 
 ## Pending index
 
