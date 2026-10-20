@@ -1869,3 +1869,153 @@ are fixed, the colour defects are gone, and the cost went *down*.
    *readable* look is also less legible than the physical one (measured in the last iteration:
    the readable streaks carry 32 DN of contrast against the grass where the physical ones carry
    44), which is the defect the town capture keeps showing.
+
+## Iteration 30 — 2026-10-20 — the ground has more than one colour: a meadow is not one green
+
+**Commits:** `7197ba7` (the research note `docs/research/ground-colour.md`), `2251ce9` (the
+palette), `1e6d030` (the shared fields), `a5c89f4` (the convex shares), `7775900` (the clump's
+weight), `548e3c7` (the broken edge), `811adc6` (the square, not a `pow`), `6a9b3b9` (the docs,
+the changelog and the showcase image), this log. **Sibling repos:** none. **Not released.**
+
+### Candidates
+
+| Rank | Candidate | Class | Decision |
+|---|---|---|---|
+| 1 | The ground is **one colour** over the whole frame: the hue's spread over a near-ground patch is 0.010 on the plains and 0.016 on the hills | 2 (a beauty gap) | **this iteration** |
+| 2 | The grass/rock boundary is a blurred paint edge | 1 | **this iteration** (the same change, at the boundary) |
+| 3 | The scree is a graded band, not a scatter | 2 | carried |
+| 4 | The isometric town at night is black (22 h, Rain: mean 1 DN) | 1 | carried |
+| 5 | The overcast dome is flat (1.08:1 against CIE's 2:1–3:1) | 1 | carried |
+
+Rank 1 beat the carried items because it is in *every* outdoor frame of the game: a third-person
+camera looks at the ground from one to twenty metres most of the time. The crate's ground
+already had the *shape* of a meadow — its silhouette, its tufts, its patches of bare earth — and
+none of the *colour*.
+
+### What changed
+
+- **The turf is a palette of four tones** — fresh grass, the yellow of a dry patch, the straw
+  of a bleached one, the earth of a worn place — mixed by a **score**, exactly Papavasiliou's
+  model: a low-frequency field decides how much of each tone is *around* and a finer one
+  decides which tone this piece of ground *wears*, and the score is their product.
+- **The four tones are mixed as *shares* that sum to one.** The mixture is a convex combination
+  of them, so the ground's mean colour and brightness cannot drift. Three other normalisations
+  were tried and each failed (the unweighted mean of the tones drifted the mean brightness
+  3.2 DN; normalising by the mixture's own colour cancelled the hue entirely; a per-channel
+  mean cancelled it again).
+- **The palette's two fields are the ground's own** — the large-scale field the layer variation
+  already uses, and the turf's coarse and fine detail fields — so the palette's only new noise
+  evaluation is its selection field at five metres. It is also a *better* field than the
+  palette's own: the ground's varies more, and the hue's spread over a near-ground patch is
+  0.0391 with the shared field against 0.0173 with the palette's own.
+
+### Sources
+
+- **Papavasiliou, N. (2015)**, *Real-Time Grass (and Other Procedural Objects) on Terrain*,
+  JCGT 4(1):26–49 (`https://jcgt.org/published/0004/01/02/paper.pdf`, downloaded to
+  `/tmp/research/pdf/papavasiliou2015.pdf` and read with `pdftotext -layout`, 1211 lines; no DOI).
+  **§3.3, "Controlling Plant Distribution", is the model this iteration adopts**: "Vegetation in
+  nature does not always uniformly cover the ground. The density usually varies due to
+  variations in the underlying soil and parts of the terrain may be altogether bare."; the
+  **reference colour** and the **score** — for each terrain type a reference colour, and at each
+  point a score for that type "based on the inverse distance of the terrain type's reference
+  color to the terrain's base map color at that point", in HSV; the **weight vector** `w`, which
+  "allows us to ignore certain color components during the calculation of the distance … where a
+  reasonable choice is gray for which hue is meaningless", and the note that it "is also useful
+  in many cases to discard the lightness component, as its variation over the terrain is often
+  the result of shadowing effects, which are unrelated to terrain type"; the **exponent** `p`,
+  "useful in controlling the sharpness of the transition between different terrain types. By
+  using lower values for p, broader transitional regions between terrain types can be achieved
+  while larger values create sharper, more defined transitions"; and the **threshold**. **Not
+  indexed.**
+- **Lefèbvre, S., Neyret, F. (2003)**, *Pattern based procedural textures*, ACM SIGGRAPH
+  Symposium on Interactive 3D Graphics (I3D '03):203–212, DOI `10.1145/641480.641518`
+  (downloaded to `/tmp/research/pdf/lefebvre2003.pdf` and read with `pdftotext -layout`, 968
+  lines). Used: "an algorithm which procedurally determines the texture value at any surface
+  location by **aperiodically combining provided patterns** according to user-defined controls
+  such as a probability distribution (possibly non stationary)"; the **probability map**, "an
+  explicit indirection map … simply contains the indices of the patterns to be used"; and the
+  **dithering operator** for the areas map's interpolation, which this iteration replaces with a
+  smooth boundary so the transition is not a speckle. **Not indexed.**
+- **Andersson, J. (2007)**, *Terrain rendering in Frostbite using procedural shader splatting*,
+  SIGGRAPH 2007 *Advances* ch. 5 (corpus `10.1145_1281500.1281668`): the "bland transitions" the
+  crate inherited and the per-material detail that fixes them.
+- **Grenier, C., Guérin, É., Galin, É., Sauvage, B. (2024)**, *Real-time Terrain Enhancement with
+  Controlled Procedural Patterns*, CGF 43(1):e14992, DOI `10.1111/cgf.14992` (the abstract and
+  the search index's account; the PDF is behind Wiley's 403): the **palette of control maps** for
+  artist control over a structured noise's patterns, and the principle that a terrain's details
+  "correspond to the underlying terrain characteristics". **Not indexed.**
+- **Lagae et al. (2010)**, *A survey of procedural noise functions*, CGF 29(8),
+  `10.1111/j.1467-8659.2010.01827.x` (corpus), as in `ground-detail.md`.
+- **`ground-detail.md`** (iteration 28) and **`rock-material.md`** (iteration 29): the ground's
+  two detail scales, the layer masks, the layer variation, and the rock's own material.
+
+### The critique and the verdicts (`/tmp/i30/critique.md`)
+
+| Round | Finding | Verdict |
+|---|---|---|
+| 1 | The carry term used the base colour's *absolute* chroma, and a dark albedo has a small one by construction, so the palette reached the ground at 39 % of its strength and the hue's spread *fell*; the near field had no variation; the far field was a haze | NOT YET |
+| 2 | The hue's spread was four times better with the shared fields, but the mean drifted 3.2 DN and three `pow` calls cost 84 % of the opaque pass | NOT YET |
+| 3 | The convex shares hold the mean, the square is a multiply, and the clump's coarse field breaks the patch's edge: the plains is a meadow | **GREAT** |
+
+| Feature | Verdict |
+|---|---|
+| The plain at 6 m | **GREAT** |
+| The hills' ground at 6 m and 2 m | **GREAT** |
+| A game's own ground (`GroundExtension`) | **GREAT** |
+| The rock (unchanged, byte-identical) | **GREAT** |
+| The dry patch's own *texture* | NOT YET (a tint on green blades, not straw-coloured blades) |
+| The patches' texture against the green grass's | NOT YET (a dry patch is coarser) |
+
+**The change as a whole: GREAT.** The blocker — a ground that is one colour — is fixed, the mean
+does not move, the rock is untouched, and the cost is 5 %.
+
+### Measurements
+
+- **The ground is not one colour**: the G/R ratio's spread over a 580 × 240 px patch of the near
+  ground — the plains 0.0097 → **0.0226**, the hills at 6 m 0.0258 → **0.0339**, the hills at 2 m
+  0.0156 → 0.0169, the dunes 0.0047 → 0.0096. The far field's *local* spread (a 25 px blur
+  subtracted) 0.0098 → 0.0124.
+- **The mean does not move**: the plains' mean brightness 135.69 → 135.55, the hills at 2 m
+  131.50 → 132.14, and the mean hue within 0.002. The shares are a convex combination, so this
+  is a property of the construction and not of the tuning.
+- **The palette's own span**: the G/R ratio runs from 1.00 (the fresh tone, the identity) to 0.86
+  (the straw).
+- **The rock is byte-identical**: the 6 m face reads 136.5, 130.7, 124.8 before and after, and
+  the pink and the orange are 0.00 % in both.
+- **The turf is untouched**: the flat ground's near-field standard deviation 6.11 → 5.86 DN.
+- **Cost.** `bench_elements`, High, 1920 × 1080, `mountains`, the minimum over the diagnostic
+  history, one build at a time with the GPU quiet before each run and the clocks logged in the
+  same shell, at 1800 MHz: **`main_opaque_pass_3d` 0.137 ms on the baseline build, 0.144 ms on
+  this one** — a 5 % regression. The palette's three `pow` calls were 84 % of it (0.252 ms), and
+  writing the square as a multiply brought it back.
+- **The full gate.** `cargo test` 253, clippy, doc, wasm, the GPU integration suite (22 files),
+  the lib GPU modules clouds (10), terrain (8), cover (8) and dust (6), and `the_horizon_sky`
+  alone: all pass.
+
+### The WESL traps this iteration cost an hour on
+
+All three make the surface render as a **dark navy with no shader error at all**, and all three
+are now in `AGENTS.md`:
+
+- A name used from another WESL module must be in the **import list**. An unimported name makes
+  naga emit a broken shader *silently*.
+- **`pow(x, p)` with `p` in a `let`** does the same; a literal exponent works.
+- A local that **shadows** another local in the same scope does the same.
+
+### The next five items, ranked
+
+1. **The dry patch's own texture.** The palette gives the ground a *hue*; a dry patch needs a
+   *texture* too — the blades inside it should take the patch's hue rather than the turf's, and
+   a dry patch is coarser than green grass. The colour half is in this crate and is the natural
+   next step; the geometry half (a grass mesh) belongs to `bevy_flora`.
+2. **The scree is a graded band, not a scatter** — stones of many sizes with turf between them.
+   The idea and the place are right; the scatter is not there. The rock's grain needs a *cell*
+   structure for it (a Worley network of *stones*, not of walls).
+3. **The isometric town at night is black** (22 h, Rain: mean 1 DN), carried three iterations.
+4. **The overcast dome is flat**, with its blocker diagnosed in iteration 28 (the `sky_gain` leak
+   at grazing); it carries its Eddington implementation and its measurements in `/tmp/i28`.
+5. **A 25 mm/h storm hides the whole town under an orthographic camera**, carried. The rain's
+   *readable* look is also less legible than the physical one (measured in iteration 28: the
+   readable streaks carry 32 DN of contrast against the grass where the physical ones carry 44),
+   which is the defect the town capture keeps showing.
