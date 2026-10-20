@@ -4,7 +4,7 @@
 // the consumer's. See docs/research/terrain.md ("GroundExtension").
 
 import bevy_elements::grid::{GridParams, grid_taps};
-import bevy_elements::terrain::common::{TerrainParams, terrain_live};
+import bevy_elements::terrain::common::{TerrainParams, ground_detail, terrain_live};
 import bevy_elements::surface_cover::{weather_surface, ripple_weights, ripple_offset};
 import bevy_elements::trails::surface::{trail_fade, trail_march, trail_none};
 import bevy_pbr::render::{
@@ -169,7 +169,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     }
     let pv = vec3<f32>(trail.xz.x, p.y + trail.h + dot(slope, trail.xz - p.xz), trail.xz.y);
     let pressed = max(-trail.h, 0.0);
-    let n = normalize(n0 - vec3<f32>(trail.grad.x, 0.0, trail.grad.y) * n0.y);
+    var n = normalize(n0 - vec3<f32>(trail.grad.x, 0.0, trail.grad.y) * n0.y);
+    // The ground's own grain, band-limited per octave exactly as the terrain material's
+    // (`docs/research/ground-detail.md`): a game's mesh gets the same near-field detail.
+    let footprint = max(length(dpdx(pv)), length(dpdy(pv)));
+    let grain = ground_detail(pv, footprint);
+    n = normalize(n - (grain.grad - dot(grain.grad, n) * n));
     let xz = pv.xz;
     let cover = cover_at(xz) * gated;
     let depth = water_depth(xz) * gated;
@@ -185,8 +190,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         ripple = ripple_offset(xz, ground.ripple, ripple_weights(ground.cover.y));
     }
     let m = pbr_input.material;
+    let base = m.base_color.rgb * grain.albedo;
     let surface = weather_surface(
-        m.base_color.rgb, m.perceptual_roughness, m.metallic, m.reflectance, n,
+        base, m.perceptual_roughness, m.metallic, m.reflectance, n,
         cover.y, puddle, snow_cover, ripple,
     );
     // Compacted snow on a trench floor (trails.md Deviation 1).
