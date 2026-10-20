@@ -47,15 +47,21 @@ use crate::wind::WindState;
 pub(crate) const NORMAL_TEXELS: u32 = 512;
 /// Mip levels of the normal map (512 → 1 texel).
 pub(crate) const NORMAL_MIPS: u32 = 10;
-/// Octaves of the normal map's height field.
-pub(crate) const NORMAL_OCTAVES: u32 = 5;
+/// Octaves of the normal map's height field: three, from 0.25 m to 6.25 cm
+/// (`docs/research/water-surface.md`, Model 2).
+pub(crate) const NORMAL_OCTAVES: u32 = 3;
+/// The base octave's wavelength in texels of the full-resolution map (16 = 0.25 m at the 8 m
+/// tile), so the finest band is at the kernel's four-texel limit.
+pub(crate) const NORMAL_BASE_TEXELS: u32 = 16;
 /// Octaves of the foam fbm in the map's alpha.
 pub(crate) const FOAM_OCTAVES: u32 = 4;
 /// The rms slope of the normal map's mip 0 (Cox & Munk 1954 at a 4 m/s wind).
 pub(crate) const NORMAL_RMS_SLOPE: f32 = 0.15;
 /// The factor that turns the central difference of the height field (two texels) into the slope
 /// that has [`NORMAL_RMS_SLOPE`] on mip 0, measured by `normal_gain_gives_the_cox_munk_slope`.
-pub(crate) const NORMAL_SLOPE_GAIN: f32 = 4.7;
+/// It is smaller than the 4.7 of the metre-scale spectrum because a flat slope spectrum over
+/// three octaves has a smaller total gradient (`docs/research/water-surface.md`, Model 1).
+pub(crate) const NORMAL_SLOPE_GAIN: f32 = 1.8575;
 /// The wind speed the normal map's slope belongs to, m/s.
 const MAP_WIND_MS: f32 = 4.0;
 /// The largest number of patches the pool draws (two entities each).
