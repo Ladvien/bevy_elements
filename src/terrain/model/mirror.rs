@@ -88,6 +88,20 @@ pub(crate) fn overlay(mask: f32, detail: f32) -> f32 {
     }
 }
 
+/// Feature size of the coarse ground detail's base octave, m (`terrain/common.wesl`).
+pub(crate) const DETAIL_COARSE_M: f32 = 1.25;
+/// Feature size of the fine ground detail's base octave, m.
+pub(crate) const DETAIL_FINE_M: f32 = 0.125;
+
+/// `detail_keep` of `terrain/common.wesl`: the weight of an octave of feature size `feature_m`
+/// in a pixel whose footprint is `footprint_m` wide. 1 while the octave is resolved (at least
+/// two footprints per feature), falling to 0 over the band where it is not (Lagae et al. 2010
+/// §5.2.1, frequency clamping; `docs/research/ground-detail.md` Model 2).
+pub(crate) fn detail_keep(feature_m: f32, footprint_m: f32) -> f32 {
+    let t = ((footprint_m / feature_m - 0.5) / 0.5).clamp(0.0, 1.0);
+    1.0 - t * t * (3.0 - 2.0 * t)
+}
+
 /// The four layer weights `(rock, sand, soil, grass)` of `render.wesl` for a slope angle
 /// (degrees), a sediment depth (m) and a detail value in [0, 1] (0.5: none).
 pub(crate) fn layer_weights(slope_deg: f32, sediment_m: f32, detail: f32) -> [f32; 4] {
@@ -103,6 +117,34 @@ pub(crate) fn layer_weights(slope_deg: f32, sediment_m: f32, detail: f32) -> [f3
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An octave is kept whole while the pixel resolves it, cancelled once it cannot, and the
+    /// transition is monotone and smooth; the two scales overlap so no band of the ground's
+    /// detail is left uncovered (`ground-detail.md` Validation 1-3).
+    #[test]
+    fn the_detail_band_limit_keeps_resolved_octaves_and_cancels_the_rest() {
+        assert_eq!(detail_keep(DETAIL_COARSE_M, 0.0), 1.0);
+        assert_eq!(detail_keep(DETAIL_COARSE_M, DETAIL_COARSE_M / 2.0), 1.0);
+        assert_eq!(detail_keep(DETAIL_COARSE_M, DETAIL_COARSE_M), 0.0);
+        assert_eq!(detail_keep(DETAIL_COARSE_M, 10.0), 0.0);
+        // Monotone in the footprint, and continuous (no popping as the camera pulls back).
+        let mut last = 1.0;
+        for k in 0..=400 {
+            let f = f64::from(k) / 400.0 * f64::from(DETAIL_COARSE_M);
+            let w = detail_keep(DETAIL_COARSE_M, f as f32);
+            assert!(w <= last + 1e-6, "not monotone at {f}");
+            assert!((last - w) < 0.02, "a step of {} at {f}", last - w);
+            last = w;
+        }
+        // The overlap: an octave held whole (half its feature) while the next coarser is gone.
+        // The fine scale is 10× the coarse one's frequency, so there is always a band of
+        // footprints between them where one has faded and the other has not yet.
+        let half_fine = DETAIL_FINE_M * 0.5;
+        let half_coarse = DETAIL_COARSE_M * 0.5;
+        assert!(detail_keep(DETAIL_FINE_M, half_fine) > 0.99);
+        assert_eq!(detail_keep(DETAIL_COARSE_M, half_coarse), 1.0);
+        assert!(half_fine < half_coarse);
+    }
 
     /// FNV-1a over the bytes of `values`.
     fn fnv1a(bytes: &[u8]) -> u64 {

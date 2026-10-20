@@ -8,7 +8,7 @@
 
 import bevy_elements::grid::{GridParams, grid_taps};
 import bevy_elements::noise::{perlin3_d, fbm3};
-import bevy_elements::terrain::common::TerrainParams;
+import bevy_elements::terrain::common::{TerrainParams, ground_detail, terrain_live};
 import bevy_elements::surface_cover::{weather_surface, ripple_weights, ripple_offset, overcast_relief};
 import bevy_elements::trails::surface::{TrailHit, trail_fade, trail_march, trail_none};
 import bevy_pbr::render::{
@@ -296,12 +296,20 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     albedo = mix(albedo, SOIL, smoothstep(0.01, 0.05, depth) * (w.z + w.w));
     let rough = mix(0.9, 0.95, w.z);
 
-    // Detail: 3D noise at the visible position (a procedural function has no projection axis).
-    let dist = distance(view.world_position / material.units, pv);
-    albedo = albedo * (1.0 + 0.25 * fbm3(pv * 0.8, 3u) * (1.0 - smoothstep(40.0, 120.0, dist)));
-    let grad = perlin3_d(pv * 0.8).yzw * 0.8;
-    let bump = 0.04 * (1.0 - smoothstep(0.0, 60.0, dist));
-    n = normalize(n - bump * (grad - dot(grad, n) * n));
+    // Detail: band-limited octaves of 3D noise at the visible position (a procedural function
+    // has no projection axis), each octave cancelled once the pixel footprint cannot resolve it
+    // (`docs/research/ground-detail.md`, Model 1–4).
+    // The detail is projected on the ground plane, so its footprint is the XZ span of a pixel,
+    // not the 3D distance: on a slope the projection is compressed along the view direction and
+    // the 3D length would under-band-limit it (diagonal streaks on the faces). Relief's own
+    // grain belongs to the rock's strata, not the ground's, so the detail fades with the
+    // surface's upness (`docs/research/ground-detail.md`, Deviation 4).
+    let footprint = max(length(dpdx(pv).xz), length(dpdy(pv).xz)) / max(n.y, 0.25);
+    let grain = ground_detail(pv, footprint);
+    let upness = smoothstep(0.55, 0.9, n.y);
+    albedo = albedo * mix(1.0, grain.albedo, upness);
+    let grad = grain.grad * upness;
+    n = normalize(n - (grad - dot(grad, n) * n));
 
     // Ground cover: wet darkening and gloss, puddles with ripples while it rains, snow
     // (docs/research/wetness.md, snow-cover.md). The water depth is the hydrology layer's.

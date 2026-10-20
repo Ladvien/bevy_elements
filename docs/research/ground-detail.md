@@ -114,11 +114,11 @@ ground. Nothing changes for a camera over 120 m up: every octave's `keep` is zer
 | Parameter | Value | Source |
 |---|---|---|
 | Detail frequency, coarse | 0.8 m⁻¹ (1.25 m features) | `terrain.md` Model 2 (unchanged) |
-| Detail frequency, fine | 8 m⁻¹ (12.5 cm features) | new: the near-field grain; [INFERENCE] from the 1 m eye height |
-| Octaves, coarse / fine | 3 / 2 | `terrain.md` Model 2 (3); fine 2 keeps the cost at 5 taps |
-| Amplitude, coarse / fine | ±25 % / ±15 % | coarse unchanged; fine chosen so a sunlit grass patch stays inside ±20 DN |
+| Detail frequency, fine | 11.1 m⁻¹ (9 cm features) | new: the near-field grain; fitted to the 4 DN target (Deviation 4) |
+| Octaves, coarse / fine | 4 / 3 | coarse 4 closes the 15–40 m gap (Deviation 5); fine 3 |
+| Amplitude, coarse / fine | ±20 % / ±85 % | fitted: 4 DN near-field target, mean within 1 DN (Deviation 4) |
 | Band limit | `keep_k = 1 − smoothstep(0.5, 1, footprint·2^k/λ)` | Lagae et al. 2010 §5.2.1 (frequency clamping) |
-| Bump, coarse / fine | 0.04 / 0.02 | coarse unchanged (`terrain.md` Model 2); fine half, so 12 cm grain does not read as rock |
+| Bump height, coarse / fine | 0.045 m / 0.018 m | Deviation 6: a height amplitude, not a slope |
 | Distance at which all detail is gone | ~120 m at 1080p | computed from (2) with the horizontal footprint, not a constant |
 
 ## GPU mapping
@@ -169,15 +169,47 @@ the cost is bounded by the near field).
 
 ## Deviations from this plan
 
-1. **The detail is procedural, not a tiled texture atlas.** Andersson's answer to the same defect
+1. **The detail noise is 2D in the ground plane, not 3D at the surface point.** The plan's Model 1
+   inherited `terrain.md` Deviation 3 ("triplanar procedural detail noise is a 3D noise at the
+   world position"). Measured on `mountains` at 6 m, a 3D slice streaked the cliff faces with
+   diagonal bands: a 3D noise sampled on a tilted surface is not band-limited (Lagae et al. 2010
+   §5: "sampling a 3D noise function at a 2D surface will not result in a band-limited texture"),
+   and on a 60° face the lattice's vertical axis compresses by 2×. A 2D gradient noise in XZ
+   (`noise::perlin2_d`, new) is isotropic in the plane the detail lives on, and the faces take no
+   ground detail anyway.
+2. **The detail is faded by the surface's upness as well as by the footprint.** Ground grain on a
+   near-vertical rock face is wrong twice: the projection is compressed along the view direction
+   there, and rock's detail is its strata, not turf. `smoothstep(0.55, 0.9, n.y)` removes it from
+   the steep faces (the diagonal streaks above were reproduced exactly this way). The rock's
+   own material detail is unchanged and remains a separate, future piece.
+3. **The band limit uses the XZ footprint divided by the surface's upness, not the 3D footprint.**
+   The detail is a function of XZ, so a pixel's XZ span is what determines which of its bands
+   alias; on a slope the same 3D footprint covers more XZ, and the 3D length under-filters it.
+4. **The fine scale is Perlin at 9 cm, not Worley at 12 cm.** The plan's clump scale (Worley cells
+   with a `smoothstep` crown) read as a regular halftone grid on sand at 6 m and as a woven
+   fabric on rock, even with Galin's domain warping; a Worley lattice at the pixel's own scale has
+   structure too regular to hide. A decorrelated 3-octave Perlin sum at 9 cm is indistinguishable
+   from noise at every angle tested and needs no warp. The final parameters (`DETAIL_FINE_M`
+   0.09 m, `DETAIL_FINE_AMP` 0.85, `DETAIL_COARSE_AMP` 0.20, `DETAIL_COARSE_OCTAVES` 4) are fitted
+   to the 4 DN near-field target on `terrain_tour` hills, plains and dunes at 6 m and 2 m.
+5. **The coarse scale's amplitude is 0.20, not the old 0.25.** The 4th octave (15.6 cm) the plan's
+   Validation 1's gap needed was added, and with it the same total contrast as before at 0.25
+   produced a heavier mottle than the one band it replaced; 0.20 with four bands measures the
+   same far-field and more near structure.
+6. **The bump is a height amplitude, not a slope.** The plan's `0.04` was a multiplier on the
+   noise's derivative; the gradient of a height field is `amplitude · ∂n/∂x / feature`, so the
+   same look is `DETAIL_COARSE_HEIGHT_M = 0.08` with the derivative divided by the feature size.
+   The first build used the raw derivative and turned the ground black (a slope of 0.36 at 12 cm).
+
+7. **The detail is procedural, not a tiled texture atlas.** Andersson's answer to the same defect
    is tiled detail *textures*, and the crate has no texture assets beyond `stars.bin` and the
    moon map (a crate rule and a wasm-size concern). Lagae et al. §5.2.1's frequency clamping gets
    the same "no aliasing, no detail loss" result from the octaves the crate already evaluates
    analytically, at the cost of ALU in the near field only.
-2. **Two scales, not one.** A single fBm at 0.8 m⁻¹ cannot carry 12 cm grain without aliasing the
+8. **Two scales, not one.** A single fBm at 0.8 m⁻¹ cannot carry 12 cm grain without aliasing the
    moment the camera is 3 m up; a single fBm at 8 m⁻¹ leaves the mid-distance bare. The two
    sums' bands overlap by design (the coarse covers 1.25 m and up, the fine 12.5–25 cm).
-3. **The fine octave is skipped by a branch, not by a distance constant.** A constant would have
+9. **The fine octave is skipped by a branch, not by a distance constant.** A constant would have
    to be tuned per field of view and resolution; the footprint test is exact for any of them, so
    the same shader is right at 1080p and at 4K and under an orthographic camera (whose footprint
    is constant in metres).

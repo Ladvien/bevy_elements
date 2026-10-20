@@ -1632,3 +1632,103 @@ Found and fixed in review: mesh mode forcing Clear before the harness grew the s
 3. **Bright snow scenes under the metered exposure**: snow at 236 DN sits in the tonemapper's shoulder, which also hides prints at noon (`trails-game-ground.md` Deviation 6), and house shadows on snow read a saturated sky blue.
 4. **The overcast dome is flat** (Eddington's emergent radiance in `cloud_scatter`), carried.
 5. **A compacted-ground material stage for `WeatheredMaterial`** (Barré-Brisebois's two stages: a trench floor through grass shows soil on the terrain, the game's colour on a mesh), and **the water's body colour under a grey sky**, carried.
+
+## Iteration 28 — 2026-10-20 — the ground has surface detail at a metre
+
+**Commits:** `7342d28` (research note `docs/research/ground-detail.md`), the implementation with
+its tests, docs and changelog, this log. **Sibling repos:** none. **Not released.** The GPU was
+taken through `gpu-tenant claim coding --who bevy_elements@big`. The pass began with a cloud
+iteration (the overcast dome's gradation); the invoking prompt redirected it to the ground, and
+that work was reverted, diagnosed and recorded under "Deferred" below.
+
+### Candidates (open issues first: none open)
+
+| Rank | Candidate | Class | Decision |
+|---|---|---|---|
+| 1 | The ground is a flat wash at every eye height: near-patch standard deviation **1.07 DN** of 255 at 6 m, 1.64 at 2 m, 1.81 on sand | 2 (beauty gap) | **this iteration** |
+| 2 | The isometric town at night is black (22 h, Rain: mean 1 DN) | 1 | carried |
+| 3 | A 25 mm/h storm hides the town under an orthographic camera | 2 | carried |
+| 4 | The overcast dome is flat (1.08:1 against CIE's 2:1–3:1) | 1 | attempted, deferred (below) |
+| 5 | Bright snow scenes under the metered exposure | 2 | carried |
+
+Rank 1 beat the black night because it is in every daylight frame of every outdoor game, at the
+distance a player spends the game looking at; the night is one preset at one hour.
+
+### What changed
+
+- **Two band-limited octave scales** in `terrain::common::ground_detail`: a coarse 1.25 m Perlin
+  sum (4 octaves, ±20 %) for the mid-distance, a fine 9 cm sum (3 octaves, decorrelated seed,
+  ±85 %) for the near field. Each octave is cancelled once the pixel footprint cannot resolve it
+  (Lagae et al. 2010 §5.2.1, frequency clamping), replacing the old single 0.8 m⁻¹ band faded by
+  a 40–120 m distance constant. `detail_keep` and `detail_scale` are the pieces.
+- **`noise::perlin2_d`**: 2D gradient noise in XZ with its analytic derivative. The detail cannot
+  use the 3D noise at the surface point: a 3D slice on a tilted surface is not band-limited and
+  streaked the cliff faces with diagonal bands (recorded as Deviation 1).
+- **The detail fades with the surface's upness** (`smoothstep(0.55, 0.9, n.y)`) as well as the
+  footprint, and its footprint is the XZ span divided by the upness: the detail is a function of
+  XZ, so a slope's compressed projection must not under-filter it (Deviations 2 and 3).
+- Both `TerrainExtension` and `GroundExtension` use it, so a game's own ground gets the same
+  surface.
+
+### Sources
+
+Lagae et al. 2010, *A survey of procedural noise functions* (corpus
+`10.1111_j.1467-8659.2010.01827.x`): §5.2.1 frequency clamping, §5.2's "a 3D noise sampled at a 2D
+surface will not result in a band-limited texture", Cook & DeRose's finding that Perlin is weakly
+band-limited. Andersson 2007 (corpus `10.1145_1281500.1281668`): the defect ("lack of detail
+either up close, in a distance, or at high angles") and the texture-based fix this note replaces
+with procedural bands. Perlin 1985 (via Lagae §2), Musgrave et al. 1989, Galin et al. 2019 (via
+`terrain.md`), `terrain.md` Model 2 and Deviation 19 (the replaced constants).
+
+### Critique and verdicts (`/tmp/i28g/critique.md`)
+
+| Round | Finding | Verdict |
+|---|---|---|
+| 1 | 3.47 DN near-field (target 4); the 15–40 m band softer than both sides; grain organic | NOT YET |
+| 2a | black speckles: the clump remap drove the albedo below zero | FAIL |
+| 2c | sand a halftone grid, rock a woven fabric at 4× (single Worley lattice) | FAIL |
+| 2d–2e | diagonal streaks on the cliff faces: a 3D noise slice is not band-limited on a slope | FAIL |
+| 2f | streaks gone by the upness gate; grass fell to 1.98 DN | NOT YET |
+| 2h | **sd 4.26** grass, 5.86 dunes, 5.55 plains, 6.51 grazing; means within 1 DN; no streak, no speckle, no flicker | **GREAT** |
+
+### Verification
+
+- `terrain::model::mirror::tests::the_detail_band_limit_keeps_resolved_octaves_and_cancels_the_rest`:
+  kept whole at half the feature, zero at the feature, monotone and continuous across the falloff.
+- Distance invariance: far-ground mean 161.019 → 161.017 DN (`hills_6m_noon`), 153.681 → 153.681
+  (`hills_aerial`); snow covers the detail (`trails` `ELEMENTS_TERRAIN=mesh` under Snow).
+- Temporal: consecutive static frames RMSE 0.013 % of range.
+- Full gate: `cargo test` 251, clippy, doc, wasm, the GPU integration suite (one process per file
+  and all 19 files), the lib GPU modules clouds/terrain/cover/dust (32) and `the_horizon_sky`
+  alone: all pass.
+- Bench (`bench_elements`, High, 1920 × 1080, hills, minimum): **0.046 ms** at P2 1710 MHz,
+  against the baseline build's **0.058 ms** at P2 1620 MHz in the same session — the new detail
+  is *cheaper*, because the old expression evaluated `fbm3` and `perlin3_d` at three octaves each
+  and a 2D derivative chain per octave costs less. No regression to justify.
+- `nvidia-smi` logged in the same shell: P2, 1680 MHz idle; 1710 during the new run, 1620 during
+  the old.
+
+### Deferred: the overcast dome's gradation (attempted first, reverted)
+
+The first half of this pass built Eddington's emergent intensity `(2 + 3μ)/4` for the deck's
+radiance (unit hemispherical mean, so the irradiance, exposure and `illuminance_at` are
+unchanged). The CPU mirror confirmed the deck grades 3.36:1 and the Monte Carlo slab error
+improved 0.0674 → 0.0669; the GPU composed cube read 1.08 → 1.34 (target 1.8–3.2) with
+`L_Z/E` 0.344 → 0.383 (inside the CIE 0.382–0.409 band) and `E/model` 0.76 → 0.77. **Blocker,
+diagnosed:** the deck grades correctly but the *composite* dilutes it, because
+`sky_through_clouds` adds the clear-sky cube at `sky_gain ≈ 126×` under a deck and at grazing
+that constant (~1900 cd/m²) flattens the measured ratio. The next attempt must fix the grazing
+band's compositing before the gradation can be measured. Files: `/tmp/i28/findings-cloud.md`.
+
+### Top 5 remaining items, ranked
+
+1. **The isometric town at night is black** (22 h, Rain: mean 1 DN), carried three iterations.
+2. **The overcast dome is flat**, with its blocker now diagnosed precisely (the `sky_gain` leak at
+   grazing); carries its Eddington implementation and measurements in `/tmp/i28`.
+3. **A 25 mm/h storm hides the whole town under an orthographic camera**, carried.
+4. **Rock has no material detail of its own**: the ground's grain is gated off the steep faces,
+   which are left with only the mask's colour and the terrain's geometry. Strata, cracks and a
+   rock-specific bump are the natural next piece, and `terrain.md` has no note for it.
+5. **The ground's large-scale variation** (patches of longer and shorter grass, bare earth,
+   trampled areas) — the masks vary only with slope and sediment, so a plain is one colour at
+   200 m. A low-frequency, contrast-only modulation driven by the same noise would fix it.
