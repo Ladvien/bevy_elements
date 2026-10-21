@@ -39,10 +39,20 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
   bed is a *darker* band, and the value is what carries at a distance. The tone is now
   (0.80, 0.73, 0.66) at a mix of 0.55, a 14 % albedo drop.
 
-  Measured: the material's own high-pass at 3 m goes from **1.72 to 7.35 DN** (the note's target
-  is 3), and at 90 m the frame is **byte-identical** — the blocks are band-limited away, so the
-  distance is calm. The `plains` and `hills` presets are **byte-identical**: the meadow is
-  untouched. See `docs/research/rock-blocks.md`.
+  The blocks are **tabular** — elongated along the bedding, because a rock breaks along *joint
+  sets* — and the network's coordinates are **warped** before the lookup, so the blocks are
+  irregular fragments and not a mosaic. The joint's **width** is the cell's own draw, which is
+  what sets each block's **size**.
+
+  Measured: the material's own high-pass at 3 m goes from **1.72 to 5.74 DN** (the note's target
+  is 3), and at 90 m the frame is **byte-identical** to the baseline's — the blocks are
+  band-limited away, so the distance is calm. The `plains` and `hills` presets are
+  **byte-identical**: the meadow is untouched.
+
+  The cost is a logged trade: the mountains' opaque pass, which is the pass the blocks are
+  in, goes from **0.141 ms to 0.181 ms** (+28 %) — the crate's rule is no regression without a
+  justified trade, and this one buys a material that went from an sd of 1.72 DN to 5.74 DN,
+  paid only where the rock shows. See `docs/research/rock-blocks.md`.
 
 - **The scree is a scatter of stones, not a band of mixed colour.** The stone that has weathered
   off a cliff lies below it, and the crate rendered the boundary between the turf and the rock
