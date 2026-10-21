@@ -452,9 +452,13 @@ struct ScreeScale {
     grad: vec2<f32>,
     /// The stone's own tone, a multiplier around 1.
     tint: f32,
+    /// The stone's occlusion of the matrix beside it: the contact shadow that makes the
+    /// stones sit *in* the dirt.
+    contact: f32,
 }
 
-/// The stones of one network at `cell_m`: the cell's own stone, its size, and its dome.
+/// The stones of one network at `cell_m`: the cell's own stone, its size, its dome and the
+/// contact shadow it casts on the matrix beside it.
 fn scree_scale(xz: vec2<f32>, cell_m: f32, size_min: f32, size_max: f32) -> ScreeScale {
     let q = xz / cell_m;
     let cell = cell2(q);
@@ -466,8 +470,13 @@ fn scree_scale(xz: vec2<f32>, cell_m: f32, size_min: f32, size_max: f32) -> Scre
     let radius = 0.5 * size * SCREE_FILL;
     let d = cell.distance;
     let inside = 1.0 - smoothstep(radius * 0.80, radius, d);
+    // The contact shadow: the matrix just outside the stone, in the stone's own occlusion of
+    // the ground it lies on. The ground's shader has no access to the sun's direction, so this
+    // is not a *cast* shadow — it is what makes the stones sit in the dirt rather than on it.
+    let contact = smoothstep(radius * 0.80, radius, d)
+        * (1.0 - smoothstep(radius, radius * 1.9, d));
     if inside <= 0.0 {
-        return ScreeScale(0.0, vec2<f32>(0.0), 1.0);
+        return ScreeScale(0.0, vec2<f32>(0.0), 1.0, contact);
     }
     // The stone's dome: the distance field's gradient, which points away from the stone's
     // centre, tilts the normal outward.
@@ -485,27 +494,11 @@ fn scree_scale(xz: vec2<f32>, cell_m: f32, size_min: f32, size_max: f32) -> Scre
     // not carry the cell's scale — a stone in the fine network is a small stone with the same
     // tilt at its rim as a big one.
     let grad = -outward * slope;
-    // The stone's own tone: the rock, with its own grain so it is not a flat patch, and a
-    // little darker than the bare rock it came from (a stone in the shadow of its neighbours).
-    let grain = perlin3_d(vec3<f32>(xz.x, 0.0, xz.y) / 0.11).x;
-    let tint = (1.0 - SCREE_STONE_TINT * 0.35) * (1.0 + 0.35 * grain);
-    return ScreeScale(inside, grad, tint);
-}
-
-/// The contact shadow a stone casts on the matrix beside it: the matrix within a stone's
-/// radius of its rim is in the stone's shadow, so it darkens as the stone's edge approaches.
-///
-/// The ground's shader has no access to the sun's direction, so this is not a *cast* shadow
-/// but the stone's own *occlusion* of the ground it lies on — which is what makes the stones
-/// sit in the dirt instead of on it.
-fn scree_contact(xz: vec2<f32>, cell_m: f32, size_min: f32, size_max: f32) -> f32 {
-    let cell = cell2(xz / cell_m);
-    let size = mix(size_min, size_max, pow(cell.factor, 3.0));
-    let radius = 0.5 * size * SCREE_FILL;
-    // Just outside the stone: the shadow's depth falls away with the distance from the rim.
-    let outside = smoothstep(radius * 0.80, radius, cell.distance)
-        * (1.0 - smoothstep(radius, radius * 1.9, cell.distance));
-    return outside;
+    // The stone's own tone: the rock, a little darker than the bare rock it came from (a stone
+    // in the shadow of its neighbours). The grain is the same for both scales and is
+    // evaluated once, by the caller.
+    let tint = 1.0 - SCREE_STONE_TINT * 0.35;
+    return ScreeScale(inside, grad, tint, contact);
 }
 
 fn scree_scatter(xz: vec2<f32>, footprint_m: f32) -> Scree {
@@ -517,11 +510,10 @@ fn scree_scatter(xz: vec2<f32>, footprint_m: f32) -> Scree {
     // scree.
     let coarse = scree_scale(xz, SCREE_CELL_M, SCREE_SIZE_MIN, SCREE_SIZE_MAX);
     let fine = scree_scale(xz, SCREE_CELL_M * 0.38, SCREE_SIZE_MIN * 0.8, SCREE_SIZE_MAX * 0.8);
+    // The stone's own grain, so it is not a flat patch: one evaluation for both scales.
+    let grain = perlin3_d(vec3<f32>(xz.x, 0.0, xz.y) / 0.11).x;
     // The contact shadows: the matrix beside each stone, in both networks.
-    let contact = max(
-        scree_contact(xz, SCREE_CELL_M, SCREE_SIZE_MIN, SCREE_SIZE_MAX),
-        scree_contact(xz, SCREE_CELL_M * 0.38, SCREE_SIZE_MIN * 0.8, SCREE_SIZE_MAX * 0.8),
-    );
+    let contact = max(coarse.contact, fine.contact);
     // The fine stones only show where the coarse one does not cover, so a fine stone never
     // grows out of the side of a big one.
     let fine_inside = fine.inside * (1.0 - coarse.inside);
@@ -535,7 +527,7 @@ fn scree_scatter(xz: vec2<f32>, footprint_m: f32) -> Scree {
     }
     // The gradient is the stone's own, and the fine one's only where the fine stone is.
     let grad = select(fine.grad, coarse.grad, coarse.inside > fine_inside);
-    let tint = select(fine.tint, coarse.tint, coarse.inside > fine_inside);
+    let tint = select(fine.tint, coarse.tint, coarse.inside > fine_inside) * (1.0 + 0.35 * grain);
     return Scree(
         mix(1.0, tint, keep),
         grad * inside * keep,
