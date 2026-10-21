@@ -165,10 +165,17 @@ pub(crate) fn worley3(p: Vec3, period: i32) -> f32 {
     let i = p.floor().as_ivec3();
     let f = p - p.floor();
     let mut best = 1e9_f32;
-    for z in -1..=1 {
-        for y in -1..=1 {
-            for x in -1..=1 {
-                let o = IVec3::new(x, y, z);
+    // The cells are visited in order of increasing distance, so the prune's bound tightens
+    // quickly. The bound is exact, so the result is the same as the full search.
+    for ring in 0..3 {
+        for z in -1..=1 {
+            for y in -1..=1 {
+                for x in -1..=1 {
+                    // The ring the cell is in, from the point's own cell outwards.
+                    if x.abs().max(y.abs()).max(z.abs()) != ring {
+                        continue;
+                    }
+                    let o = IVec3::new(x, y, z);
                 let mut c = i + o;
                 if period > 0 {
                     c = IVec3::new(
@@ -248,10 +255,17 @@ pub(crate) fn cell3(p: Vec3) -> Cell3 {
     let mut best = 1e9_f32;
     let mut best_point = Vec3::ZERO;
     let mut best_factor = 0.0;
-    for z in -1..=1 {
-        for y in -1..=1 {
-            for x in -1..=1 {
-                let o = IVec3::new(x, y, z);
+    // The cells are visited in order of increasing distance, so the prune's bound tightens
+    // quickly. The bound is exact, so the result is the same as the full search.
+    for ring in 0..3 {
+        for z in -1..=1 {
+            for y in -1..=1 {
+                for x in -1..=1 {
+                    // The ring the cell is in, from the point's own cell outwards.
+                    if x.abs().max(y.abs()).max(z.abs()) != ring {
+                        continue;
+                    }
+                    let o = IVec3::new(x, y, z);
                 // The cell is pruned by the distance to its nearest corner: a feature point
                 // lies inside its cell, so a cell whose corner is further than the best
                 // distance so far cannot hold a closer one. The bound is exact, so the result
@@ -265,10 +279,11 @@ pub(crate) fn cell3(p: Vec3) -> Cell3 {
                 let point = o.as_vec3() + h;
                 let d = point - f;
                 let d2 = d.dot(d);
-                if d2 < best {
-                    best = d2;
-                    best_point = point;
-                    best_factor = h.z;
+                    if d2 < best {
+                        best = d2;
+                        best_point = point;
+                        best_factor = h.z;
+                    }
                 }
             }
         }

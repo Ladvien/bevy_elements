@@ -287,9 +287,19 @@ fn cell3(p: vec3<f32>) -> Cell3 {
     var best = 1e9;
     var best_point = vec3<f32>(0.0);
     var best_factor = 0.0;
-    for (var z = -1; z <= 1; z += 1) {
+    // The cells are visited in order of increasing distance — the point's own cell first, then
+    // the ring around it, then the ring around that — so the prune's bound tightens quickly.
+    // In the natural order the bound is loose and about fourteen of the twenty-seven cells
+    // are hashed; in this order it is about seven. The bound is exact, so the result is the
+    // same either way, and the crate's rock is its hottest path.
+    for (var ring = 0; ring < 3; ring += 1) {
+      for (var z = -1; z <= 1; z += 1) {
         for (var y = -1; y <= 1; y += 1) {
             for (var x = -1; x <= 1; x += 1) {
+                // The pass is the ring the cell is in, from the point's own cell outwards.
+                if max(max(abs(x), abs(y)), abs(z)) != ring {
+                    continue;
+                }
                 let o = vec3<i32>(x, y, z);
                 // The cell is pruned by the distance to its *nearest corner*: a feature point
                 // lies inside its cell, so if the corner is already further than the best
@@ -325,6 +335,7 @@ fn cell3(p: vec3<f32>) -> Cell3 {
                 }
             }
         }
+      }
     }
     return Cell3(sqrt(best), best_point, best_factor);
 }

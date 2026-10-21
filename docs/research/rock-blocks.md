@@ -220,6 +220,28 @@ spacing, and they are there.
     the nearest point alone, and the lookup computes one distance instead of two. The
     cell's own wall and not the *point's* own lattice cell's wall, because the nearest feature
     point may be in a neighbour: the point's cell's wall is not the block's edge.
+14. **The cells are visited in order of increasing distance.** The prune's bound is only as good
+    as the closest point found so far, so the point's own cell is visited first, then the ring
+    around it, then the ring around that. In the natural order the bound is loose and about
+    **fourteen** of the twenty-seven cells are hashed; in this order it is about **seven**. The
+    bound is exact, so the result is the same either way — the captures are identical to within
+    the GPU's non-determinism (the face's high-pass 5.83 against 5.74 DN).
+
+### A note on the WESL, for whoever touches this next
+
+The crate's shaders are **WESL**, and two of its rules bit during this iteration:
+
+- **The WESL parser rejects `abs()` on a compound expression** (`abs(f - vec3<f32>(o) - 1.0)`).
+  The failure is at *runtime*, in the GPU driver, and it is **silent**: the terrain's material
+  fell back to a default and the whole face rendered as a flat grey, with the capture's
+  high-pass collapsing from 5.83 DN to 0.31. The error is in the log
+  ("failed to create shader module: … parsing error"), and it is easy to miss among the
+  capture's other output.
+- **`pass` is a WGSL reserved word**, like `active` and `target` and `patch`.
+
+The fix for both is a **validator**: the `wesl` crate (the one Bevy uses) compiles a module to
+WGSL, and `naga` parses it, in a second and without a GPU. `/tmp/wesltest` is that validator;
+it found the first of the two in the time it takes to run one capture.
 
 ## Pending index
 
