@@ -6,6 +6,44 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ### Changed
 
+- **The cliff is made of blocks.** The crate's rock had a material — bedding, joints, a grain —
+  and the material was nearly *invisible*: it contributed an sd of **1.72 DN** to a face at 3 m,
+  and at 200 m the massif was **one colour** (a max−min of 1.00 DN over a 300 × 200 patch,
+  where the crate's own `rock-material.md` asks for 9). The reason was structural: every
+  feature was a *multiplier on the albedo of one continuous surface*. A cliff is not a texture.
+  It is a pile of blocks.
+
+  A rock mass is a set of blocks held in one piece (Zhang et al. 2020, *Geofluids* 2020:6679317:
+  "discontinuous in geometry while continuous in mechanics"), and a cliff face shows the blocks.
+  They are the **cells of a 3D cellular network**, in the rock's own frame — a 2D network in the
+  ground plane would stretch on a slope and weave, exactly as the crate's turf does. The
+  network's coordinates are **squashed along the bedding plane's normal**, so the cells stretch
+  into slabs: a rock breaks along *joint sets*, families of parallel planes, so its pieces are
+  aligned rather than a random heap (La Pointe & Hudson 1985).
+
+  A block is **shaded, not outlined**: its own tone (the cell's random factor), its own
+  **facet** — a rock block's face is flat, and the *step* is at the joint — and a **joint** that
+  is the cell's own *boundary*, the second nearest feature point's distance. The crate's rock
+  note is right that a cell network's boundaries read as a giraffe's hide; that is a statement
+  about drawing the boundaries as *lines*, and a block is a volume.
+
+  The network's coordinates are **warped** before the lookup, so the cells' boundaries wander
+  and the blocks are irregular fragments instead of a mosaic, and the joint's **width** is the
+  cell's own draw, which is what sets the block's **size** — a cell with a wide joint is a
+  small piece of rock and one with a narrow joint is a big slab. The blocks are band-limited by
+  the *joint's width* and not by the cell, the crate's own rule for the fractures: a crack is a
+  line a fraction of a cell wide, so it aliases long before the cell does.
+
+  The **beds** carry a value contrast now. The second tone was (1.06, 0.93, 0.76), whose
+  luminance is 0.95, so the beds moved the luminance by 1.9 % and the massif was one colour; a
+  bed is a *darker* band, and the value is what carries at a distance. The tone is now
+  (0.80, 0.73, 0.66) at a mix of 0.55, a 14 % albedo drop.
+
+  Measured: the material's own high-pass at 3 m goes from **1.72 to 7.35 DN** (the note's target
+  is 3), and at 90 m the frame is **byte-identical** — the blocks are band-limited away, so the
+  distance is calm. The `plains` and `hills` presets are **byte-identical**: the meadow is
+  untouched. See `docs/research/rock-blocks.md`.
+
 - **The scree is a scatter of stones, not a band of mixed colour.** The stone that has weathered
   off a cliff lies below it, and the crate rendered the boundary between the turf and the rock
   as a **smooth wash** — a colour tint toward the rock over a slope band, with no stone

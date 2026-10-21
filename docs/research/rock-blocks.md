@@ -102,10 +102,13 @@ spacing, and they are there.
 | Parameter | Value | Source |
 |---|---|---|
 | The block network's cell | 1.5 m | a block a player can read; the note's "What great looks like" |
-| The block's tone spread | the cell's random factor, ×0.78 to ×1.22 | a block is a piece of one bed, so the spread is narrow |
-| The joint's darkening | 0.55 of the rock's albedo | the crate's `ROCK_FRACTURE_DARKEN` (0.26) at the cell's scale, where a joint is a shadow |
-| The block's relief | the distance field's gradient, a dimensionless slope | the scree's `SCREE_RELIEF` (0.30) |
-| The band-limit | the cell's size | the crate's `detail_keep`, and the corduroy lesson |
+| The blocks' stretch along the bedding | 2.6 | La Pointe & Hudson 1985 on joint sets: the pieces are aligned, not a heap |
+| The warp that breaks the cells' shape | 0.09 of the cell | a cell network's cells are convex and near-equal; a rock's are not |
+| The block's tone spread | the cell's random factor, ±0.22 | a block is a piece of one bed, so the spread is narrow |
+| The joint's width | 0.06 of the cell's half-boundary, ×0.30 to ×3.70 by the cell's draw | the joint is a line a fraction of a cell wide, and the draw is what varies the block's size |
+| The joint's darkening | 0.68 of the rock's albedo | a joint is a shadow, and it is the one feature of a cliff a player reads as "solid" |
+| The block's relief | the joint's own gradient, a slope of 0.85 | a block's face is *flat* and the step is at the joint |
+| The band-limit | the joint's own width | the crate's `detail_keep`, and the corduroy lesson |
 
 ## GPU mapping
 
@@ -142,8 +145,63 @@ spacing, and they are there.
 
 ## Deviations from this plan
 
-*(filled in as the implementation settles; every changed default is recorded here with its
-citation.)*
+1. **The joint is the cell's *boundary* — the second nearest feature point — and not the
+   nearest point's distance.** The plan said the joint is where two cells meet, and took it
+   from the nearest point's distance. That draws a *ring* round each point, and the face read
+   as a **giraffe's hide** — the crate's own rock note's warning, reproduced exactly. The cell's
+   boundary is the standard construction: the half-difference of the two nearest distances.
+2. **The block's face is *flat*, not domed.** The plan gave each block a dome, like the scree's
+   stones. A rock block is a *facet* and the step is at the joint, so the relief is the joint's
+   own gradient and the block's face is level. A dome over each block read as a **pebble pressed
+   into the face** — and a field of them as scales.
+3. **The blocks are *one* network, not two nested.** The plan followed the scree and nested a
+   coarse and a fine network. The fine network's pieces have to be masked by the coarse ones'
+   *coverage*, and the joint is only 1 near a boundary, so the fine pieces showed almost
+   everywhere and the face read as crumpled foil. A second network is the wrong instrument
+   here: the blocks are *pieces of one rock*, and the cell network's own cells are already the
+   pieces. The variation in the blocks' *size* comes from the joint's **width** instead, which
+   is the cell's own draw — a rock's joints are not all the same, and a uniform width reads as
+   a mosaic.
+4. **The blocks are band-limited by the *joint's width*, not by the cell.** The cell is 1.5 m and
+   a pixel at 90 m is a metre, so a cell-based band-limit let the blocks survive at 90 m and
+   the massifs read as a **scaly, reptilian texture**. The joint is the finest thing the blocks
+   draw, and it aliases long before the cell does — the crate's own rule for the fractures.
+5. **The blocks are one network *squashed* along the bedding, not two networks.** The plan said
+   the blocks are tabular; the implementation squashes the network's coordinates along the
+   bedding plane's normal, so the cells stretch into slabs. That is the plan's own idea, and
+   it works.
+6. **The beds' second tone is a *value* change, not only a hue one.** The plan left the beds
+   alone. They had to change: the tone was (1.06, 0.93, 0.76), whose luminance is 0.95, so
+   the beds moved the luminance by 1.9 % and the massif from 90 m was one colour — a max−min
+   of 1.00 DN, where the crate's own note asks for 9. A bed is a *darker* band (the constant's
+   own comment says so), and the value is what carries at a distance. The tone is now
+   (0.80, 0.73, 0.66) at a mix of 0.55, a 14 % albedo drop.
+7. **The joint's width is the cell's own draw, and it is what sets the block's *size*.** The
+   cells of a network are all the same size, so without this every block would be the same
+   and the face would read as a cobblestone. A cell whose joint is wide is a *small* piece of
+   rock and one whose joint is narrow is a big slab, and the cell's factor is used for the
+   block's tone *and* for its joint's width, so a cell is consistently one piece.
+8. **The network's coordinates are *warped* before the lookup.** A cell network's cells are
+   convex polygons of nearly the same area, and a face of them reads as a mosaic — or, with the
+   blocks' step, as *shingles*. A rock breaks into irregular fragments, and the warp is what
+   makes the fragments irregular. The warp is the crate's own 3D noise at the 3D point, so it
+   does not weave on a slope. At a tenth of the cell it breaks the blocks' *shape* and not
+   their position; at a third of the cell the cells broke into a lace of amoeba-like shapes
+   with holes, and the face read as camouflage.
+9. **The cell's search is *pruned* by the distance to its nearest corner.** A feature point lies
+   inside its cell, so a cell whose nearest corner is further than the *second* nearest
+   distance so far cannot hold either of the two nearest points, and its hash — the expensive
+   part — is not computed. The bound is exact, so the result is the same as the full search
+   (the captures are identical to within the GPU's non-determinism), and the 27-cell lookup
+   becomes about 12 hashes.
+10. **The joint's edge is softened over the pixel's own footprint.** A joint is a line a
+    fraction of a cell wide, and a hard edge on a line that narrow stair-steps at every
+    distance. The width grows with the footprint, so the joint blurs into the rock rather than
+    aliasing along it.
+11. **The blocks are skipped entirely where they cannot resolve.** The band-limit is known
+    before the network is looked up, so the far terrain pays nothing for the blocks: the
+    mountains' opaque pass does not carry the cost over the whole massif, and at 90 m the
+    frame is byte-identical to the baseline's.
 
 ## Pending index
 
