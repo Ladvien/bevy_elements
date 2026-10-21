@@ -6,6 +6,33 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ### Changed
 
+- **The massif has a succession of beds, not a flat blue-grey wash.** Over a rock-only
+  200 × 200 patch of the mountains from 120 m the rock's spread was a max−min of **1.00 DN**,
+  where the crate's own `rock-material.md` asks for 9, and at 300 % the rock was a smooth
+  wash with a soft, formless mottling. The green turf and the ochre soil read clearly at the
+  same distance, so it was not the resolution that was failing — the rock had no structure to
+  resolve.
+
+  The cause was in the crate's own numbers: the bed's coordinate is
+  `(dot(p, TILT) + warp · 3.5) / 4.5` and the warp is the ground's 45 m-scale field in
+  [−1, 1], so **the warp displaced the bed coordinate by up to 0.78 of a bed** — most of a
+  bed's own thickness. A 4.5 m grid distorted by a 45 m field is a set of blotches, not a set
+  of bands, and the mask picked a random half of the smeared field. And every bed was
+  identical, so the cliff was a stripe pattern, and a stripe pattern whose stripes are
+  sub-pixel at 120 m is a flat tone.
+
+  The beds are now a **warped lattice** — the boundary between the beds whose index is `i`
+  and `i + 1` falls at `i + warp(i)`, and a bed's thickness is the gap between two
+  boundaries — with a **per-bed tone** drawn from the bed's index with the crate's own
+  integer hash, because *a bed is a colour*: a sandstone, a shale, a limestone. The bed's
+  **edge** is band-limited away with the distance and the bed's **tone** is not, which is the
+  whole trick: at a distance the cliff shows its succession and not its stripes.
+
+  Measured: the material's own contribution at 120 m is a standard deviation of **3.41 DN**
+  and a max−min of **21.2 DN**, and the face at 3 m carries bands of ±7 DN alternating. The
+  `plains` and `hills` presets are **byte-identical**: the meadow is untouched. The cost is
+  **+3.5 %** on the mountains' opaque pass. See `docs/research/bedding.md`.
+
 - **The cliff is made of blocks.** The crate's rock had a material — bedding, joints, a grain —
   and the material was nearly *invisible*: it contributed an sd of **1.72 DN** to a face at 3 m,
   and at 200 m the massif was **one colour** (a max−min of 1.00 DN over a 300 × 200 patch,
