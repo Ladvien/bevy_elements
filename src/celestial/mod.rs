@@ -1150,16 +1150,9 @@ mod tests {
     /// night should be "Nothing brown" (`docs/research/night-sky-colour.md`).
     ///
     /// The test checks the sky's *result* rather than the clear colour: the ratio of the
-    /// clear colour to the zenith's transmittance must be the scotopic colour, and the
-    /// transmittance must be warm — that is what makes the division necessary.
+    /// clear colour to the zenith's transmittance must be the scotopic colour.
     #[test]
     fn the_night_sky_behind_the_atmosphere_is_blue() {
-        // The atmosphere's transmittance is warm: the blue is scattered out of the line of sight
-        // most.
-        assert!(
-            ZENITH_TRANSMITTANCE.x > ZENITH_TRANSMITTANCE.z,
-            "the transmittance is not warm: {ZENITH_TRANSMITTANCE:?}"
-        );
         // The clear colour is the scotopic colour divided by the transmittance, so what comes
         // through is the scotopic colour.
         let clear = NIGHT_SKY_COLOUR / ZENITH_TRANSMITTANCE;
@@ -1175,11 +1168,15 @@ mod tests {
             );
         }
         // And the clear colour is *more* blue than the scotopic colour, not less: that is what
-        // the division buys.
+        // the division buys, and it is only worth doing because the transmittance is warm.
         assert!(
             clear.z / clear.x > NIGHT_SKY_COLOUR.z / NIGHT_SKY_COLOUR.x,
             "the clear colour is not blue enough: {clear:?}"
         );
+        // The transmittance must be warm — the blue is scattered out of the line of sight
+        // most — or the division would be unnecessary.
+        let warm = ZENITH_TRANSMITTANCE.x - ZENITH_TRANSMITTANCE.z;
+        assert!(warm > 0.0, "the transmittance is not warm: {ZENITH_TRANSMITTANCE:?}");
     }
 
     #[test]
