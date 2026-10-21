@@ -2256,3 +2256,153 @@ says is wrong — is fixed on both paths, the day is untouched, and the cost is 
    *readable* look is also less legible than the physical one (measured in iteration 28: the
    readable streaks carry 32 DN of contrast against the grass where the physical ones carry
    44), which is the defect the town capture keeps showing.
+
+## Iteration 33 — 2026-10-20 — a game lights its own night: the exposure, and what a light has to be to read
+
+**Commits:** `4fb14ea` (the research note `docs/research/game-lights.md`), `e9d4583` (the
+implementation with its tests), `6539053` (the `isometric` example), `a430941` (the README, the
+changelog and the note's Deviations), `c9d0d37` (the lights off in daylight), this log.
+**Sibling repos:** none. **Not released.**
+
+### Candidates
+
+| Rank | Candidate | Class | Decision |
+|---|---|---|---|
+| 1 | **A game at night has nothing to light with**: the crate meters an exposure and gives a game no way to balance its own light against it | 3 (API) | **this iteration** |
+| 2 | The scree is a graded band, not a scatter (stones of many sizes with turf between them) | 2 | carried |
+| 3 | The dry patch's own texture (a tint on green blades) | 2 | carried |
+| 4 | The overcast dome is flat (`sky_gain` leaks at grazing, diagnosed in iteration 28) | 1 | carried |
+| 5 | A 25 mm/h storm hides the whole town under an orthographic camera | 2 | carried |
+
+Rank 1 beat the carried items because it is the one that makes a *game* of the crate work: the
+crate simulates a day and a night, a sun and a moon, a sky and a metered exposure, and a game
+that puts a character in that world at night has **nothing to light them with**. It is also the
+crate's own class-3 list, and the crate's `night-sky-light.md` already names it: "a game at
+night wants its own lights (a torch, a street lamp, a window), and the crate gives a game
+nothing to place them with". The carried items are a beauty gain on a detail at the boundary
+of two surfaces, against an API gap that stops a game shipping its night.
+
+### What changed
+
+- **`ElementsExposure`**, a resource holding the camera's EV100 and its exposure factor,
+  refreshed every frame. The celestial plugin writes the *followed* camera's exposure there,
+  whether the crate metered it or the game drove it (`ElementsCamera::auto_exposure` off).
+- **`Environment::exposure()`, `display_value(luminance)`, `luminance_for_display(display)`,
+  `light_intensity(luminance, distance, albedo)`, `light_illuminance(intensity, distance)` and
+  `night_light_colour()`**, and the same functions in the new `light` module, flat from the
+  crate's root.
+- **The lightning's own `display_value` is now that module's**, so there is one path for the
+  feature and no duplicate constant.
+
+**The shape of it.** A scene-linear value of **0.18 is 18 % grey, the middle of the picture**,
+and the crate's metering is built so that an 18 % grey surface reads at 0.18 *at every hour* —
+because the exposure is applied inside Bevy's PBR shader and the tonemapper after it, so the
+number the crate names is the tonemapper's *input*. The power a light needs scales
+*inversely* with the exposure: the same lamp wants **62 253 lm at noon and 2.8 lm at
+midnight** for the same picture, so a game that hard-codes a lamp's lumens is wrong by five
+orders of magnitude between the two, and a game that asks the crate is never wrong.
+
+### Sources
+
+- **Patry, J. (2021)**, *Real-time samurai cinema*, SIGGRAPH *Advances* (corpus
+  `s2021-advances-pdf-66-mb`, the "Tonemapping | Exposure" section, lines 2990–3060, and the
+  low-light vision section, lines 3855–3900). Used: "Lights are authored using **physical
+  units**"; "we also switched to a **primarily illuminance-based exposure system**, which takes
+  albedo out of the equation altogether", with luminance used "only if the highlight luminance
+  exceeds a threshold" — "fire particles, bright specular highlights"; the *feedback loop* they
+  had before ("the feedback loop between luminance-based exposure and albedo… resulted in
+  albedo values that were too dark"), which the crate does not have, and which is why **a game's
+  own light does not move the camera's exposure** — the stable behaviour, and the reason the
+  gap is not an exposure bug; and the low-light section's **Purkinje shift** ("low-light vision
+  is not 'black & white'… a color shift introduced by the rods as they take over"), which is
+  why a game's light at night should be the crate's *scotopic* colour and not a warm one.
+  **Not indexed** (the ONNX out-of-memory error in `corpus.md`).
+- **Bevy 0.20's source** (`$R` = `~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f`):
+  `$R/bevy_camera-0.20.0/src/camera.rs:275` — `Exposure::exposure()` is `2^(−ev100) / 1.2`;
+  `$R/bevy_pbr-0.20.0/src/render/light.rs:574` and `:711` — a light's power is **luminous power
+  in lumens**, mapped to `Φ / 4π` for a point light *and* for a spot light ("we choose to use
+  the same 4\*PI divisor in both cases so that toggling between point light and spot light
+  keeps lit areas lit equally"), where Filament would use `π` for a spot; `$R/bevy_pbr-0.20.0/
+  src/render/pbr_lighting.wesl` — `getDistanceAttenuation` (`1/d²`) and the spot's
+  `spot_scale`/`spot_offset` (the cone's attenuation is 1 inside the inner angle and 0 at the
+  outer); `$R/bevy_pbr-0.20.0/src/render/pbr_functions.wesl:850` — the exposure is applied
+  *inside* the PBR shader, before the tonemapper; `$R/bevy_light-0.20.0/src/spot_light.rs:152` —
+  Bevy's own calibration, "1,000,000 lumens is a very large 'cinema light' capable of
+  registering brightly at Bevy's default 'very overcast day' exposure level".
+- **The crate's own `celestial.md`** — the metering model (`ev100_for`, `exposure_for_adaptation`,
+  `scene_illuminance`) — and **`night-sky-light.md`** — the illuminance floor and the *scotopic*
+  colour.
+- **Jensen et al. 2001** (through the crate's own `night-sky-colour.md`) — the blue shift and
+  the scotopic curve.
+
+### The critique and the verdicts (`/tmp/i33/critique.md`)
+
+| Round | Finding | Verdict |
+|---|---|---|
+| 1 | The API was right and the *example* was not: the lamp's pool was a 1 m blob, the lamp's head blew out to 255 DN (it was lit by its own light 0.15 m away), and the paving's 10 m slab cut the pool with a hard edge | NOT YET |
+| 2 | A `SpotLight` for the hand-held light, the head *emissive* rather than lit, the lamp at the square's centre and the paving at 14 m: the frame's contrast **2.44 → 13.97 DN**, the head not blown, the day untouched | NOT YET |
+| 3 | The head's radiance as a scene-linear value (8.0, a step above the pool's 0.30) and the lamp's light off in daylight: the contrast **14.18 DN**, the day's maximum 255 → 232 DN, the noon capture's mean within 0.5 DN of the baseline's | **GREAT** |
+
+| Feature | Verdict |
+|---|---|
+| The exposure a game reads | **GREAT** |
+| The light's power, in lumens | **GREAT** |
+| The night colour | **GREAT** |
+| The town's night, at full frame | **GREAT** (2.44 → 14.18 DN) |
+| The town's night, at 350 % | **GREAT** (the head, the falloff on the walls, the four shadows) |
+| The day | **GREAT** (within 0.5 DN of the baseline) |
+| The cost | **GREAT** (no GPU work at all) |
+| The lamp's head is a cube | NOT YET (cosmetic; the example's set dressing) |
+| The roofs' near-black tops | NOT YET (physics; the lamp is under the roof line) |
+
+**The change as a whole: GREAT.** The API gap is closed in one path, the units are checked
+against Bevy's own calibration, the promise is proved in a test that runs outside the crate, and
+the demonstration in the example takes the town's night from a flat wash to a lit place.
+
+### Measurements
+
+- **The night reads.** The isometric town at 22 h (2026-04-15, `Clear`, zoom 45 m, pitch 35°):
+  the frame's standard deviation **2.44 → 14.18 DN**, its maximum 49.0 → 176.7 DN, and the
+  four houses' shadows now read.
+- **The same light reads the same at every hour.** The scene-linear value the pool reads at is
+  **0.06000 at 12 h, 22 h and 2 h** — to five figures — while the *picture* differs, because
+  the tonemapper compresses the daylight scene, which is right: a torch does not read at noon.
+- **The day is untouched.** The noon capture's mean is (143.12, 151.39, 130.84) against the
+  baseline's (142.62, 150.86, 130.20) — 0.5 DN in each channel, within the GPU's
+  non-determinism — and the standard deviation within 0.03.
+- **The metering, measured through the crate's own `ev100_for`:** the moonless night
+  (0.0005 lx) is EV100 −4.75 and the noon sun (10 000 lx) EV100 9.75; an 18 % grey surface reads
+  at 0.18 at both.
+- **Cost.** `bench_elements`, High, 1920 × 1080, the minimum over the diagnostic history, the
+  two builds run **back to back in one session** so the card's load is the same for both:
+  round 1 (the card idle) the baseline's total **1.901 ms** and this one's **1.925 ms**; round
+  2 (the card loaded by another tenant) the baseline's **11.294 ms** and this one's
+  **11.188 ms**. Every pass is within the noise (`elements_clouds_march` 0.561 → 0.549 and
+  1.369 → 1.343; `elements_wind` 0.166 → 0.155 and 0.395 → 0.366; `main_opaque_pass_3d` 0.052
+  → 0.052 and 0.207 → 0.204). The change is arithmetic on a number the crate already computes,
+  so there is no new pass, no new buffer and no new binding.
+- **The full gate.** `cargo test` 260 plus the 4 new public-API tests, clippy, doc, wasm, the
+  GPU integration suite (22 files), the lib GPU modules clouds (10), terrain (8), cover (8) and
+  dust (6), and `the_horizon_sky` alone: all pass.
+
+### The next five items, ranked
+
+1. **The scree is a graded band, not a scatter** — the grass meets the stone in a smooth wash
+   where it should be stones of many sizes with turf between them. The idea and the place are
+   right; the scatter is not there. The natural next piece of work on this material, and the
+   rock's grain needs a *cell* structure for it (a Worley network of *stones*, not of walls).
+2. **The dry patch's own texture.** The palette gives the ground a *hue*; a dry patch needs a
+   *texture* too — the blades inside it should take the patch's hue rather than the turf's, and
+   a dry patch is coarser than green grass. The colour half is in this crate; the geometry half
+   (a grass mesh) belongs to `bevy_flora`.
+3. **The overcast dome is flat**, with its blocker diagnosed in iteration 28 (the `sky_gain` leak
+   at grazing); it carries its Eddington implementation and its measurements in `/tmp/i28`.
+4. **A 25 mm/h storm hides the whole town under an orthographic camera**, carried. The rain's
+   *readable* look is also less legible than the physical one (measured in iteration 28: the
+   readable streaks carry 32 DN of contrast against the grass where the physical ones carry
+   44), which is the defect the town capture keeps showing.
+5. **A game's own light has no shadow of its own to fall on the crate's weather.** A lamp lights
+   the town, but the crate's rain and snow are lit by the crate's lights alone, so a lamp in a
+   downpour lights the *ground* and not the *rain*. A hook for a game's own lights in the
+   precipitation and cloud passes would close it; the ownership map keeps the geometry in
+   `bevy_flora`, but the lighting hook is this crate's.
