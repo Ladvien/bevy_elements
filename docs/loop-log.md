@@ -2406,3 +2406,161 @@ the demonstration in the example takes the town's night from a flat wash to a li
    downpour lights the *ground* and not the *rain*. A hook for a game's own lights in the
    precipitation and cloud passes would close it; the ownership map keeps the geometry in
    `bevy_flora`, but the lighting hook is this crate's.
+
+## Iteration 34 — 2026-10-21 — the scree is a scatter of stones, not a band of mixed colour
+
+**Commits:** `66a5fb8` (the research note `docs/research/scree.md`), `32f15b5` (the
+implementation with its tests), `81b01c7` (the changelog and the note's Deviations), `c3bd339`
+(the README and the showcase image), this log. **Sibling repos:** none. **Not released.**
+
+### Candidates
+
+| Rank | Candidate | Class | Decision |
+|---|---|---|---|
+| 1 | **The scree is a graded band, not a scatter** — the grass meets the stone in a smooth wash where it should be stones of many sizes with turf between them | 2 | **this iteration** |
+| 2 | The dry patch's own texture (a tint on green blades) | 2 | carried |
+| 3 | The overcast dome is flat (`sky_gain` leaks at grazing, diagnosed in iteration 28) | 1 | carried |
+| 4 | A 25 mm/h storm hides the whole town under an orthographic camera | 2 | carried |
+| 5 | A game's own light does not fall on the crate's weather | 3 | carried from iteration 33 |
+
+Rank 1 beat the carried items because it is the *rock's* missing half, and the rock is the
+crate's most prominent material. The crate has given the rock a material (strata, fractures, a
+grain) and a place to put it, but the material is a *texture* where the world has *objects*: a
+scree is the most recognisable place where the difference shows, and the log has named it
+first for five iterations running. The overcast dome is class 1 and so ranked higher by the
+class order, but its blocker is diagnosed and its fix is a *sky* change, and it has carried
+four iterations with its measurements in `/tmp/i28`.
+
+### What changed
+
+- **The stones are the cells of a 2D cellular network.** The nearest feature point is a
+  stone's centre and the distance to it is the stone's radius. The crate's own rock note
+  records why that is the right structure — and why the *same* network cannot make the
+  fractures: "A Worley cell network cannot make them — it bounds *cells*, so a face reads as a
+  giraffe's hide". Used the other way round, as the **stones** rather than as the **cracks**,
+  it is the missing piece.
+- **Two networks, nested**: a coarse one for the big stones and a fine one for the small ones,
+  the fine ones only where the coarse ones do not cover — a real talus's long tail.
+- **Each stone has its own relief** (the distance field's gradient domes it, so the sun rakes
+  its edge) and **its own contact shadow** on the matrix beside it, so the stones sit *in* the
+  dirt.
+- **The ground between the stones is the scree's own matrix**, not the turf: a scree has no
+  grass in it, and a lawn with pebbles on it is a lawn.
+- **The band is 16°–40°**, an apron rather than a line.
+- `cell2` in `noise.wesl` and its CPU mirror in `gpu/noise_mirror.rs`.
+
+### Sources
+
+- **Verdian, J. P., Sklar, L. S., Riebe, C. S., Moore, J. R. (2021)**, *Sediment size on talus
+  slopes correlates with fracture spacing on bedrock cliffs*, Earth Surface Dynamics 9:1073,
+  DOI `10.5194/esurf-9-1073-2021` (open access; the PDF was read in full, 914 lines of
+  `pdftotext -layout`). Used: "The detachment of rock fragments from fractured bedrock on
+  hillslopes creates sediment with an initial size distribution that sets the upper limits on
+  particle size for all subsequent stages in the evolution of sediment in landscapes"; the
+  measurement — the finest talus clasts "as small as 2 mm, and median b-axis diameters ranging
+  from 10 to 575 mm", and "Median fracture spacing and particle size vary by more than 10-fold
+  and correlate strongly with lithology" — so a scree has stones of *many* sizes and its
+  median moves between sites; and the weathering that erases the size distribution "in the
+  critical zone", which is the turf growing over it. **Not indexed** (the ONNX out-of-memory
+  error in `corpus.md`).
+- **Dorsey, J. O'B., Edelman, A. S., Jensen, H. W., Legakis, J., Pedersen, H. K. (1999)**,
+  *Modeling and rendering of weathered stone*, ACM SIGGRAPH 1999, DOI `10.1145/311535.311560`.
+  The record was read; **the PDF was not obtained**. Named here as the canonical treatment of a
+  weathered stone surface, and its *approach* — model the stone's weathering and render the
+  result — is the one the crate already follows for the rock's own material.
+- **The crate's own `rock-material.md`**: the strata, the fractures and the grain, and the
+  sentence that is the key to this change — "A Worley cell network cannot make them — it
+  bounds *cells*, so a face reads as a giraffe's hide"; and the corduroy lesson, which is why
+  the scatter is band-limited by the cell.
+- **Andersson, J. (2007)**, *Terrain rendering in Frostbite using procedural shader splatting*,
+  SIGGRAPH 2007 *Advances* ch. 5 (corpus `10.1145_1281500.1281668`): the Overlay blend, which
+  breaks the scree's band edges with the same `detail` field the layer boundaries use.
+
+### The critique and the verdicts (`/tmp/i34/critique.md`)
+
+| Round | Finding | Verdict |
+|---|---|---|
+| 1 | The stones appeared, but as **dark holes in the grass**: the stone's colour multiplied the ground's albedo instead of replacing it, and the band sat on the *soil's* band rather than at the rock's foot | NOT YET |
+| 2 | The stone's colour replaced the ground's, and the band moved to the rock's foot — but the stones' relief scaled with the cell, so the smallest stones' rims tilted by 85° and they rendered as black crescents | NOT YET |
+| 3 | The relief is a dimensionless slope, the network is nested, and the matrix is the scree's own: the stones are countable at 3 m, the apron is wide, and the distance is calm | NOT YET |
+| 4 | The matrix was still warm (it read as a dirt road tracing the hillside) and the stones cast no shadow: the matrix is greyed toward the rock and the stones gained a contact shadow | **GREAT** |
+
+| Feature | Verdict |
+|---|---|
+| The stones, at 3 m | **GREAT** (countable, many sizes, each with a lit top and a shaded flank) |
+| The stones' contact shadow | **GREAT** (they sit in the dirt) |
+| The apron at 25 m | **GREAT** (a wide stony flank, the green thinning through it) |
+| The distance at 90 m | **GREAT** (the high-frequency energy goes *down*: 7.376 → 7.001) |
+| The meadow | **GREAT** (the plains preset is byte-identical) |
+| The cost | **GREAT** (see below) |
+| The matrix's warmth | NOT YET (cosmetic; it reads as stony ground) |
+| The stones' shape (domes, not angular blocks) | NOT YET (cosmetic; the shape the distance field gives for free) |
+| The rock's own material | NOT YET (**not this change's business** — the massif from 700 m is still a flat blue-grey wash) |
+
+**The change as a whole: GREAT.** The scree is a scatter of stones with turf between them, the
+boundary between the grass and the rock is no longer a line, the distance is calm, the meadow
+is untouched, and the cost is nil.
+
+### Measurements
+
+- **The scree is discrete.** The coverage along an 8 m cut crosses the half-way mark at least
+  **six** times (the CPU mirror's test), where a band's weight crosses it once or twice. Over
+  half the cut is below half covered: the turf shows between the stones.
+- **The sizes vary.** The stones' areas span more than 4:1 between the tenth and the ninetieth
+  percentile, and their offsets inside their cells are spread (the mean near the middle, the
+  spread above 0.2) — a scatter, not a grid.
+- **The band is at the rock's foot.** Zero on the meadow and zero on the cliff, peaking at 26°,
+  and at least six degrees wide at half its strength (a narrow band traced the hillside's
+  break as a contour line).
+- **The meadow is untouched.** The `plains` preset at 6 m is **byte-identical** — the mean
+  170.725 and the standard deviation 26.575 before and after. The `hills` preset differs by
+  0.3 DN, which is the scree on their slopes.
+- **The distance is calm.** The frame's high-frequency energy (the laplacian's rms) at 25 m
+  rises from **6.415 to 8.192** — the stones add real detail where they are visible — and at
+  **90 m it falls, 7.376 → 7.001**: the scatter is band-limited, so at a distance the scree is
+  a tone and not a corduroy. The mean barely moves (141.301 → 142.199 at 25 m), so the scree
+  is a change of *texture* and not a brightening.
+- **Cost.** `bench_elements`, High, 1920 × 1080, `mountains`, the minimum over the diagnostic
+  history, the two builds run **back to back in one session** so the card's load is the same
+  for both, three rounds each. The card's own state swings the *total* by 73 % between runs
+  (1.87–3.24 ms for the *same* build), so the totals are not comparable and the per-pass
+  minima are. The mountains' opaque pass, which is the pass the scree is in:
+
+  | round | the baseline | this one |
+  |---|---|---|
+  | 1 | 0.147 ms | 0.167 ms |
+  | 2 | **0.131 ms** | 0.164 ms |
+  | 3 | 0.140 ms | **0.140 ms** |
+
+  The minimum over the rounds is 0.131 ms against 0.140 ms: **+7 %**, within the note's 10 %,
+  and the third round identical. The scree costs two cell-network lookups and one noise
+  evaluation per pixel *in the band only* (`scree > 0.01`), and the meadow and the cliff pay
+  nothing — the `plains` preset's capture is byte-identical.
+- **The full gate.** `cargo test` 296 plus the 3 new scree tests, clippy, doc, wasm, the GPU
+  integration suite (22 files), the lib GPU modules clouds (10), terrain (8), cover (8) and
+  dust (6), and `the_horizon_sky` alone: all pass.
+
+### The next five items, ranked
+
+1. **The rock's own material is a texture where the world has objects.** The massif from 700 m
+   is a flat blue-grey wash, and the face at 3 m is a uniform sandy grey with a fine even
+   noise: the beds, the fractures and the grain are all colour modulations of *one continuous
+   surface*, and there is no mechanism in the crate for a discrete object on a cliff. The
+   scree found the mechanism — a cell network used the other way round — and the cliff's
+   *blocks* are the same idea one scale up. This is the same root as the scree was, and the
+   scree's fix says where to look.
+2. **The dry patch's own texture.** The palette gives the ground a *hue*; a dry patch needs a
+   *texture* too — the blades inside it should take the patch's hue rather than the turf's, and
+   a dry patch is coarser than green grass. The colour half is in this crate; the geometry half
+   (a grass mesh) belongs to `bevy_flora`.
+3. **The overcast dome is flat**, with its blocker diagnosed in iteration 28 (the `sky_gain` leak
+   at grazing); it carries its Eddington implementation and its measurements in `/tmp/i28`.
+4. **A 25 mm/h storm hides the whole town under an orthographic camera**, carried. The rain's
+   *readable* look is also less legible than the physical one (measured in iteration 28: the
+   readable streaks carry 32 DN of contrast against the grass where the physical ones carry
+   44), which is the defect the town capture keeps showing.
+5. **A game's own light has no shadow of its own to fall on the crate's weather.** A lamp lights
+   the town, but the crate's rain and snow are lit by the crate's lights alone, so a lamp in a
+   downpour lights the *ground* and not the *rain*. A hook for a game's own lights in the
+   precipitation and cloud passes would close it; the ownership map keeps the geometry in
+   `bevy_flora`, but the lighting hook is this crate's.

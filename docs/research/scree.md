@@ -154,8 +154,43 @@ the scree is the rock's own tone — the scree fades into the cliff, as a real o
 
 ## Deviations from this plan
 
-*(filled in as the implementation settles; every changed default is recorded here with its
-citation.)*
+1. **The band is 16°–40°, not the rock's foot's 26°–34°.** The plan put the scree where the
+   soil's band dies and the rock's ramp begins. Measured on the capture, that band is *nine
+   degrees wide*, and on a long slope it traced the hillside's break as a **contour line** —
+   the one thing a scree is not. The band is now the soil's own band up to the rock's ramp
+   (16°–40°), which is an apron tens of metres deep, and the weight falls towards both ends.
+2. **The stones' relief is a *slope*, not a height, and it is dimensionless.** The plan gave
+   the dome a height in cell units. A gradient that scaled with the cell made the *smallest*
+   stones' rims tilt by 85° and they rendered as black crescents; a gradient that scaled with
+   the cell's reciprocal made the fine network's stones 2.6× steeper than the coarse ones. The
+   dome is now a fixed *shape*: a big stone is a big dome and a small one a small dome, and
+   both catch the light the same way.
+3. **The network is nested, not single.** The plan had one network with a per-cell size
+   factor. One network at one size reads as *pebbles on grass*: the stones are too sparse and
+   the turf too dominant. Two nested networks — a coarse one for the big stones and a fine
+   one for the small ones, the fine ones only where the coarse ones do not cover — read as a
+   scree, and it is the nested tail that a real size distribution has (Verdian et al. 2021:
+   the finest talus clasts are 2 mm against a median of 10 to 575 mm).
+4. **The ground between the stones is a greyed soil, not the crate's SOIL tone.** At full
+   SOIL it read as warm bare earth — a dirt road tracing the hillside. The matrix is now the
+   SOIL tone mixed 62 % toward the rock, which is what a scree's matrix is: the weathered rock
+   between the stones.
+5. **The scree's soil replaces the turf's colour in the band.** The plan had the turf showing
+   between the stones, and the turf's *green* showed through the whole band, so the scree read
+   as a lawn with pebbles on it. A scree has no grass in it: the band's ground is the matrix,
+   and the turf comes back at the band's edges and in the layer variation's patches.
+6. **The cell is 0.45 m, not 0.28 m.** At 0.28 m the stones were 0.10 m across — pebbles. The
+   note's own measurement (a median b-axis of 10 to 575 mm) puts a scree's typical stone well
+   above that.
+7. **The contact shadow is the stone's own occlusion, not a cast shadow.** The ground's
+   fragment shader has no access to the sun's direction, so a *cast* shadow is not available
+   without a new uniform. What is available — and what the capture wanted — is the stone's own
+   occlusion of the matrix it lies on, which is the darkening of the ground within a stone's
+   radius of its rim. It is what makes the stones sit *in* the dirt rather than on it.
+8. **Two cell lookups and one noise evaluation per pixel, not four and two.** The contact
+   shadow is computed from the same cell the stone's coverage came from, and the stone's grain
+   is the same for both scales, so it is evaluated once. The captures are identical to the
+   last decimal.
 
 ## Pending index
 

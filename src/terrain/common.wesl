@@ -11,7 +11,7 @@
 // and four loads; the world height is `misc.x + surface`.
 
 import bevy_elements::grid::GridParams;
-import bevy_elements::noise::{perlin2_d, perlin3_d, seed_offset};
+import bevy_elements::noise::{cell2, perlin2_d, perlin3_d, seed_offset};
 
 struct TerrainParams {
     grid: GridParams,
@@ -304,6 +304,36 @@ const ROCK_FRACTURE_DARKEN: f32 = 0.26;
 /// The rock's own grain amplitude, as a fraction of the rock's albedo.
 const ROCK_GRAIN_AMP: f32 = 0.60;
 
+// The scree (`docs/research/scree.md`)
+//
+// A scree is a *scatter* of stones of many sizes with turf between them, not a band of
+// mixed colour. The stones come from the cliff above them, and their sizes follow the cliff's
+// fracture spacing: a real talus runs from 2 mm to 575 mm, with the median moving by more than
+// 10-fold between sites (Verdian et al. 2021, Earth Surface Dynamics 9:1073).
+
+/// The cell network's cell, m: the *spacing* of the stones in it. A scree's stones are fist-
+/// to boulder-sized — Verdian et al. 2021 measure the median b-axis at 10 to 575 mm — and at
+/// 0.45 m the cell holds a 0.2 m stone beside a 0.5 m one, which is what a scree looks like
+/// from four metres away.
+const SCREE_CELL_M: f32 = 0.45;
+/// The spread of the stones' sizes, as the range of the per-cell factor: the smallest stone is
+/// 0.35 of its cell and the largest 2.2 of it, a 6:1 range. Verdian et al.: 2 mm to 575 mm.
+const SCREE_SIZE_MIN: f32 = 0.35;
+const SCREE_SIZE_MAX: f32 = 2.20;
+/// How much of the cell the largest stone fills: the cell is a *spacing*, not a stone's size,
+/// and a stone that filled its cell would touch its neighbours and the scatter would be a
+/// pavement. At 0.72 the turf shows between the stones.
+const SCREE_FILL: f32 = 0.72;
+/// How dark a stone is against the ground it lies on, and how much the turf's colour shows
+/// between them: the scree is *stones with turf between them*, not a sheet of stone.
+const SCREE_STONE_TINT: f32 = 0.34;
+/// The stone's relief, as the *slope* of its dome at the rim. The distance field's gradient
+/// tilts the normal outward, so the sun rakes the stone's edge and it reads as a thing rather
+/// than as a stain. It is a slope and not a height, so it does not depend on the stone's size:
+/// a big stone is a big dome and a small one a small dome, and both catch the light the same
+/// way.
+const SCREE_RELIEF: f32 = 0.30;
+
 /// Rock's own material: the colour the rock's texture gives it, the grain's bump gradient, and
 /// whether the grain survives the pixel's footprint. A cliff face is bedded, jointed and
 /// two-toned; without this it is one flat colour, which is what the crate had
@@ -388,8 +418,127 @@ fn rock_material(p: vec3<f32>, warp: f32, footprint_m: f32) -> RockMaterial {
     );
 }
 
+/// The scree: a scatter of stones with turf between them, at `p` (metres) in the world XZ
+/// plane, for a view whose footprint is `footprint_m` metres per pixel.
+///
+/// The stones are the *cells* of a 2D cellular network: the nearest feature point is a stone's
+/// centre, and the distance to it is the stone's radius. The cell's own random factor makes
+/// the stones many sizes (Verdian et al. 2021: a talus runs from 2 mm to 575 mm), and the
+/// distance field's gradient domes each stone, so the sun rakes its edge and it reads as a
+/// thing rather than as a stain.
+///
+/// The network is in the **world XZ plane**, the turf's own frame, because the scree lies on
+/// the near-horizontal surfaces where the plane's projection is the surface; on a steep face it
+/// would stretch along the slope, which is the weave the crate's rock note warns about.
+///
+/// `tint` is the multiplier on the ground's albedo (around 1), `grad` the surface gradient the
+/// bump adds, and `coverage` how much of the ground the stones take (the rest is the turf).
+struct Scree {
+    tint: f32,
+    grad: vec2<f32>,
+    coverage: f32,
+    present: f32,
+    /// The stone's occlusion of the matrix beside it, 0 to 1: the contact shadow that makes
+    /// the stones sit *in* the dirt.
+    contact: f32,
+}
+
+/// One scale's stones: the cell network's cells at `cell_m`, the stone each cell owns, and
+/// the size factor that makes the stones many sizes.
+struct ScreeScale {
+    /// How much of the point the stone covers, 0 to 1.
+    inside: f32,
+    /// The stone's dome gradient, in the surface's frame (x, z).
+    grad: vec2<f32>,
+    /// The stone's own tone, a multiplier around 1.
+    tint: f32,
+    /// The stone's occlusion of the matrix beside it: the contact shadow that makes the
+    /// stones sit *in* the dirt.
+    contact: f32,
+}
+
+/// The stones of one network at `cell_m`: the cell's own stone, its size, its dome and the
+/// contact shadow it casts on the matrix beside it.
+fn scree_scale(xz: vec2<f32>, cell_m: f32, size_min: f32, size_max: f32) -> ScreeScale {
+    let q = xz / cell_m;
+    let cell = cell2(q);
+    // The stone's own size: the cell's factor, remapped to the spread. A power law's shape —
+    // most cells small, a few large — is what a size distribution looks like (Verdian et al.
+    // 2021: the median moves by more than 10-fold between sites, and the tail is long).
+    let size = mix(size_min, size_max, pow(cell.factor, 3.0));
+    // The stone's radius in lattice units.
+    let radius = 0.5 * size * SCREE_FILL;
+    let d = cell.distance;
+    let inside = 1.0 - smoothstep(radius * 0.80, radius, d);
+    // The contact shadow: the matrix just outside the stone, in the stone's own occlusion of
+    // the ground it lies on. The ground's shader has no access to the sun's direction, so this
+    // is not a *cast* shadow — it is what makes the stones sit in the dirt rather than on it.
+    let contact = smoothstep(radius * 0.80, radius, d)
+        * (1.0 - smoothstep(radius, radius * 1.9, d));
+    if inside <= 0.0 {
+        return ScreeScale(0.0, vec2<f32>(0.0), 1.0, contact);
+    }
+    // The stone's dome: the distance field's gradient, which points away from the stone's
+    // centre, tilts the normal outward.
+    let to_centre = cell.point - fract(q);
+    let len = max(length(to_centre), 1e-6);
+    let outward = to_centre / len;
+    // The dome's slope at the point: the slope of a dome of a fixed shape, so it does *not*
+    // depend on the stone's size. A big stone is a big dome and a small one a small dome, and
+    // both catch the light the same way. (A slope that scaled with the cell instead made the
+    // smallest stones' rims tilt by 85°, and they rendered as black crescents.)
+    let rim = clamp(d / max(radius, 1e-6), 0.0, 1.0);
+    let slope = SCREE_RELIEF * rim / sqrt(max(1.0 - rim * rim, 0.05));
+    // The gradient is a *tilt*, the same for every stone: the surface's normal is turned by
+    // the dome's slope, in the surface's own frame. It is the dimensionless slope, so it does
+    // not carry the cell's scale — a stone in the fine network is a small stone with the same
+    // tilt at its rim as a big one.
+    let grad = -outward * slope;
+    // The stone's own tone: the rock, a little darker than the bare rock it came from (a stone
+    // in the shadow of its neighbours). The grain is the same for both scales and is
+    // evaluated once, by the caller.
+    let tint = 1.0 - SCREE_STONE_TINT * 0.35;
+    return ScreeScale(inside, grad, tint, contact);
+}
+
+fn scree_scatter(xz: vec2<f32>, footprint_m: f32) -> Scree {
+    // Two networks, nested: a coarse one whose cells hold the big stones and a fine one whose
+    // cells hold the small ones. That is how a scree is built — a size distribution with a
+    // long tail, and the tail is the small stones filling the gaps between the big ones
+    // (Verdian et al. 2021: the finest talus clasts are 2 mm, against a median of 10 to
+    // 575 mm). One network at one size reads as *pebbles on grass*; two nested read as a
+    // scree.
+    let coarse = scree_scale(xz, SCREE_CELL_M, SCREE_SIZE_MIN, SCREE_SIZE_MAX);
+    let fine = scree_scale(xz, SCREE_CELL_M * 0.38, SCREE_SIZE_MIN * 0.8, SCREE_SIZE_MAX * 0.8);
+    // The stone's own grain, so it is not a flat patch: one evaluation for both scales.
+    let grain = perlin3_d(vec3<f32>(xz.x, 0.0, xz.y) / 0.11).x;
+    // The contact shadows: the matrix beside each stone, in both networks.
+    let contact = max(coarse.contact, fine.contact);
+    // The fine stones only show where the coarse one does not cover, so a fine stone never
+    // grows out of the side of a big one.
+    let fine_inside = fine.inside * (1.0 - coarse.inside);
+    let inside = max(coarse.inside, fine_inside);
+    // Band-limited by the *coarse* cell, like the fractures: a stone is a fraction of a cell
+    // across and a pixel at 700 m is a metre, and a scatter that is not band-limited is a
+    // corduroy.
+    let keep = detail_keep(SCREE_CELL_M, footprint_m);
+    if inside <= 0.0 {
+        return Scree(1.0, vec2<f32>(0.0), 0.0, keep, contact * keep);
+    }
+    // The gradient is the stone's own, and the fine one's only where the fine stone is.
+    let grad = select(fine.grad, coarse.grad, coarse.inside > fine_inside);
+    let tint = select(fine.tint, coarse.tint, coarse.inside > fine_inside) * (1.0 + 0.35 * grain);
+    return Scree(
+        mix(1.0, tint, keep),
+        grad * inside * keep,
+        inside * keep,
+        keep,
+        contact * keep,
+    );
+}
+
 /// The ground's detail at `p` (metres) for a view whose footprint is `footprint_m` metres per
-/// pixel: two octave sums, each band-limited by its own scale, whose albedo modulation and bump
+/// pixel: two octave sums, each band-limited by their own scale, whose albedo modulation and bump
 /// gradient replace the one fixed 0.8 m⁻¹ band faded by a distance constant. `albedo` is a
 /// multiplier around 1; `grad` is the surface gradient the bump adds.
 ///

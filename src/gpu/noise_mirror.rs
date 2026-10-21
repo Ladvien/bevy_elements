@@ -1,7 +1,7 @@
 //! A CPU transliteration of `src/noise.wesl` (f32, wrapping u32 arithmetic), used by tests to
 //! check the analytic derivative and to measure the normalisation constants the kernels use.
 
-use bevy::math::{IVec3, UVec3, Vec3, Vec4};
+use bevy::math::{IVec2, IVec3, UVec3, Vec2, Vec3, Vec4};
 
 const NOISE_PERIOD: i32 = 4096;
 
@@ -183,6 +183,48 @@ pub(crate) fn worley3(p: Vec3, period: i32) -> f32 {
         }
     }
     best.sqrt()
+}
+
+/// A cell of the 2D cellular network, the mirror of `cell2` in `noise.wesl`: the distance to the
+/// nearest feature point, the point itself, and the cell's own random factor.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Cell2 {
+    /// The distance to the feature point, in lattice units.
+    pub distance: f32,
+    /// The feature point's position, in lattice units.
+    pub point: Vec2,
+    /// The cell's own random factor, in [0, 1).
+    pub factor: f32,
+}
+
+/// Mirror of `cell2` in `noise.wesl`: the 2D cellular network's nearest feature point, its
+/// distance and its cell's random factor.
+pub(crate) fn cell2(p: Vec2) -> Cell2 {
+    let i = p.floor().as_ivec2();
+    let f = p - p.floor();
+    let mut best = 1e9_f32;
+    let mut best_point = Vec2::ZERO;
+    let mut best_factor = 0.0;
+    for y in -1..=1 {
+        for x in -1..=1 {
+            let o = IVec2::new(x, y);
+            let c = (i + o) & IVec2::splat(NOISE_PERIOD - 1);
+            let h = hash33(IVec3::new(c.x, c.y, 0));
+            let point = o.as_vec2() + h.truncate();
+            let d = point - f;
+            let d2 = d.dot(d);
+            if d2 < best {
+                best = d2;
+                best_point = point;
+                best_factor = h.z;
+            }
+        }
+    }
+    Cell2 {
+        distance: best.sqrt(),
+        point: best_point,
+        factor: best_factor,
+    }
 }
 
 /// `PERLIN_FBM_MAX` of `generate.wesl`: the largest |fbm| of the 3-octave periodic Perlin sum.
