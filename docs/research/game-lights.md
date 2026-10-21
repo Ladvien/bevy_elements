@@ -58,47 +58,72 @@ it in the camera's `Exposure` component, which a game can read — but the crate
 `Exposure` is a *component Bevy owns*, and the game has to know that the exposure is the
 illuminance-based one and how it is computed.
 
-So the crate publishes, on the `Environment`:
+So the crate publishes:
 
-- **`exposure()`** — the camera's exposure factor, the same number `Exposure::exposure()`
-  returns, so a game can convert a scene luminance to a display value.
-- **`display_value(luminance_cd_m2)`** — the display value a scene luminance of that many
-  cd/m² has under the camera's current exposure. This is the crate's own `display_value`, made
-  public, and it is the *forward* direction: given the light you have, how bright does it read?
+- **`ElementsExposure`** — a resource holding the camera's EV100 and its exposure factor,
+  refreshed every frame. The celestial plugin writes the *followed* camera's exposure there,
+  whether the crate metered it or the game drove it (`ElementsCamera::auto_exposure` off).
+- **`Environment::exposure()`** — the same factor, read from a gameplay system.
 
-**2. The crate publishes the *inverse*, because that is the direction a game authors in.**
+**2. The crate publishes the scene-linear value, in both directions.**
 
-The question a game actually asks when placing a torch is: "what intensity should this lamp
-have so that it lights the ground to a readable brightness?" The answer needs the exposure and
-the surface's albedo, and the crate knows the exposure.
+The exposure is applied inside Bevy's PBR shader *before* the tonemapper
+(`bevy_pbr-0.20.0/src/render/pbr_functions.wesl:850`), so a scene luminance times the exposure
+is the tonemapper's input — the number the picture is built from. A scene-linear value of
+**0.18 is 18 % grey, the middle of the picture**, and the crate's metering is built so that an
+18 % grey surface reads at 0.18 *at every hour* (measured below).
 
-So:
+- **`display_value(luminance_cd_m2)`** — the scene-linear value a luminance has under the
+  camera's exposure. The forward direction: given the light you have, how bright does it read?
+- **`luminance_for_display(display)`** — the inverse. The direction a game authors in: "I want
+  the ground under my lamp to read at 0.18, so it must be lit to this many cd/m²."
 
-- **`luminance_for_display(display)`** — the scene luminance, in cd/m², that a surface reads at
-  a given display value under the camera's exposure. The inverse of `display_value`.
-- **`point_light_intensity(luminance_cd_m2, distance_m)`** — the `PointLight::intensity` (in
-  candela) that gives a surface at that distance the given scene luminance, from `E = I / d²`.
-  With the surface's albedo folded in, so the argument is the luminance *of the light falling
-  on the surface* and the game can divide by its own albedo.
+**3. The crate publishes the light's power, because the units are the whole difficulty.**
 
-Together these answer the whole question: "the ground here is 0.0005 lx and the camera is
-exposed for it; I want my lamp to put the ground at display value 0.3, so it needs
-`I = 0.3 / (exposure · albedo) · d²` candela."
+- **`light_intensity(luminance, distance, albedo)`** — the `PointLight::intensity` or
+  `SpotLight::intensity` (Bevy's **luminous power in lumens**) that lights a surface at that
+  distance to that luminance.
+- **`light_illuminance(intensity, distance)`** — the inverse of the falloff.
 
-**3. The colours are the crate's, so a game does not have to know the physics.**
+**4. The colours are the crate's, so a game does not have to know the physics.**
 
 The *scotopic* colour (`NIGHT_SKY_COLOUR`, (0.72, 0.95, 1.28) normalised to luminance 1) is
 what the eye reads at night, and a game's light should be that colour or the scene reads as two
 different nights. So the crate publishes it.
 
+## The numbers the model produces
+
+The crate's metering, measured through the crate's own `ev100_for` and `exposure_for_adaptation`:
+
+| the scene | the illuminance | the EV100 | the exposure | 1 cd/m² reads at |
+|---|---|---|---|---|
+| the moonless night | 0.0005 lx | −4.75 | 22.370 | 22.370 |
+| a bright moonlit night | 1 lx | −0.68 | 1.338 | 1.338 |
+| the noon sun | 10 000 lx | 9.75 | 0.001 002 | 0.001 002 |
+
+An 18 % grey surface reads at **0.18 at every one of them**: the metering is exactly the
+standard "middle grey" one.
+
+**The consequence for a game's light, and the thing worth knowing:** the power a light needs
+scales *inversely* with the exposure. A surface of albedo 0.14 that should read at 0.06 wants
+
+| the hour | the exposure | the luminance | the power at 1.92 m |
+|---|---|---|---|
+| noon | 0.001 002 | 59.89 cd/m² | 62 253 lm |
+| midnight | 22.370 | 0.002 68 cd/m² | 2.8 lm |
+
+A game that hard-codes a lamp's lumens is wrong by five orders of magnitude between noon and
+midnight. A game that asks the crate is never wrong.
+
 ## Parameters
 
 | Parameter | Value | Source |
 |---|---|---|
-| The display value a surface reads at | the game's own choice | — |
+| The scene-linear value a surface reads at | the game's own choice | — |
 | The illuminance floor | 0.0005 lx | the crate's `ILLUMINANCE_FLOOR_LUX`; Jensen et al. 2001 Fig. 2's sum |
 | The scotopic colour | `(0.72, 0.95, 1.28)`, luminance 1 | iteration 31; Jensen §7's blue shift |
-| A point light's falloff | `E = I / d²` | Bevy's `PointLight`; the crate's own `u * u` scaling in `lightning/visual.rs` |
+| A light's falloff | `E = Φ / 4πd²` | Bevy's `light.rs:574` and `pbr_lighting.wesl`'s `getDistanceAttenuation` |
+| The largest scene-linear value | 4096 | the crate's own `DISPLAY_MAX`; `Rgba16Float` stays finite |
 
 ## GPU mapping
 
@@ -108,7 +133,7 @@ different nights. So the crate publishes it.
 
 ## What great looks like
 
-- **A game's torch reads.** The game places a lamp, asks the crate what power it needs, and the
+- **A game's light reads.** The game places a lamp, asks the crate what power it needs, and the
   ground under it is a pool of light with the night around it — not a black screen and not a
   white spot.
 - **The night is one night.** The lamp's colour and the sky's colour are the same scotopic
@@ -116,27 +141,59 @@ different nights. So the crate publishes it.
 - **The day is unchanged.** The exposure is the crate's, and the crate meters on illuminance, so
   a game's light does not move it (Patry 2021: the illuminance-based system "takes albedo out
   of the equation altogether").
+- **The light reads the same at every hour.** The same light, balanced once, is the same
+  picture at noon and at midnight. A game never re-tunes it.
 
 ## Validation targets
 
 1. **The round trip holds**: `display_value(luminance_for_display(v)) == v` for `v` in the
-   display range, under the crate's own exposure.
+   display range, under the crate's own exposure. *(`celestial::light::tests::the_round_trip_holds`,
+   over four exposures.)*
 2. **The exposure is the crate's**: `exposure()` equals the camera's `Exposure::exposure()`, and
    it is the illuminance-based one — a scene of `0.0005 lx` gives a finite exposure and a
-   scene of 130 000 lx gives a much smaller one.
-3. **A point light's power is right**: the illuminance at `d` from an `intensity` computed by
-   `point_light_intensity` is the luminance asked for, within 0.1 %.
-4. **The colour is the scotopic one**: the published colour's blue/green ratio is above 1.2, and
-   the crate's night sky uses the same one.
-5. **The day is untouched**: the noon capture's mean within 0.5 DN of the baseline's.
+   scene of 10 000 lx gives a much smaller one. *(`tests/game_lights.rs`.)*
+3. **A light's power is right**: the illuminance at `d` from an `intensity` computed by
+   `light_intensity` is the luminance asked for, within 0.1 %. *(`celestial::light::tests`.)*
+4. **The units match Bevy's own calibration**: a 1 000 000-lumen cinema light at 5 m on a
+   0.5-albedo surface reads in the scene-linear range at EV100 12, Bevy's "very overcast day".
+   *(`celestial::light::tests::the_units_match_bevys_own_calibration`.)*
+5. **The colour is the scotopic one**: the published colour's blue is above its green and its
+   red, and the crate's night sky uses the same one.
+6. **The day is untouched**: the noon capture's mean within 0.5 DN of the baseline's.
+   *Measured: 143.03 against 142.62, a 0.41 DN difference, with the standard deviation within
+   0.03.*
+7. **The night reads**: the frame's standard deviation rises from 2.44 DN to 14.06.
 
 ## Deviations from this plan
 
-*(filled in as the implementation settles; every changed default is recorded here with its
-citation.)*
+1. **A spot light takes the same power as a point light, not less.** The plan modelled a
+   `SpotLight` as concentrating its lumens into its cone, dividing the power by the cone's
+   solid angle. Bevy does not: it maps *both* a point light's and a spot light's power to
+   `Φ / 4π` — "we choose to use the same 4\*PI divisor in both cases so that toggling between
+   point light and spot light keeps lit areas lit equally"
+   (`bevy_pbr-0.20.0/src/render/light.rs:711`), where Filament would use `π` for a spot — and
+   the cone only *attenuates* the edges (`spot_scale` and `spot_offset` in
+   `pbr_lighting.wesl`). So the brightness on the axis is the same and the cone decides only
+   *where* the light lands. The API has **one** power function for both, and the plan's
+   separate `spot_light_intensity` is gone.
+2. **The value is named a *scene-linear* value, not a *display* value.** The plan called it a
+   display value, but Bevy applies the exposure *inside* the PBR shader and the tonemapper
+   after it (`bevy_pbr-0.20.0/src/render/pbr_functions.wesl:850`), so the number is the
+   tonemapper's *input*, not the final pixel. The crate's own `display_value` name is kept for
+   the function (it is the crate's existing name, and the lightning's layers use it), but every
+   document now says what it is: the scene-linear value, where 0.18 is 18 % grey.
+3. **The exposure is published from the camera, not from the sky.** The plan had the crate
+   publish the metered target. A game needs the exposure the camera *really has*, which is
+   different when the game drives the exposure itself (`ElementsCamera::auto_exposure` off).
+   So the celestial plugin publishes the followed camera's EV100, and falls back to the metered
+   target only when there is no camera at all.
+4. **`ElementsExposure` is a resource of its own.** The plan did not name it. A resource is
+   what the crate's other published state is (`Weather`, `SunState`, `WindState`), and it lets
+   a game read the exposure from a system that does not hold an `Environment`.
 
 ## Pending index
 
 - Patry 2021 (corpus `s2021-advances-pdf-66-mb`) is **in the corpus** and was read for this
   note. **Not indexed.**
 - `distill_index` is skipped for the above.
+

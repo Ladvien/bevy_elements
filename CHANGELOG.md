@@ -4,6 +4,41 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ## [Unreleased]
 
+### Added
+
+- **A game lights its own night.** The crate simulates a day and a night, a sun and a moon, a sky
+  and a metered exposure, and a game that put a character in that world at night had **nothing
+  to light them with**: no query said how bright the night was in the camera's own terms, and
+  nothing said what power a torch had to be to read against the exposure the crate meters. The
+  crate's own machinery for this existed and was private — the lightning writes its bolt's
+  `PointLight` in physical units from the flash's luminance and the bolt's material colour from
+  the same flash through the camera's `Exposure` — so it is now public, in one path:
+  - `ElementsExposure`, a resource holding the camera's EV100 and its exposure factor,
+    refreshed every frame. The celestial plugin writes the *followed* camera's exposure there,
+    whether the crate metered it or the game drove it (`ElementsCamera::auto_exposure` off).
+  - `Environment::exposure()`, `display_value(luminance)`, `luminance_for_display(display)`,
+    `light_intensity(luminance, distance, albedo)`, `light_illuminance(intensity, distance)`
+    and `night_light_colour()`.
+  - The `light` module, with the same functions in free form.
+
+  A scene-linear value of **0.18 is 18 % grey, the middle of the picture**, and the crate's
+  metering is built so that an 18 % grey surface reads at 0.18 *at every hour* — the exposure
+  is applied inside Bevy's PBR shader before the tonemapper, so it is the tonemapper's input
+  that the crate's numbers name. The power a light needs scales *inversely* with the
+  exposure: the same lamp wants 62 253 lm at noon and 2.8 lm at midnight for the same picture,
+  so a game that hard-codes a lamp's lumens is wrong by five orders of magnitude between the
+  two, and a game that asks the crate is never wrong.
+
+  Bevy maps *both* a point light's and a spot light's power to `Φ / 4π` ("we choose to use the
+  same 4\*PI divisor in both cases so that toggling between point light and spot light keeps lit
+  areas lit equally", `bevy_pbr-0.20.0/src/render/light.rs:711`), so a spot's cone decides only
+  *where* the light lands and not how bright it is on the axis: one power function serves both.
+
+  No new pass, no new buffer, no new binding. The `isometric` example places a street lamp and
+  a hand-held light and balances them with the crate's numbers: the town's frame contrast rises
+  from **2.44 DN to 14.06 DN**, and the noon capture is unchanged (143.03 against 142.62, a
+  0.41 DN difference, the standard deviation within 0.03). See `docs/research/game-lights.md`.
+
 ### Changed
 
 - **The night sky is blue, not brown.** The sky at 22 h with no moon was **sepia**: its linear
