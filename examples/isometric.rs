@@ -53,6 +53,37 @@ const STEP_S: f32 = 0.5;
 const STEP_WIDTH_M: f32 = 0.11;
 const FOOT_HALF: Vec2 = Vec2::new(0.05, 0.13);
 const FOOT_LOAD_N: f32 = 760.0;
+/// The walker's torch: how far in front of them and how high it hangs, m, and how far it lights.
+const TORCH_FORWARD_M: f32 = 0.45;
+const TORCH_HEIGHT_M: f32 = 1.5;
+const TORCH_RANGE_M: f32 = 14.0;
+/// The distance from the torch to the patch of ground it lights, m: the torch hangs 1.5 m up
+/// and reaches 1.2 m forward, so the ground it lights is 1.92 m away.
+const TORCH_GROUND_M: f32 = 1.92;
+/// The torch's cone: the half-angle at which it is still at full strength and the half-angle
+/// at which it has fallen to nothing, radians.
+const TORCH_INNER_ANGLE: f32 = 0.5;
+const TORCH_OUTER_ANGLE: f32 = 1.0;
+/// The street lamp over the town's square: how high it hangs, m, and how far it lights, m.
+/// It hangs under the roofs (the tallest is 7 m), so its pool falls on the square's paving and
+/// not on a roof.
+const LAMP_HEIGHT_M: f32 = 4.5;
+const LAMP_RANGE_M: f32 = 22.0;
+/// Where the street lamp stands, m: on the square, clear of the walker's loop.
+const LAMP_AT: Vec2 = Vec2::new(0.0, 0.0);
+/// The scene-linear value the ground under a light reads at, the game's own art direction.
+///
+/// A scene-linear value of 0.18 is 18 % grey — the middle of the picture, wherever the hour is
+/// (the crate meters its exposure so that an 18 % grey surface reads at 0.18 at noon and at
+/// midnight alike), so these are *picture* values and not physics: the torch's pool is a
+/// readable step below the lamp's, which is the square's pool of light.
+const TORCH_DISPLAY: f32 = 0.10;
+const LAMP_DISPLAY: f32 = 0.30;
+/// The scene-linear value the lamp's own head reads at: the brightest thing in the frame, a
+/// step above the pool it makes.
+const LAMP_GLOW_DISPLAY: f32 = 8.0;
+/// The albedo of the paving the lights fall on.
+const TORCH_ALBEDO: f32 = 0.14;
 
 fn env_f64(name: &str) -> Option<f64> {
     std::env::var(name).ok().and_then(|v| v.parse().ok())
@@ -93,6 +124,12 @@ fn main() {
         .add_systems(
             Update,
             (walk, step, follow).chain().before(ElementsSystems::Clock),
+        )
+        // The torch and the lamp read the crate's exposure, so they run after the celestial set
+        // has metered it this frame.
+        .add_systems(
+            Update,
+            (torch, lamp, lamp_glow).after(ElementsSystems::Celestial),
         );
     if let Some(depth) = env_f64("ELEMENTS_SNOWPACK") {
         app.insert_resource(SurfaceWeathering::with_snowpack(depth as f32, 150.0, 0.0));
@@ -128,6 +165,18 @@ fn cycle(
 /// The figure the camera follows.
 #[derive(Component)]
 struct Walker;
+
+/// The walker's torch: the game's own light, its power balanced against the crate's exposure.
+#[derive(Component)]
+struct Torch;
+
+/// The street lamp over the square: the game's own light, a point source.
+#[derive(Component)]
+struct Lamp;
+
+/// The lamp's own head: emissive, because it is the source and not a lit surface.
+#[derive(Component)]
+struct Glow;
 
 /// A foot of the walker: left (-1) or right (+1).
 #[derive(Component)]
@@ -204,6 +253,54 @@ fn follow(
     }
 }
 
+/// The walker's torch: the game's own light, balanced against the crate's exposure.
+///
+/// The crate knows the camera's exposure and the game knows its own art direction (the
+/// scene-linear value the ground under the torch should read at) and its surface's albedo, so
+/// the two together give the one number Bevy's `SpotLight` wants — no guessing at the crate's
+/// exposure curve, and no re-tuning when the hour or the weather changes
+/// (`docs/research/game-lights.md`).
+fn torch(env: Environment, mut lights: Query<&mut SpotLight, With<Torch>>) {
+    for mut light in &mut lights {
+        // The luminance the ground under the torch must have to read at the wanted value.
+        let luminance = env.luminance_for_display(TORCH_DISPLAY);
+        // The power that puts a surface of that albedo at that luminance.
+        light.intensity = env.light_intensity(luminance, TORCH_GROUND_M, TORCH_ALBEDO);
+        // The night's colour, so the torch and the sky are one night.
+        let c = env.night_light_colour();
+        light.color = Color::linear_rgb(c.x, c.y, c.z);
+    }
+}
+
+/// The street lamp: the same physics, a point source, a different art direction.
+fn lamp(env: Environment, mut lights: Query<&mut PointLight, With<Lamp>>) {
+    for mut light in &mut lights {
+        let luminance = env.luminance_for_display(LAMP_DISPLAY);
+        light.intensity = env.light_intensity(luminance, LAMP_HEIGHT_M, TORCH_ALBEDO);
+        let c = env.night_light_colour();
+        light.color = Color::linear_rgb(c.x, c.y, c.z);
+    }
+}
+
+/// The lamp's own head: the source, so it is emissive rather than lit.
+///
+/// Its radiance is a *scene-linear* value, like every other number in the crate, so the head
+/// reads the same at every hour: a lamp's head is the brightest thing in the frame, and at
+/// 8.0 it is a step above the 0.30 its pool of light reads at — bright, but not blown.
+fn lamp_glow(
+    env: Environment,
+    mut materials: ResMut<Assets<WeatheredMaterial>>,
+    glows: Query<&MeshMaterial3d<WeatheredMaterial>, With<Glow>>,
+) {
+    let radiance = env.luminance_for_display(LAMP_GLOW_DISPLAY);
+    for handle in glows.iter().map(|m| &m.0) {
+        if let Some(mut material) = materials.get_mut(handle) {
+            let c = env.night_light_colour();
+            material.base.emissive = LinearRgba::new(c.x, c.y, c.z, 1.0) * radiance;
+        }
+    }
+}
+
 struct Builder<'a> {
     commands: Commands<'a, 'a>,
     meshes: &'a mut Assets<Mesh>,
@@ -228,11 +325,35 @@ impl Builder<'_> {
         })
     }
 
+    /// A material that glows: a lamp's own head, which is the source and not a lit surface.
+    fn emissive(&mut self, color: Color, radiance: f32) -> Handle<WeatheredMaterial> {
+        self.materials.add(WeatheredMaterial {
+            base: StandardMaterial {
+                base_color: color,
+                emissive: color.to_linear() * radiance,
+                perceptual_roughness: 0.4,
+                ..default()
+            },
+            extension: WeatheredExtension::with_exposure(1.0),
+        })
+    }
+
     fn cuboid(&mut self, size: Vec3, at: Vec2, material: Handle<WeatheredMaterial>) {
+        self.cuboid_at(size, at, 0.0, material);
+    }
+
+    /// A box of `size` standing on the ground at `at`, or floating at `y` if that is given.
+    fn cuboid_at(
+        &mut self,
+        size: Vec3,
+        at: Vec2,
+        y: f32,
+        material: Handle<WeatheredMaterial>,
+    ) {
         self.commands.spawn((
             Mesh3d(self.meshes.add(Cuboid::new(size.x, size.y, size.z))),
             MeshMaterial3d(material),
-            Transform::from_xyz(at.x, size.y * 0.5, at.y),
+            Transform::from_xyz(at.x, y + size.y * 0.5, at.y),
         ));
     }
 
@@ -292,6 +413,38 @@ fn setup(
     for side in [-1.0, 1.0] {
         commands.spawn((Foot(side), Imprint::new(FOOT_HALF, FOOT_LOAD_N)));
     }
+    // The walker's torch, a child of the walker so it follows: the game's own light, its power
+    // set each frame from the crate's exposure (`docs/research/game-lights.md`). A torch is a
+    // cone, so it is a `SpotLight`: it hangs in front of the walker's chest and points down
+    // and forward, at the ground ahead of them.
+    let torch_at = Vec3::new(0.0, TORCH_HEIGHT_M, TORCH_FORWARD_M);
+    commands.spawn((
+        Torch,
+        SpotLight {
+            intensity: 0.0,
+            range: TORCH_RANGE_M,
+            inner_angle: TORCH_INNER_ANGLE,
+            outer_angle: TORCH_OUTER_ANGLE,
+            shadow_maps_enabled: true,
+            ..default()
+        },
+        Transform::from_translation(torch_at)
+            .looking_at(torch_at + Vec3::new(0.0, -1.4, 1.2), Vec3::Y),
+    ))
+    .set_parent_in_place(walker);
+    // A street lamp over the square: the game's own light, a point source, its power balanced
+    // the same way (`docs/research/game-lights.md`). It stands at the square's edge, clear of
+    // the walker's loop, so its pool falls across the paving and not on the walker's head.
+    commands.spawn((
+        Lamp,
+        PointLight {
+            intensity: 0.0,
+            range: LAMP_RANGE_M,
+            shadow_maps_enabled: true,
+            ..default()
+        },
+        Transform::from_xyz(LAMP_AT.x, LAMP_HEIGHT_M, LAMP_AT.y),
+    ));
     let zoom = env_f64("ELEMENTS_ZOOM").unwrap_or(40.0) as f32;
     let mut camera = commands.spawn((
         Camera3d::default(),
@@ -367,8 +520,10 @@ fn setup(
         MeshMaterial3d(ground),
         Transform::from_xyz(0.0, -0.1, 0.0),
     ));
+    // The square's paving: a slab with grass around it, so the lamp's pool has an edge to read
+    // against. A slab wide enough to catch the whole pool would flatten the frame.
     let paving = b.material(Color::srgb(0.42, 0.40, 0.37), 0.8, 0.0);
-    b.cuboid(Vec3::new(10.0, 0.05, 10.0), Vec2::ZERO, paving);
+    b.cuboid(Vec3::new(14.0, 0.05, 14.0), Vec2::ZERO, paving);
     b.house(
         Vec3::new(7.0, 5.0, 6.0),
         Vec2::new(-4.0, -6.0),
@@ -395,4 +550,20 @@ fn setup(
     );
     let metal = b.material(Color::srgb(0.65, 0.66, 0.70), 0.35, 1.0);
     b.cuboid(Vec3::new(1.5, 1.2, 1.5), Vec2::new(0.5, 0.5), metal);
+    // The street lamp's post, so the light has a visible source in the frame. The head hangs
+    // above the light, which is how a lamp is built: a source at the head's own height would
+    // light the head from 0.15 m away and blow it out.
+    let post = b.material(Color::srgb(0.22, 0.22, 0.24), 0.5, 0.6);
+    b.cuboid(
+        Vec3::new(0.16, LAMP_HEIGHT_M + 0.5, 0.16),
+        LAMP_AT,
+        post,
+    );
+    let head = b.emissive(Color::srgb(1.0, 0.97, 0.88), 1.0);
+    b.commands.spawn((
+        Glow,
+        Mesh3d(b.meshes.add(Cuboid::new(0.7, 0.3, 0.7))),
+        MeshMaterial3d(head),
+        Transform::from_xyz(LAMP_AT.x, LAMP_HEIGHT_M + 0.35 + 0.15, LAMP_AT.y),
+    ));
 }
