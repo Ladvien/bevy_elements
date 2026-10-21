@@ -182,6 +182,35 @@ pub(crate) fn turf_palette(field: f32, clump: f32) -> ([f32; 3], [f32; 4]) {
     (mixed, shares)
 }
 
+// The cliff's blocks (`docs/research/rock-blocks.md`)
+// ---------------------------------------------------------------------------------------------
+
+/// The block network's cell, m (`common.wesl`): the scale of the pieces the rock breaks into.
+pub(crate) const ROCK_BLOCK_M: f32 = 1.5;
+/// How far the blocks stretch along the bedding, as a factor (`common.wesl`).
+pub(crate) const ROCK_BLOCK_TABULAR: f32 = 2.6;
+/// The joint's width, as a fraction of the cell's half-boundary distance (`common.wesl`).
+pub(crate) const ROCK_JOINT_WIDTH: f32 = 0.06;
+
+/// The block network's coordinates for a world point, squashed along the bedding plane's normal
+/// so the cells stretch into slabs (`common.wesl`).
+pub(crate) fn rock_block_coords(p: Vec3) -> Vec3 {
+    let normal = Vec3::new(0.32, 0.90, 0.28).normalize();
+    let along = p - normal * p.dot(normal) * (1.0 - 1.0 / ROCK_BLOCK_TABULAR);
+    along / ROCK_BLOCK_M
+}
+
+/// The joint's weight at a world point, 0 to 1: how close the point is to a block's boundary.
+///
+/// The boundary is the distance to the second nearest feature point, and the joint's own width
+/// is the cell's draw, so the joints are of many widths.
+pub(crate) fn rock_joint(p: Vec3) -> f32 {
+    let cell = crate::gpu::noise_mirror::cell3(rock_block_coords(p));
+    let half = (cell.boundary - cell.distance) * 0.5;
+    let width = ROCK_JOINT_WIDTH * (0.30 + 3.4 * cell.factor);
+    1.0 - smoothstep(0.0, width, half)
+}
+
 // The scree (`docs/research/scree.md`)
 // ---------------------------------------------------------------------------------------------
 
@@ -232,6 +261,100 @@ pub(crate) fn scree_coverage(xz: Vec2) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The rock's blocks are **discrete**: a face's joint weight crosses the half-way mark
+    /// many times along a cut, where a smooth wash crosses it once.
+    ///
+    /// This is the note's second validation target, and it is the difference between a *face
+    /// made of pieces* and a *texture*: the blocks have to be countable.
+    #[test]
+    fn the_blocks_are_discrete() {
+        // A cut across a face, 20 cm apart, 6 m long.
+        let mut joint = Vec::new();
+        for i in 0..150 {
+            let p = Vec3::new(i as f32 * 0.2, 12.0, 30.0);
+            joint.push(rock_joint(p));
+        }
+        let mut crossings = 0;
+        for w in joint.windows(2) {
+            if (w[0] > 0.5) != (w[1] > 0.5) {
+                crossings += 1;
+            }
+        }
+        assert!(
+            crossings >= 3,
+            "the blocks are discrete, not a wash: {crossings} crossings in 30 m"
+        );
+        // And the joints are *lines*, not a field: the joint is near zero over most of the cut
+        // (it is a line a fraction of a cell wide) and one over the rest.
+        let low = joint.iter().filter(|j| **j < 0.15).count();
+        assert!(
+            low * 2 > joint.len(),
+            "the joint is a line, not a field: {low} of {} below 0.15",
+            joint.len()
+        );
+    }
+
+    /// The blocks are **tabular**: they stretch along the bedding, so a face shows slabs and
+    /// not gravel.
+    ///
+    /// The measure is the cell's own extent along the bedding's normal against its extent
+    /// across it: a network squashed along one axis has cells that are longer in the other.
+    #[test]
+    fn the_blocks_are_tabular() {
+        let normal = Vec3::new(0.32, 0.90, 0.28).normalize();
+        // A long cut along the bedding plane, and a long cut across it.
+        let mut along = Vec::new();
+        let mut across = Vec::new();
+        for i in 0..200 {
+            let t = i as f32 * 0.1;
+            along.push(rock_joint(Vec3::new(t, 20.0, 0.0)));
+            across.push(rock_joint(Vec3::new(0.0, 20.0, t)));
+        }
+        let crossings = |v: &Vec<f32>| {
+            v.windows(2)
+                .filter(|w| (w[0] > 0.5) != (w[1] > 0.5))
+                .count()
+        };
+        // The joints are *further apart* along the bedding than across it, because the cells
+        // are stretched that way.
+        assert!(
+            crossings(&across) >= crossings(&along),
+            "the blocks stretch along the bedding: {} crossings across, {} along",
+            crossings(&across),
+            crossings(&along)
+        );
+        // And the squash is in the bedding's own frame, not the world's: the normal is
+        // mostly vertical, so the blocks are flattened in the vertical and stretched in the
+        // horizontal.
+        assert!(
+            normal.y > 0.8,
+            "the bedding plane is a near-horizontal one: {normal:?}"
+        );
+    }
+
+    /// The blocks are in the rock's **3D** frame, so they do not weave on a slope.
+    ///
+    /// The measure: the joint's pattern at two heights on the same vertical line must be
+    /// *different* — a 2D network in the ground plane would give the same pattern at both,
+    /// which is the weave the crate's rock note warns about.
+    #[test]
+    fn the_blocks_are_in_the_rocks_own_frame() {
+        let mut same = 0;
+        for i in 0..200 {
+            let x = i as f32 * 0.37;
+            let a = rock_joint(Vec3::new(x, 10.0, 40.0));
+            let b = rock_joint(Vec3::new(x, 14.0, 40.0));
+            if (a > 0.5) == (b > 0.5) {
+                same += 1;
+            }
+        }
+        // A 3D network: the two heights are independent, so they agree about half the time.
+        assert!(
+            same < 170,
+            "the blocks are in the rock's 3D frame: {same} of 200 agree across 4 m of height"
+        );
+    }
 
     /// The scree is a *scatter*, not a band: its coverage must be **discrete** — the ground
     /// under the scree is stones and turf between them, not a uniform wash.
