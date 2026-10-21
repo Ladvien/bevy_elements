@@ -2566,3 +2566,178 @@ is untouched, and the cost is nil.
    downpour lights the *ground* and not the *rain*. A hook for a game's own lights in the
    precipitation and cloud passes would close it; the ownership map keeps the geometry in
    `bevy_flora`, but the lighting hook is this crate's.
+
+## Iteration 35 — 2026-10-21 — the cliff is made of blocks: a rock face that breaks along its joints
+
+**Commits:** `64f00cf` (the research note `docs/research/rock-blocks.md`), `863baad` (the
+implementation with its tests), `3ed4d1d` (the tabular blocks and the joint from the nearest
+point), `0e58b68` (the WESL's bound, the joint and the squash), `b119555` (the cells in order
+of increasing distance, and the WESL note), `ebefdaa` (the mirror's ring order and the 3D
+frame's threshold), the showcase image, this log. **Sibling repos:** none. **Not released.**
+
+### Candidates
+
+| Rank | Candidate | Class | Decision |
+|---|---|---|---|
+| 1 | **The rock's own material is a texture where the world has objects** — the massif from 700 m is a flat blue-grey wash and the face at 3 m is a uniform sandy grey | 2 | **this iteration** |
+| 2 | The dry patch's own texture (a tint on green blades) | 2 | carried |
+| 3 | The overcast dome is flat (`sky_gain` leaks at grazing, diagnosed in iteration 28) | 1 | carried |
+| 4 | A 25 mm/h storm hides the whole town under an orthographic camera | 2 | carried |
+| 5 | A game's own light does not fall on the crate's weather | 3 | carried from iteration 33 |
+
+Rank 1 beat the carried items because it is the *most prominent material in the crate* with the
+*least* structure, and the measurement was damning: the material's own high-pass at 3 m was
+**1.72 DN** — a fifth of the face's 8.34 DN of variation — and at 200 m the massif was **one
+colour** (a max−min of 1.00 DN over a 300 × 200 patch, where the crate's own `rock-material.md`
+asks for 9). The cause was structural, not a matter of tuning: every feature — the beds, the
+fractures, the grain — was a *multiplier on the albedo of one continuous surface*, and there was
+no mechanism anywhere in the crate for a discrete object. The overcast dome is class 1 and so
+ranked higher by the class order, but its blocker is diagnosed and its fix is a *sky* change.
+
+### What changed
+
+- **The blocks are the cells of a 3D cellular network**, in the rock's own frame. A 2D network
+  in the ground plane would stretch on a slope and weave, exactly as the crate's turf does.
+- **The network's coordinates are squashed along the bedding plane's normal**, so the cells
+  stretch into slabs: a rock breaks along *joint sets*, families of parallel planes, so its
+  pieces are aligned rather than a random heap.
+- **A block is *shaded*, not outlined**: its own tone (the cell's random factor), its own
+  **facet** — a rock block's face is flat, and the *step* is at the joint — and a **joint** that
+  is the cell's own *boundary*.
+- **The coordinates are warped** before the lookup, so the blocks are irregular fragments and
+  not a mosaic, and the joint's **width** is the cell's own draw, which is what sets the
+  block's **size**.
+- **The beds carry a value contrast**: the second tone was (1.06, 0.93, 0.76), whose luminance
+  is 0.95, so the beds moved the luminance by 1.9 % and the massif was one colour.
+- `cell3` in `noise.wesl` and its CPU mirror in `gpu/noise_mirror.rs`.
+
+### Sources
+
+- **Verdian, J. P., Sklar, L. S., Riebe, C. S., Moore, J. R. (2021)**, *Sediment size on talus
+  slopes correlates with fracture spacing on bedrock cliffs*, Earth Surface Dynamics 9:1073,
+  DOI `10.5194/esurf-9-1073-2021` (open access; the PDF was read in full, 914 lines). Used:
+  "an obvious characteristic of columnar jointed rock is that it is **discontinuous in geometry
+  while continuous in mechanics**" — a rock mass is a set of blocks held in one piece, and the
+  discontinuity in geometry *is* the blocks; and the measurement, the finest talus clasts "as
+  small as 2 mm, and median b-axis diameters ranging from 10 to 575 mm", with the median moving
+  by more than 10-fold between sites. **Not indexed** (the ONNX out-of-memory error in
+  `corpus.md`).
+- **La Pointe, P. R., Hudson, J. A. (1985)**, *Characterization and interpretation of rock mass
+  joint patterns*, SPE Formation Evaluation 1(1), DOI `10.1130/SPE199-P1` (the record was read;
+  the PDF was not obtained). Named as the standard treatment of *joint sets* — the families of
+  parallel planes along which a rock mass breaks, and the reason a cliff's blocks are tabular
+  and aligned.
+- **Dorsey, J. O'B., Edelman, A. S., Jensen, H. W., Legakis, J., Pedersen, H. K. (1999)**,
+  *Modeling and rendering of weathered stone*, ACM SIGGRAPH 1999, DOI `10.1145/311535.311560`
+  (the record was read; **the PDF was not obtained**).
+- **Akenine-Möller, T., Haines, M., Hoffman, N., Shirley, P. (2019)**, *Real-Time Rendering,
+  4th ed.* (corpus `bo/book_real_time_rendering_4th_akenine.md`). Used: §6.3 on the cellular
+  texture — "a cellular texture is formed by measuring distances from each location to a set of
+  'feature points' scattered through space. Mapping the resulting closest distances in various
+  ways… creates patterns that look like cells, flagstones, lizard skin, and other natural
+  textures" — and on Andersson's Frostbite terrain, where "geometric models, such as bushes and
+  **rocks**, are placed within the scene".
+- **Hill, S., Baker, D. (2012)**, *Rock-Solid Shading: Image Stability Without Sacrificing
+  Detail*, SIGGRAPH *Advances* in Real-Time Rendering in Games course (corpus
+  `s2/s2012-advances-pdf-slides-3.md`), on LEAN mapping: a detail normal's specular filtered by
+  the *variance* of the normal, so a detail map does not alias at distance. **In the corpus**,
+  read, **not indexed**.
+- **The crate's own `rock-material.md`**: the beds, the joints and the grain, and the sentence
+  that is the key to this change — "A Worley cell network cannot make them — it bounds *cells*,
+  so a face reads as a giraffe's hide". The cells cannot make the *joints as drawn lines*, but
+  the cells **are** the blocks, and a block is shaded rather than outlined.
+
+### The critique and the verdicts (`/tmp/i35/critique.md`)
+
+| Round | Finding | Verdict |
+|---|---|---|
+| 1 | The blocks appeared, but as **dark holes in the grass**: the stone's colour multiplied the ground's albedo instead of replacing it, and the band sat on the soil's band rather than at the rock's foot | NOT YET |
+| 2 | The stone's colour replaced the ground's, and the band moved to the rock's foot — but the relief scaled with the cell, so the smallest stones' rims tilted by 85° and rendered as black crescents | NOT YET |
+| 3 | The relief is a dimensionless slope and the network is nested, and the matrix is the scree's own: the stones are countable at 3 m, the apron is wide, and the distance is calm | NOT YET |
+| 4 | The matrix was still warm and the stones cast no shadow: the matrix is greyed toward the rock and the stones gained a contact shadow | **GREAT** |
+| 5 | The blocks were a **mosaic** — every block the same size, the same shape, in a regular overlapping pattern that read as *shingles*. The warp breaks their shape, the joint's width sets their size, and the squash makes them tabular | **GREAT** |
+
+| Feature | Verdict |
+|---|---|
+| The blocks, at 3 m | **GREAT** (irregular angular fragments, many sizes, tabular, each a flat facet) |
+| The joints | **GREAT** (sharp, dark, continuous, and softened over the footprint) |
+| The face at 25 m | **GREAT** (a cliff of slabs with the scree at its foot) |
+| The distance at 90 m | **GREAT** (byte-identical to the baseline's: the blocks are band-limited away) |
+| The meadow, the hills and the dunes | **GREAT** (byte-identical) |
+| The material's visibility | **GREAT** (the high-pass 1.72 → 5.74 DN, the note's target is 3) |
+| The blocks' size variation | NOT YET (a 3:1 range; a real cliff has more) |
+| The massif's colour at 700 m | NOT YET (7.65 DN against the note's 9) |
+| The cost | NOT YET (**+28 %** on the rock's pass, over the note's 10 %) |
+
+**The change as a whole: GREAT.** The rock's material is no longer a texture where the world has
+objects: a cliff face is a wall of blocks, the distance is calm, the meadow is untouched, and
+the cost is a logged trade.
+
+### Measurements
+
+- **The material is visible.** The face at 3 m: the material's own high-pass (a 3 px blur
+  subtracted) **1.72 → 5.74 DN**, the patch's standard deviation 8.34 → 15.09 DN and its
+  max−min 43.35 → 89.47 DN. The note's first validation target (at least 3 DN) is met.
+- **The distance is calm.** At 90 m the material's high-pass is **0.79 DN before and after** —
+  the frame is *byte-identical*. The blocks are band-limited by the joint's own width, and the
+  massifs carry the beds' broad tonal banding instead.
+- **The meadow is untouched.** The `plains` preset at 6 m: the mean 170.725 and the standard
+  deviation 26.575 **before and after** — byte-identical. The `hills` preset likewise.
+- **The blocks are discrete, tabular and in the rock's own frame** — the three new tests:
+  the joint's weight crosses the half-way mark many times along a cut (a wash crosses it
+  once); the cells are *bigger* along the bedding than across it (17 against 18 the other way
+  round before the squash was fixed); and the two heights 4 m apart disagree on a good fraction
+  of the samples, which a 2D network in the ground plane would not.
+- **Cost.** `bench_elements`, High, 1920 × 1080, `mountains`, the minimum over the diagnostic
+  history, the two builds run **back to back in one session**, three rounds each. The card's
+  own state swings the total by 73 % between runs (1.87–3.24 ms for the *same* build), so the
+  totals are not comparable and the per-pass minima are. The mountains' opaque pass, which is
+  the pass the blocks are in: the minimum over the rounds is **0.141 ms on the baseline and
+  0.181 ms on this one, +28 %**, over the note's 10 %.
+
+  **The trade, logged.** The rock's own material goes from an sd of 1.72 DN to 5.74 DN for
+  0.04 ms, and the cost is only paid where the rock shows: the meadow and the cliff's
+  silhouette are byte-identical and at 90 m the whole frame is. Three measures brought it
+  down from +44 %: the band-limit is known *before* the network is looked up, so the far terrain
+  pays nothing; the joint is the *nearest* point's own cell's wall, so the lookup computes one
+  distance and not two; and the cells are visited in order of increasing distance, so the
+  prune's bound tightens and about seven of the twenty-seven cells are hashed instead of
+  fourteen. The next measure is a smaller *block's* cell and a cheaper warp.
+- **The full gate.** `cargo test` 265 plus the 3 new block tests, clippy, doc, wasm, the GPU
+  integration suite (22 files), the lib GPU modules clouds (10), terrain (8), cover (8) and
+  dust (6), and `the_horizon_sky` alone: all pass.
+
+### A note on the WESL, for whoever touches this next
+
+The crate's shaders are **WESL**, and two of its rules bit during this iteration:
+
+- **The WESL parser rejects `abs()` on a compound expression.** The failure is at *runtime*,
+  in the GPU driver, and it is **silent**: the terrain's material fell back to a default, the
+  whole face rendered as a flat grey, and the capture's high-pass collapsed from 5.83 DN to
+  0.31. The error is in the log ("failed to create shader module: … parsing error") and it
+  is easy to miss among the capture's other output.
+- **`pass` is a WGSL reserved word**, like `active` and `target` and `patch`.
+
+The fix for both is a **validator**: the `wesl` crate (the one Bevy uses) compiles a module to
+WGSL, and `naga` parses it, in a second and without a GPU. `/tmp/wesltest` is that validator;
+it found the first of the two in the time it takes to run one capture.
+
+### The next five items, ranked
+
+1. **The massif's colour at a distance.** The beds now carry a value contrast, but the note's
+   target is a 9 DN spread over the massif from 700 m and the measurement is 7.65. The beds
+   are at a 4.5 m spacing on a tilted plane, so their banding is a broad wash; the fix is
+   beds that *stack* — a bed's own thickness and the next one's value — so a distant massif
+   shows layers and not a gradient.
+2. **The blocks' size variation.** A 3:1 range is not enough; a real cliff's blocks range from
+   a metre to a hand's width, and the cell's *boundary* is the only place a second size can
+   come from. The scree's nested networks are the wrong instrument here — the blocks are
+   *pieces of one rock*, and a cell's boundary is where a piece would split.
+3. **The cost of the blocks**, +28 % on the rock's pass. A smaller block's cell and a cheaper
+   warp are the two levers left.
+4. **The dry patch's own texture.** The palette gives the ground a *hue*; a dry patch needs a
+   *texture* too — the blades inside it should take the patch's hue rather than the turf's, and
+   a dry patch is coarser than green grass. The colour half is in this crate; the geometry half
+   (a grass mesh) belongs to `bevy_flora`.
+5. **The overcast dome is flat**, with its blocker diagnosed in iteration 28 (the `sky_gain` leak
+   at grazing); it carries its Eddington implementation and its measurements in `/tmp/i28`.
