@@ -2148,3 +2148,111 @@ made the night a black screen. The test now asserts the correction, and it is na
    The idea and the place are right; the scatter is not there.
 5. **The overcast dome is flat**, with its blocker diagnosed in iteration 28 (the `sky_gain` leak
    at grazing); it carries its Eddington implementation and its measurements in `/tmp/i28`.
+
+## Iteration 32 — 2026-10-20 — the night sky is blue, not brown: what is behind the atmosphere
+
+**Commits:** `4d79c3f` (the research note `docs/research/night-sky-colour.md`), `b19fd3d` (the
+implementation), `870461a` (the test), `9dec61b` (the docs, the changelog and the showcase
+image), this log. **Sibling repos:** none. **Not released.**
+
+### Candidates
+
+| Rank | Candidate | Class | Decision |
+|---|---|---|---|
+| 1 | The **night sky is sepia**: at 22 h with no moon its red/green ratio is 1.52, and the crate's own `twilight.md` says "Nothing brown" | 1 (physically wrong) | **this iteration** |
+| 2 | A game at night has nothing to light with (no `Environment` query, no hook for a game's own lights) | 3 (API) | carried |
+| 3 | The dry patch's own texture (a tint on green blades) | 2 | carried |
+| 4 | The scree is a graded band, not a scatter | 2 | carried |
+| 5 | The overcast dome is flat | 1 | carried (blocker diagnosed in iteration 28) |
+
+Rank 1 beat the carried items because it is *class 1* — a physically wrong result, and the
+crate's **own research note** says the night must be blue, so the crate contradicts itself in the
+one domain where it is most specific. It is also in every night frame of the game.
+
+### What changed
+
+- **The clear colour carries the *scotopic* colour divided by the atmosphere's transmittance.**
+  The clear colour is what lies *behind* the atmosphere, and the atmosphere is drawn over it with
+  its transmittance — measured at (0.904, 0.640, 0.353) at the zenith, which is Rayleigh
+  extinction and is *warm*. A neutral clear colour behind a warm-extinguishing atmosphere is a
+  brown sky; the fix is to make the clear colour blue enough that what comes through is the
+  cool blue-black the rod's eye expects.
+
+### Sources
+
+- **Jensen, H. W., Durand, F., Stark, M. M., Premože, S., Dorsey, J., Shirley, P. (2001)**,
+  *A Physically-Based Night Sky Model*, ACM SIGGRAPH 2001, DOI `10.1145/383259.383306` (**in the
+  corpus**, stem `10.1145_383259.383306`, read in full). Used: §6.2, "Airglow is the principal
+  source of light in the night sky on moonless nights"; §6, the four sources of diffuse night
+  light and the sentence that is the reason — "These effects are especially important on
+  moonless nights, when a small change in illumination can determine whether an object in the
+  scene is visible or invisible"; §7, "**The sky is never completely black**" and the blue shift.
+  **Not indexed** (the ONNX out-of-memory error in `corpus.md`).
+- **The crate's own `twilight.md`**: the *What great looks like* — "a moonless sky is near-black
+  with stars and the horizon's silhouettes still readable against it… **Nothing brown**" — and its
+  Model 1, which puts the night sky's radiance behind the atmosphere and lets the transmittance
+  do the rest.
+- **The crate's own `celestial.md`** and `night-sky-light.md`: the night sky's radiance and the
+  *scotopic* colour that iteration 31 put in the *ambient*.
+- **The CIE 1951 scotopic luminous efficiency function**, through Jensen §7's blue shift: the
+  rod's curve peaks at 507 nm and falls away on both sides, so the airglow's green (557.7 nm) and
+  red (630 nm) lines are read as a cool blue-green.
+
+### The critique and the verdicts (`/tmp/i32/critique.md`)
+
+| Round | Finding | Verdict |
+|---|---|---|
+| 1 | The scotopic colour put *directly* into the clear colour left the sky brown (the zenith's red/green 1.411 → 1.415): the clear colour is behind the atmosphere, and the atmosphere's transmittance is warm, so a blue clear colour comes through less blue. The division is the whole fix | NOT YET |
+| 2 | The scotopic colour divided by the measured transmittance: the zenith's red/green 0.783 and blue/green 1.197, the horizon still warmer, the probe's path bluer too, the day and the twilight byte-identical, and the cost nil | **GREAT** |
+
+| Feature | Verdict |
+|---|---|
+| The night sky's colour | **GREAT** |
+| The sky's gradient toward the horizon | **GREAT** |
+| The sky probe's path | **GREAT** |
+| The day and the twilight | **GREAT** (byte-identical) |
+| The cost | **GREAT** (0 %) |
+| The zenith's faint warm cast at the very top | NOT YET (cosmetic; the status band's glow) |
+| A moonless night's shadows | NOT YET (physics; a game needs its own lights) |
+
+**The change as a whole: GREAT.** The blocker — a sepia night sky, which the crate's own note
+says is wrong — is fixed on both paths, the day is untouched, and the cost is nil.
+
+### Measurements
+
+- **The sky is blue.** The `day_night` example at 22 h (2026-07-14, `Clear`, the sun at −17.5° and
+  the moon at −14.2°, so neither is up), the zenith's red/green **1.411 → 0.783** and its
+  blue/green **0.551 → 1.197**; 30° up 1.742 → 0.993; the low sky 2.119 → 1.626, so the
+  horizon is still warmer than the zenith, as the longer path says.
+- **Both paths.** The `weather_tour`'s upper sky, which comes from the sky probe's cube rather
+  than the clear colour, goes from blue/green 1.179 to **1.266**.
+- **The day and the twilight are byte-identical**: the dusk's sky 209.5, 208.5, 212.0 and the
+  dawn's 223.8, 206.7, 202.6, before and after.
+- **Cost.** `bench_elements`, High, 1920 × 1080, `mountains`, the minimum over the diagnostic
+  history, the two builds run back to back in one session with the clocks logged throughout:
+  **`main_opaque_pass_3d` 0.147 ms on the baseline build, 0.147 ms on this one** — the fix is one
+  `vec3` written per camera per frame.
+- **The full gate.** `cargo test` 254, clippy, doc, wasm, the GPU integration suite (22 files),
+  the lib GPU modules clouds (10), terrain (8), cover (8) and dust (6), and `the_horizon_sky`
+  alone: all pass. (Two cloud tests failed on a first run and passed on the second: the GPU was
+  at 100 % with another tenant's model resident, and the `gpu-tenant` lease's eviction recipe
+  cleared it. The same two failed on the *baseline* build on that run.)
+
+### The next five items, ranked
+
+1. **A game at night has nothing to light with.** A moonless night is *shadowless* — physics —
+   but a game wants a torch, a street lamp, a window, and the crate gives a game nothing to
+   place them with: no `Environment` query for the local light, no hook for a game's own lights.
+   That is an API gap, and it is the crate's class-3 list.
+2. **The dry patch's own texture.** The palette gives the ground a *hue*; a dry patch needs a
+   *texture* too — the blades inside it should take the patch's hue rather than the turf's, and
+   a dry patch is coarser than green grass. The colour half is in this crate; the geometry half
+   (a grass mesh) belongs to `bevy_flora`.
+3. **The scree is a graded band, not a scatter** — stones of many sizes with turf between them.
+   The idea and the place are right; the scatter is not there.
+4. **The overcast dome is flat**, with its blocker diagnosed in iteration 28 (the `sky_gain` leak
+   at grazing); it carries its Eddington implementation and its measurements in `/tmp/i28`.
+5. **A 25 mm/h storm hides the whole town under an orthographic camera**, carried. The rain's
+   *readable* look is also less legible than the physical one (measured in iteration 28: the
+   readable streaks carry 32 DN of contrast against the grass where the physical ones carry
+   44), which is the defect the town capture keeps showing.
