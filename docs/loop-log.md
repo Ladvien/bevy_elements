@@ -2747,3 +2747,126 @@ it found the first of the two in the time it takes to run one capture.
    (a grass mesh) belongs to `bevy_flora`.
 5. **The overcast dome is flat**, with its blocker diagnosed in iteration 28 (the `sky_gain` leak
    at grazing); it carries its Eddington implementation and its measurements in `/tmp/i28`.
+
+## Iteration 36 — 2026-10-21 — beds that stack: a distant cliff is a succession, not a stripe pattern
+
+**Commits:** `3e7334c` (the research note `docs/research/bedding.md`), `46c0b62` (the note's
+Deviations), `7370775` (the implementation with its tests), `b34465d` (the README, the changelog
+and the showcase image), this log. **Sibling repos:** none. **Not released.**
+
+### Candidates
+
+| Rank | Candidate | Class | Decision |
+|---|---|---|---|
+| 1 | **The massif's colour at a distance** — the beds are smeared by their own warp and every bed is identical, so the massif averages to a flat blue-grey haze | 2 | **this iteration** |
+| 2 | The blocks' size variation (a 3:1 range against a real cliff's metre-to-hand's-width) | 2 | carried |
+| 3 | The cost of the blocks, +28 % on the rock's pass | 5 | carried |
+| 4 | The dry patch's own texture | 2 | carried |
+| 5 | The overcast dome is flat (`sky_gain` leaks at grazing, diagnosed in iteration 28) | 1 | carried |
+
+Rank 1 beat the carried items because the massif is what a game shows when it shows *any*
+landscape, and it read as haze: over a rock-only 200 × 200 patch from 120 m the spread was a
+max−min of **1.00 DN** — one colour — where the crate's own `rock-material.md` asks for 9. The
+green turf and the ochre soil read clearly at the same distance, so it was not the resolution
+that was failing; the rock had no structure to resolve. Candidate 3 is a real cost, but it is a
+*tuning* problem with a known shape (a smaller cell, a cheaper warp) and no visible symptom, and
+a performance number without a visible defect is worth less than a visible haze.
+
+### What changed
+
+- **The beds are a warped lattice**: the boundary between the beds whose index is `i` and
+  `i + 1` falls at `i + warp(i)`, and a bed's *thickness* is the gap between two boundaries.
+- **A per-bed tone**, drawn from the bed's index with the crate's own integer hash, because *a
+  bed is a colour*: a sandstone, a shale, a limestone.
+- **The bed's edge is band-limited away with the distance and the bed's tone is not**, which is
+  the whole trick: at a distance the cliff shows its succession and not its stripes.
+- The warp's amplitude drops from 0.78 of a bed to a fifth, so the beds undulate and stay bands.
+
+### Sources
+
+- **Talling, P. J. (2001)**, *On the frequency distribution of turbidite thickness*, Journal of
+  Sedimentary Research 71(3), DOI `10.1046/j.1365-3091.2001.00423.x` (the record and its
+  abstract were read; **the PDF was not obtained**). Used: "the nature of this thickness
+  distribution is currently uncertain, with log-normal or negative-exponential frequency
+  distributions and power-law cumulative frequency distributions having been proposed", and the
+  result — "turbidite bed thickness and sand-interval thickness within each bed have a
+  frequency distribution comprising **the sum of a series of log-normal frequency
+  distributions**". **Not indexed.**
+- **Longhitano, S. G., Nemec, W. (2005)**, *Statistical analysis of bed-thickness variation in a
+  Tortonian succession*, Sedimentary Geology 178, DOI `10.1016/j.sedgeo.2005.05.006`; **Bádenas,
+  B. et al. (2003)**, *Sequence stratigraphy and bedding rhythms…*, Palaeogeography 198, DOI
+  `10.1016/s0037-0738(03)00099-x`; and **Lowey, G. W. (1992)**, *Variation in bed thickness in a
+  turbidite succession…*, Sedimentary Geology 150, DOI `10.1016/s0037-0738(92)90021-i` — the
+  records were read and **the PDFs were not obtained**. Named as the treatments of bed-thickness
+  variation, of bedding *rhythms* and of the *cycles* in a succession's thicknesses.
+- **Hill, S., Baker, D. (2012)**, *Rock-Solid Shading: Image Stability Without Sacrificing
+  Detail*, SIGGRAPH *Advances* in Real-Time Rendering in Games course (corpus
+  `s2/s2012-advances-pdf-slides-3.md`), on the anti-aliasing principle — **estimate the
+  variance and widen the filter** rather than let a sub-pixel feature alias (Toksvig's
+  σ² = (1 − |Nₐ|)/|Nₐ|, and LEAN mapping's direct variance estimation). For the *albedo* the
+  crate's own `detail_keep` is the instrument: a band whose thickness is below the pixel's
+  footprint must be **cancelled**, not averaged. **In the corpus**, read, **not indexed**.
+- **The crate's own `rock-material.md`**: the beds, and the two sentences that frame the change
+  — "The bed's coordinate is a *tilted* height, so the beds cut across the terrain at an
+  angle, and the warp tilts them further" (the *warp* is right; its amplitude is not), and
+  "a bed is a *band* of rock with an edge, not a gradient" (the edge is right; the band is
+  not).
+
+### The critique and the verdicts (`/tmp/i36/critique.md`)
+
+| Round | Finding | Verdict |
+|---|---|---|
+| 1 | The beds' tone was gated by the edge's band-limit, so at 120 m — the distance the tone is *for* — the tone was cancelled and the massif was back to being a haze | NOT YET |
+| 2 | The tone is a low-frequency feature and the edge is not: the tone must not be gated by the edge's band-limit. The material's own contribution at 120 m is a standard deviation of 3.41 DN and a max−min of 21.2 DN, and the face at 3 m carries bands of ±7 DN | **GREAT** |
+
+| Feature | Verdict |
+|---|---|
+| The massif's colour at 120 m | **GREAT** (the material's own sd 3.41 DN, the max−min 21.2 DN) |
+| The face at 3 m | **GREAT** (bands of ±7 DN alternating) |
+| The dusk and the dawn | **GREAT** (the beds read as layers in the raking light) |
+| The distance at 300 m | **GREAT** (no corduroy; the bands fade into the haze) |
+| The meadow | **GREAT** (the plains and hills are byte-identical) |
+| The cost | **GREAT** (+3.5 % on the mountains' opaque pass) |
+| The bands' width regularity | NOT YET (a smooth warp's derivative is bounded, so the widths are nearly uniform) |
+| The seams' aliasing at 3 m | NOT YET (cosmetic; the edge is softened over the footprint, but a line a fraction of a bed wide still steps) |
+
+**The change as a whole: GREAT.** The massif is no longer one colour, the beds follow the
+bedding plane, the meadow is untouched, and the cost is +3.5 %.
+
+### Measurements
+
+- **The massif is not one colour.** Over a rock-only 200 × 200 patch of the massif from 120 m,
+  the material's own contribution (the before/after difference) has a standard deviation of
+  **3.41 DN** and a max−min of **21.2 DN**, against the baseline's max−min of **1.00 DN**.
+- **The face at 3 m** carries bands of ±7 DN: the vertical profile of the material's change is
+  −3.7, −2.0, −0.9, +0.7, +1.0, +0.4, then **+5.5, +6.6, +7.3, +6.0, +4.1**, then −5.4, −6.3,
+  −7.6 — the succession reading as bands and not as a wash.
+- **The meadow is untouched.** The `plains` preset at 6 m: the mean 170.725 and the standard
+  deviation 26.575 **before and after** — byte-identical. The `hills` preset likewise.
+- **The distance is calm.** At 300 m the beds are visible on the near slopes and there is no
+  corduroy: the edge is cancelled with the distance and the tone survives.
+- **Cost.** `bench_elements`, High, 1920 × 1080, `mountains`, the minimum over the diagnostic
+  history, the two builds run **back to back in one session**, three rounds each. The
+  mountains' opaque pass: the minimum over the rounds is **0.197 ms on the baseline and
+  0.204 ms on this one, +3.5 %** — well inside the note's 10 %. The bed's index is a
+  four-step fixed point, and it is cheap next to iteration 35's cell lookup.
+- **The full gate.** `cargo test` 301 plus the 2 new bed tests, clippy, doc, wasm, the GPU
+  integration suite (22 files), the lib GPU modules clouds (10), terrain (8), cover (8) and dust
+  (6), and `the_horizon_sky` alone: all pass.
+
+### The next five items, ranked
+
+1. **The blocks' size variation.** A 3:1 range against a real cliff's metre-to-hand's-width. The
+   cell's *boundary* is the only place a second size can come from, and the scree's nested
+   networks are the wrong instrument here — the blocks are *pieces of one rock*.
+2. **The cost of the blocks**, +28 % on the rock's pass. A smaller block's cell and a cheaper
+   warp are the two levers left.
+3. **The beds' width regularity.** The thicknesses' spread is 1.4:1, where a log-normal's would
+   be 3:1; a cumulative sum would give the heavier tail, and it is the one thing the shader
+   cannot afford.
+4. **The dry patch's own texture.** The palette gives the ground a *hue*; a dry patch needs a
+   *texture* too — the blades inside it should take the patch's hue rather than the turf's, and
+   a dry patch is coarser than green grass. The colour half is in this crate; the geometry half
+   (a grass mesh) belongs to `bevy_flora`.
+5. **The overcast dome is flat**, with its blocker diagnosed in iteration 28 (the `sky_gain` leak
+   at grazing); it carries its Eddington implementation and its measurements in `/tmp/i28`.
