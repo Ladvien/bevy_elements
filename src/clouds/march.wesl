@@ -38,6 +38,11 @@ import bevy_elements::clouds::common::{
 /// Directions over the upper hemisphere the sky's light is averaged from.
 const SKY_SAMPLES: u32 = 16u;
 
+/// The night sky's own colour: the *scotopic* one, a cool blue-green. Jensen et al. 2001 §7
+/// on the blue shift — night scenes "exhibit a bluish tint" — and the rod's curve, whose peak
+/// is at 507 nm.
+const NIGHT_SKY_COLOUR: vec3<f32> = vec3<f32>(0.72, 0.95, 1.28);
+
 /// The clear sky's irradiance on the layer, `π L̄`, with `L̄` the mean radiance of Bevy's sky over
 /// the upper hemisphere (clouds.md Deviation 30): a spherical Fibonacci set uniform in solid
 /// angle over the camera's atmosphere environment map (z flipped, cubemaps are left-handed; a
@@ -558,5 +563,10 @@ fn cloud_sky_probe(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(probe_next, texel, face, cloud);
     let haze = params.haze.xyz / max(params.probe.x, 1e-30);
     let s = sky_through_clouds(cloud, shell, params, haze);
-    textureStore(probe_out, texel, face, vec4<f32>(s.rgb + sky * s.a, 1.0));
+    // The night sky's own light, behind the atmosphere, so the cloud does not dim it. The
+    // cube is display-referred (`params.probe.x` is the camera's exposure), so the radiance
+    // is converted with it, as the fog's haze is. Without it a moonless night is a black
+    // screen: the sky is lit and the ground on it is not (`docs/research/night-sky-light.md`).
+    let night = vec3<f32>(params.atmo.w) * NIGHT_SKY_COLOUR * params.probe.x;
+    textureStore(probe_out, texel, face, vec4<f32>(s.rgb + sky * s.a + night, 1.0));
 }

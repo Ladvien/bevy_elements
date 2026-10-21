@@ -649,6 +649,14 @@ const CIVIL_TWILIGHT_DEG: f32 = 6.0;
 /// `DirectionalLight` is on contributes, so a night with no moon stays dark whatever the cloud.
 /// The colour is the light of the two bodies, the sun's reddening toward the horizon
 /// ([`dusk_tint`]) and the moon's tint, weighted by their illuminance.
+///
+/// The **night sky's own light** is added to it (`docs/research/night-sky-light.md`): the
+/// airglow, zodiacal light and starlight that lie *behind* the atmosphere and so are not dimmed
+/// by the cloud. Without it a moonless night has no ambient at all and the ground is lit by
+/// nothing — the isometric town rendered at 1 DN, the sky, the ground and the houses' windows
+/// all black. Jensen et al. 2001 §6: "These effects are especially important on moonless
+/// nights, when a small change in illumination can determine whether an object in the scene is
+/// visible or invisible."
 pub(crate) fn cloud_ambient(state: &SunState, moon_lux: f32, cloud: CloudLight) -> (Vec3, f32) {
     let (sun, moon) = clear_sky_illuminance(state, moon_lux);
     let sun = if state.altitude_deg > SUN_OFF_DEG {
@@ -662,13 +670,34 @@ pub(crate) fn cloud_ambient(state: &SunState, moon_lux: f32, cloud: CloudLight) 
         0.0
     };
     let lux = sun + moon;
-    if lux <= 0.0 {
+    // The night sky's own radiance, as a colour (luminance 1) and a brightness in cd/m². It is
+    // behind the atmosphere, so the cloud does not dim it, and it is *added* to the body's
+    // light: the two have different origins and no common factor.
+    let night = NIGHT_SKY_LUMINANCE;
+    let total = lux + night * std::f32::consts::PI;
+    if total <= 0.0 {
         return (Vec3::ONE, 0.0);
     }
-    let mixed = (dusk_tint(state.altitude_deg) * sun + MOON_TINT * moon) / lux;
+    // The colour: the bodies' light, and the night sky's own. The night sky's colour is the
+    // *scotopic* one: Jensen et al. 2001 §7 on the blue shift — "the subjective impression
+    // that night scenes exhibit a bluish tint", supported by psychophysical data — and the
+    // rod's curve peaks at 507 nm, which is where the airglow's 557.7 nm O-I line is read.
+    let body = if lux > 0.0 {
+        (dusk_tint(state.altitude_deg) * sun + MOON_TINT * moon) / lux
+    } else {
+        Vec3::ONE
+    };
+    let mixed = (body * lux + NIGHT_SKY_COLOUR * night * std::f32::consts::PI) / total;
     let luminance = mixed.dot(LUMINANCE_WEIGHTS);
-    (mixed / luminance, lux / std::f32::consts::PI)
+    (mixed / luminance, total / std::f32::consts::PI)
 }
+
+/// The night sky's own colour, as a multiplier on its radiance: the *scotopic* one, a cool
+/// blue-green. Jensen et al. 2001 §7 on the blue shift — night scenes "exhibit a bluish tint" —
+/// and the rod's luminous efficiency, whose peak is at 507 nm. The airglow's own lines are
+/// green (557.7 nm O-I) and red (630 nm O-I), but the scotopic eye reads 630 nm very weakly and
+/// 507 nm at its peak, so the sky's glow reads blue-green.
+pub(crate) const NIGHT_SKY_COLOUR: Vec3 = Vec3::new(0.72, 0.95, 1.28);
 
 /// Rec. 709 luminance weights of linear RGB.
 const LUMINANCE_WEIGHTS: Vec3 = Vec3::new(0.2126, 0.7152, 0.0722);
@@ -1023,16 +1052,20 @@ mod tests {
     }
 
     #[test]
-    fn the_ambient_carries_the_diffuse_share_and_nothing_at_night() {
+    fn the_ambient_carries_the_diffuse_share_and_the_night_sky_at_night() {
         let noon = SunState {
             altitude_deg: 90.0,
             moon_altitude_deg: -30.0,
             ..default()
         };
         let clear_noon = scene_illuminance(&noon, 0.0, CloudLight::CLEAR) - ILLUMINANCE_FLOOR_LUX;
-        // Cover 0: all direct, no ambient.
+        // Cover 0: all direct, no ambient but the night sky's own glow, which is a millionth
+        // of the noon and so does not move the day.
         let (_, brightness) = cloud_ambient(&noon, 0.0, CloudLight::CLEAR);
-        assert_eq!(brightness, 0.0);
+        assert!(
+            brightness < NIGHT_SKY_LUMINANCE * 1.001,
+            "the day carries the night sky's glow: {brightness}"
+        );
         // Beam gone: no direct light, a quarter of the clear illuminance as uniform sky radiance
         // (E = π L), and the total the exposure meters is what it was.
         let storm = CloudLight::from_beam(0.0);
@@ -1048,18 +1081,32 @@ mod tests {
         let (_, brightness) = cloud_ambient(&noon, 0.0, half);
         assert!(close(brightness * std::f32::consts::PI, 0.125 * clear_noon));
 
-        // A night with no moon stays dark under any cloud; the moon's diffuse share is lit.
+        // A night with no moon is lit by the **night sky's own glow** — the airglow, zodiacal
+        // light and starlight that lie behind the atmosphere — and not by the cloud, which is
+        // between the sky and the ground but not between the sky's *source* and the ground.
+        // The test used to assert the opposite ("a night with no moon stays dark whatever the
+        // cloud"), and that is what made the isometric town render at 1 DN: the sky was lit
+        // and the world on it was not (`docs/research/night-sky-light.md`).
         let dark = SunState {
             altitude_deg: -30.0,
             moon_altitude_deg: -30.0,
             ..default()
         };
         for t in [0.0, 0.5, 1.0] {
-            let (_, brightness) = cloud_ambient(&dark, 0.0, CloudLight::from_beam(t));
-            assert_eq!(brightness, 0.0, "T = {t}");
-            let (_, brightness) = cloud_ambient(&dark, 0.3, CloudLight::from_beam(t));
-            assert_eq!(brightness, 0.0, "a moon below the horizon, T = {t}");
+            let (colour, brightness) = cloud_ambient(&dark, 0.0, CloudLight::from_beam(t));
+            assert!(
+                close(brightness, NIGHT_SKY_LUMINANCE),
+                "the night sky's radiance, T = {t}: {brightness}"
+            );
+            // The colour is the *scotopic* one, a cool blue-green: Jensen et al. 2001 §7 on
+            // the blue shift, and the rod's curve, whose peak is at 507 nm.
+            assert!(colour.z > colour.y && colour.y > colour.x, "the night is blue: {colour}");
         }
+        // The cloud does not dim it: the night sky is behind the atmosphere.
+        let (colour, clear) = cloud_ambient(&dark, 0.0, CloudLight::from_beam(0.0));
+        let (_, overcast) = cloud_ambient(&dark, 0.0, CloudLight::from_beam(1.0));
+        assert!(close(clear, overcast), "the cloud dimmed the night sky");
+        assert!(colour.z > colour.x, "the night is blue: {colour}");
         let moonlit = SunState {
             altitude_deg: -30.0,
             moon_altitude_deg: 60.0,
