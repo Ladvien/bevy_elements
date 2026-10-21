@@ -443,6 +443,9 @@ a game needs is the other side of that: what power its light must have to read. 
 answers it, in the camera's own terms:
 
 ```rust
+use bevy::prelude::*;
+use bevy_elements::*;
+
 fn torch(env: Environment, mut lights: Query<&mut SpotLight>) {
     for mut light in &mut lights {
         // The scene-linear value the ground should read at: 0.18 is 18 % grey, the middle of
