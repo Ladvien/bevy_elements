@@ -4,6 +4,44 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ## [Unreleased]
 
+### Changed
+
+- **The scree is a scatter of stones, not a band of mixed colour.** The stone that has weathered
+  off a cliff lies below it, and the crate rendered the boundary between the turf and the rock
+  as a **smooth wash** — a colour tint toward the rock over a slope band, with no stone
+  anywhere in it. At 2 m the ground at the rock's foot read as a uniform sandy grey with a
+  fine even noise, and the grass met the stone over a monotone 72-pixel ramp: a dusty surface,
+  not rock. A scree is *stones of many sizes with turf between them*, and that is what it is
+  now.
+
+  The stones are the **cells of a 2D cellular network**: the nearest feature point is a
+  stone's centre and the distance to it is the stone's radius. The crate's own rock note
+  records why that is the right structure — and why the *same* network cannot make the
+  fractures: "A Worley cell network cannot make them — it bounds *cells*, so a face reads as a
+  giraffe's hide". Used the other way round, as the *stones* rather than as the *cracks*, it
+  is the missing piece.
+
+  Two networks are nested — a coarse one for the big stones and a fine one for the small ones,
+  the fine ones only where the coarse ones do not cover — because a real talus has a long tail
+  (Verdian et al. 2021, *Earth Surface Dynamics* 9:1073: the finest talus clasts are 2 mm
+  against a median of 10 to 575 mm, and the median moves by more than 10-fold between sites).
+  One network at one size reads as *pebbles on grass*.
+
+  Each stone has its own **relief** — the distance field's gradient domes it, so the sun rakes
+  its edge and it reads as a thing rather than a stain — and its own **contact shadow** on the
+  matrix beside it, so the stones sit *in* the dirt. The ground between them is the scree's
+  own matrix, not the turf: a scree has no grass in it.
+
+  The band is the soil's own band up to the rock's ramp (16°–40°), an apron rather than a
+  line: a narrow band traced the hillside's break as a **contour line**, the one thing a
+  scree is not. The scatter is band-limited by the cell, so at 90 m it is a tone and not a
+  corduroy.
+
+  Measured: the `plains` preset at 6 m is **byte-identical** (the mean 170.725 and the
+  standard deviation 26.575 before and after) — the meadow is untouched; the hillside's
+  high-frequency energy rises from 6.415 to 8.299; and at 3 m the stones are individually
+  countable. See `docs/research/scree.md`.
+
 ### Added
 
 - **A game lights its own night.** The crate simulates a day and a night, a sun and a moon, a sky
