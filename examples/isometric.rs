@@ -260,8 +260,14 @@ fn follow(
 /// the two together give the one number Bevy's `SpotLight` wants — no guessing at the crate's
 /// exposure curve, and no re-tuning when the hour or the weather changes
 /// (`docs/research/game-lights.md`).
+///
+/// It is **off in daylight**, the way a hand-held light is.
 fn torch(env: Environment, mut lights: Query<&mut SpotLight, With<Torch>>) {
     for mut light in &mut lights {
+        if env.is_daylight() {
+            light.intensity = 0.0;
+            continue;
+        }
         // The luminance the ground under the torch must have to read at the wanted value.
         let luminance = env.luminance_for_display(TORCH_DISPLAY);
         // The power that puts a surface of that albedo at that luminance.
@@ -273,8 +279,15 @@ fn torch(env: Environment, mut lights: Query<&mut SpotLight, With<Torch>>) {
 }
 
 /// The street lamp: the same physics, a point source, a different art direction.
+///
+/// The lamp is **off in daylight**, the way a street lamp is: at noon the same lamp would need
+/// 62 000 lumens to read at the same picture value, and the sun is already doing that.
 fn lamp(env: Environment, mut lights: Query<&mut PointLight, With<Lamp>>) {
     for mut light in &mut lights {
+        if env.is_daylight() {
+            light.intensity = 0.0;
+            continue;
+        }
         let luminance = env.luminance_for_display(LAMP_DISPLAY);
         light.intensity = env.light_intensity(luminance, LAMP_HEIGHT_M, TORCH_ALBEDO);
         let c = env.night_light_colour();
@@ -287,12 +300,19 @@ fn lamp(env: Environment, mut lights: Query<&mut PointLight, With<Lamp>>) {
 /// Its radiance is a *scene-linear* value, like every other number in the crate, so the head
 /// reads the same at every hour: a lamp's head is the brightest thing in the frame, and at
 /// 8.0 it is a step above the 0.30 its pool of light reads at — bright, but not blown.
+///
+/// The lamp is **off in daylight**: a street lamp is switched on at dusk, and a lit lamp in
+/// the sun would be the brightest thing in the frame, which it is not.
 fn lamp_glow(
     env: Environment,
     mut materials: ResMut<Assets<WeatheredMaterial>>,
     glows: Query<&MeshMaterial3d<WeatheredMaterial>, With<Glow>>,
 ) {
-    let radiance = env.luminance_for_display(LAMP_GLOW_DISPLAY);
+    let radiance = if env.is_daylight() {
+        0.0
+    } else {
+        env.luminance_for_display(LAMP_GLOW_DISPLAY)
+    };
     for handle in glows.iter().map(|m| &m.0) {
         if let Some(mut material) = materials.get_mut(handle) {
             let c = env.night_light_colour();
