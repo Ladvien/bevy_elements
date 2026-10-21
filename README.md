@@ -116,7 +116,7 @@ The crate works in metres. A game whose world unit is something else inserts `El
 
 ![The massif from 700 m: grey stone with its surface, scree below it, and a clean line where the grass meets the rock](docs/rock_mountain.png)
 
-![A rock face 3 m above the ground. Left, before: a smooth sandy wash with a fine even noise, the material's own high-pass 1.72 DN. Right, after: the cliff's blocks — angular fragments of many sizes, each a flat facet with its own tone, sharp dark joints between them, and the sun raking their edges](docs/rock_blocks.png)
+![A rock face 3 m above the ground. Left, before: a smooth sandy wash with a fine even noise, the material's own high-pass 1.72 DN. Right, after: the cliff's blocks — angular, bedded fragments of many sizes, each a flat facet with its own tone, sharp dark joints between them, and the sun raking their edges](docs/rock_blocks.png)
 
 ![The scree at the rock's foot, 3 m above the ground. Left, before: the grass meets the rock in a hard step, and the stone is a smooth wash. Right, after: a scatter of stones of many sizes with turf thinning between them, each with its own relief and a contact shadow on the matrix](docs/scree.png)
 
