@@ -2411,7 +2411,9 @@ the demonstration in the example takes the town's night from a flat wash to a li
 
 **Commits:** `66a5fb8` (the research note `docs/research/scree.md`), `32f15b5` (the
 implementation with its tests), `81b01c7` (the changelog and the note's Deviations), `c3bd339`
-(the README and the showcase image), this log. **Sibling repos:** none. **Not released.**
+(the README and the showcase image), `9b74f20` (the scree's cost: two cell lookups and one
+grain, not four and two), `23aae56` (the measured cost and the note's last two deviations),
+this log. **Sibling repos:** none. **Not released.**
 
 ### Candidates
 
