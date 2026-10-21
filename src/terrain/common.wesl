@@ -11,7 +11,7 @@
 // and four loads; the world height is `misc.x + surface`.
 
 import bevy_elements::grid::GridParams;
-import bevy_elements::noise::{cell2, cell3, perlin2_d, perlin3_d, seed_offset};
+import bevy_elements::noise::{cell2, cell3, hash31, perlin2_d, perlin3_d, seed_offset};
 
 struct TerrainParams {
     grid: GridParams,
@@ -280,12 +280,128 @@ fn detail_scale_3d(
 /// At 4.5 m the face a player stands at — four metres of it — shows one or two bands, which is
 /// what reads as bedding; at 12 m it showed none and the rock was a wash.
 const ROCK_BED_M: f32 = 4.5;
-/// How far the beds dip and undulate, m of height.
-const ROCK_BED_WARP_M: f32 = 3.5;
 /// The bedding plane's tilt: the direction the beds run and how steeply they rise. A bed is a
 /// surface inside the rock, and it is *tilted* — the world's height is not the rock's bedding,
 /// and a massif banded by its own contours is a topographic map, not a mountain.
 const ROCK_BED_TILT: vec3<f32> = vec3<f32>(0.32, 0.90, 0.28);
+/// The warp's amplitude, m: how far the beds dip and undulate. It must be a *fraction* of a
+/// bed's thickness, or the beds stop being beds: at 3.5 m the warp displaced the bed
+/// coordinate by up to 0.78 of a bed, and a 4.5 m grid distorted by a 45 m-scale field is a
+/// set of blotches and not a set of bands — which is what the massif from 120 m showed
+/// (`docs/research/bedding.md`).
+const ROCK_BED_WARP_M: f32 = 0.9;
+/// The bed lattice's warp, in bed units: how far a boundary wanders from the uniform lattice.
+/// It is what makes the *gaps* — the beds' thicknesses — vary, and it is bounded, so the
+/// lattice does not drift and the index can be inverted in a few steps.
+const ROCK_BED_WARP_AMP: f32 = 1.0;
+/// How far a bed's own tone differs from the rock's, as a fraction of the albedo. A succession's
+/// beds are *different rock* — a sandstone, a shale, a limestone — and the tone is a draw on
+/// the bed's index, so the beds differ from one another and not only in their thickness.
+const ROCK_BED_TONE: f32 = 0.34;
+
+/// A bed's own value: the tone it wears, and how much of it there is.
+///
+/// A succession's beds are *different rock* — a sandstone, a shale, a limestone — and the
+/// cheap way to say that is a **per-bed tone** drawn from the bed's index. So the tone is a
+/// draw like the thickness is, and the beds of a cliff differ from one another the way a
+/// succession's do, instead of every bed wearing the same colour.
+struct BedValue {
+    /// The bed's tone, a multiplier around 1. It is a *low-frequency* feature — a bed's own
+    /// colour, over metres of rock — so it survives every distance the eye can see the cliff
+    /// from. This is what a distant massif shows: the succession's tones and not its stripes.
+    tone: f32,
+    /// 1 inside the bed's own layer, 0 outside it: the bed's edge.
+    mask: f32,
+    /// 1 where the bed's edge survives the pixel's footprint, 0 where it does not.
+    present: f32,
+}
+
+/// The bed's structure at the coordinate `bed` (in units of the nominal spacing): which bed
+/// this is, how thick it is, and where its edges are.
+///
+/// The beds **stack**: each bed's *top* is its own bottom plus its own thickness, and the
+/// thickness is a **draw** on the bed's index — a real succession's thicknesses are "the sum of a
+/// series of log-normal frequency distributions" (Talling 2001), so a few beds are much
+/// thicker than the rest. The beds therefore *overlap* where a bed is thicker than the
+/// nominal and leave a *gap* where it is thinner, and the layer that shows is the one whose
+/// span covers the coordinate.
+///
+/// A true cumulative sum would need an unbounded prefix sum, and the shader cannot afford
+/// one. The draw is the same rhythm done in a bounded way: each bed's own span is its draw,
+/// and the *sequence* of spans is what the eye reads as a succession.
+fn bed_value(bed: f32, footprint_m: f32) -> BedValue {
+    // The index whose boundary is at or below the coordinate: the fixed point of
+    // `i = (bed - warp(i)) / mean`. The warp is a bounded displacement, so the iteration
+    // converges in a couple of steps.
+    var index = bed;
+    for (var k = 0u; k < 4u; k += 1u) {
+        index = bed - bed_warp(index);
+    }
+    // The candidate bed, and the one below it: the coordinate is in one of them, and the one
+    // whose bottom is at or below the coordinate and whose top is above it is the bed. The
+    // iteration must be *stable*: taking the floor at the end of it would flip between two
+    // beds at a boundary.
+    var bed_index = floor(index);
+    var bottom = bed_boundary(bed_index);
+    if bottom > bed {
+        // The estimate overshot into the bed above: step down.
+        bed_index = bed_index - 1.0;
+        bottom = bed_boundary(bed_index);
+    }
+    let top = bed_boundary(bed_index + 1.0);
+    // Inside the bed? The bed's own layer, between its bottom and its top.
+    let inside = step(bottom, bed) * step(bed, top);
+    // The bed's *edge*: the distance to the nearer of its two boundaries, and the edge is
+    // sharp — a bed is a band of rock with an edge, not a gradient.
+    //
+    // The edge's width is **softened over the pixel's own footprint**: a bed's edge is a line
+    // a fraction of a bed wide, and a hard step on a line that narrow stair-steps at every
+    // distance (measured: the seams on a face at 3 m were aliased diagonals). The width grows
+    // with the footprint, so the seam blurs into the rock rather than aliasing along it.
+    let edge_width = max(0.06, footprint_m / (ROCK_BED_M * 0.5));
+    let to_edge = min(bed - bottom, top - bed);
+    let edge = 1.0 - smoothstep(0.0, edge_width, to_edge);
+    // The band-limit: the bed's edge is a line a fraction of a bed wide, so it aliases long
+    // before the bed does. Where it cannot be resolved it is *cancelled* — and what survives
+    // is the bed's own *tone*, which is a low-frequency feature. That is the whole trick: at a
+    // distance the cliff shows its succession and not its stripes.
+    let keep = detail_keep(ROCK_BED_M * 0.5, footprint_m);
+    // The bed's tone: a draw on the index, so the beds differ from one another. The crate's
+    // own integer hash, for the same reason the thickness's is: a `sin` of a large argument
+    // loses its precision in f32.
+    let h = hash31(vec3<i32>(i32(floor(index)), 7, 0));
+    let tone = 1.0 + ROCK_BED_TONE * (h * 2.0 - 1.0);
+    return BedValue(tone, inside * edge, keep);
+}
+
+/// The warp of the bed lattice, in bed units: where the boundary between the bed whose index
+/// is `i` and the next one falls.
+///
+/// The displacement is **bounded** — the beds wander, and the *gaps* between them carry the
+/// draw, so a bed's thickness varies. It is not a cumulative sum of the beds' draws: that
+/// would need an unbounded prefix sum, and the shader cannot afford one. A bounded
+/// displacement whose *differences* are the draws is the same rhythm, and it is finite.
+fn bed_warp(index: f32) -> f32 {
+    // The warp is **smooth** — a few low frequencies — because it is the warp's
+    // *derivative* that sets the spacing between two boundaries, and a smooth field's
+    // derivative is bounded and can be large, while a per-bed hash's difference is
+    // uncorrelated and tiny. So the smooth part is what makes the beds' *thicknesses* vary,
+    // and the per-bed hash is only a little local jitter on top.
+    let h = hash31(vec3<i32>(i32(floor(index)), 3, 0));
+    return ROCK_BED_WARP_AMP * (
+        0.60 * sin(index * 0.21)
+        + 0.28 * sin(index * 0.53 + 1.3)
+        + 0.12 * sin(index * 1.17 + 2.6)
+    ) + 0.10 * (h - 0.5);
+}
+
+/// The boundary between the bed whose index is `i` and the next one, in bed units.
+fn bed_boundary(index: f32) -> f32 {
+    // The lattice's spacing is the *nominal* spacing, and the warp is in bed units of it, so
+    // the boundaries are at `index + warp(index)` in units of the nominal spacing.
+    return index + bed_warp(index);
+}
+
 /// The second rock tone, relative to the first: a *darker*, browner bed. Bedded rock alternates
 /// light and dark bands, and the dark one is darker rather than lighter: the crate's rock
 /// albedo is already 0.10 linear, and a brighter second tone only washed the face further.
@@ -410,11 +526,13 @@ fn rock_material(p: vec3<f32>, warp: f32, footprint_m: f32) -> RockMaterial {
     // angle, and the warp tilts them further.
     let tilted = dot(p, ROCK_BED_TILT);
     let bed = (tilted + warp * ROCK_BED_WARP_M) / ROCK_BED_M;
-    // A bed's own value: a triangle wave, so each bed has a distinct top and bottom rather
-    // than the bands fading into one another. The mask is sharp: a bed is a *band* of rock
-    // with an edge, not a gradient.
-    let band = abs(fract(bed) - 0.5) * 2.0;
-    let bed_mask = smoothstep(0.30, 0.52, band);
+    // The bed's own value: the *stacked* bed — which bed this is, how thick it is, where its
+    // edges are, and what tone it wears (`docs/research/bedding.md`). The beds stack, so their
+    // thicknesses vary and they are a succession and not a stripe pattern; and the bed's
+    // *edge* is band-limited away with the distance while the bed's *tone* is not, so a
+    // distant cliff shows its layers and not its stripes.
+    let bed_value = bed_value(bed, footprint_m);
+    let bed_mask = bed_value.mask;
     // The rock's own field: two octaves, one coarse and one fine, band-limited by their own
     // feature sizes. The fractures are the ridges of the coarse one.
     let coarse = detail_scale_3d(p, ROCK_GRAIN_COARSE_M, 1u, footprint_m, 51u);
@@ -440,8 +558,20 @@ fn rock_material(p: vec3<f32>, warp: f32, footprint_m: f32) -> RockMaterial {
     let fracture_keep = detail_keep(ROCK_GRAIN_COARSE_M * ROCK_FRACTURE_WIDTH, footprint_m);
     let ridged = 1.0 - abs(coarse.sum / coarse_norm) * abs(coarse.sum / coarse_norm);
     let crack = (1.0 - smoothstep(ROCK_FRACTURE_WIDTH, ROCK_FRACTURE_WIDTH * 3.0, ridged)) * fracture_keep;
-    // The colour: the beds' second tone, the fractures' darkening, and the grain's modulation.
-    var tint = mix(vec3<f32>(1.0), ROCK_SECOND_TONE, bed_mask * ROCK_BED_MIX);
+    // The colour: the beds' own tone, the fractures' darkening, and the grain's modulation.
+    //
+    // A bed **is** a colour: the succession's tones are the massif's colour at a distance, and
+    // they are a *low-frequency* feature, so they survive every distance. The bed's own tone
+    // is a draw on the bed's index, so the beds of a cliff differ from one another the way a
+    // succession's do.
+    //
+    // The *edge* is the other half: the seam between two beds, where the second tone — a
+    // browner and darker rock — shows. The edge is a line a fraction of a bed wide, so it is
+    // band-limited away with the distance, and what is left is the succession's tones and not
+    // its stripes. That is the whole trick.
+    let bed_tone = bed_value.tone
+        * mix(vec3<f32>(1.0), ROCK_SECOND_TONE, bed_mask * bed_value.present * ROCK_BED_MIX);
+    var tint = bed_tone;
     let dark = mix(1.0, ROCK_FRACTURE_DARKEN, crack);
     let grain_tint = 1.0 + ROCK_GRAIN_AMP * grain_value;
     // The rock's relief. A face with no relief is a painted colour: the light does no work on

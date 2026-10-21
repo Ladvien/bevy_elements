@@ -1,7 +1,7 @@
 //! CPU transliterations of the terrain kernels that the tests compare against: the procedural
 //! generator of `generate.wesl` and the layer weights of `terrain.wesl`.
 
-use bevy::math::{UVec2, Vec2, Vec3};
+use bevy::math::{IVec3, UVec2, Vec2, Vec3};
 
 use super::{F_HALF, GAIN, LACUNARITY, OCTAVE_ROTATION, R_LOW, R_SPAN, octave_count, seed_mix};
 use crate::gpu::noise_mirror::perlin3_d;
@@ -224,6 +224,64 @@ pub(crate) fn rock_joint(p: Vec3) -> f32 {
     1.0 - smoothstep(0.0, width, half)
 }
 
+// The beds (`docs/research/bedding.md`)
+// ---------------------------------------------------------------------------------------------
+
+/// The nominal spacing between beds, m (`common.wesl`).
+pub(crate) const ROCK_BED_M: f32 = 4.5;
+/// The bed lattice's warp, in bed units (`common.wesl`).
+pub(crate) const BED_WARP_AMP: f32 = 1.0;
+
+/// The bed's structure at the coordinate `bed`: which bed it is, where its bottom is and
+/// where its top is (`common.wesl`).
+///
+/// The bed whose bottom is at or below the coordinate: the lattice is uniform, so the
+/// candidate is the coordinate's own floor, and the walk goes down while the bed above still
+/// covers the coordinate.
+/// The bed lattice's warp, in bed units: how far a boundary wanders from the uniform
+/// lattice (`common.wesl`).
+pub(crate) fn bed_warp(index: f32) -> f32 {
+    let cell = IVec3::new(index as i32, 3, 0);
+    let h = crate::gpu::noise_mirror::hash31(cell);
+    BED_WARP_AMP
+        * (0.60 * (index * 0.21).sin()
+            + 0.28 * (index * 0.53 + 1.3).sin()
+            + 0.12 * (index * 1.17 + 2.6).sin())
+        + 0.10 * (h - 0.5)
+}
+
+/// The boundary between the bed whose index is `i` and the next one, in bed units.
+pub(crate) fn bed_boundary(index: f32) -> f32 {
+    index + bed_warp(index)
+}
+
+pub(crate) fn bed_structure(bed: f32) -> (f32, f32, f32) {
+    // The bed whose span covers the coordinate. The lattice's boundaries are at
+    // `index * mean + warp(index)`, and the bed is the one whose boundary is at or below the
+    // coordinate.
+    //
+    // The estimate is the coordinate's own position in the lattice, and the warp is a bounded
+    // displacement, so a couple of steps of the fixed point
+    // `i = (bed - warp(i)) / mean` bring it to the right bed. The iteration must be *stable*:
+    // taking the floor at the end of it would flip between two beds at a boundary, so the
+    // candidate is taken as the *largest* bed whose bottom is at or below the coordinate.
+    let mut index = bed;
+    for _ in 0..4 {
+        index = bed - bed_warp(index);
+    }
+    // The candidate bed, and the one below it: the coordinate is in one of them, and the one
+    // whose bottom is at or below the coordinate and whose top is above it is the bed.
+    let mut bed_index = index.floor();
+    let mut bottom = bed_boundary(bed_index);
+    if bottom > bed {
+        // The estimate overshot into the bed above: step down.
+        bed_index -= 1.0;
+        bottom = bed_boundary(bed_index);
+    }
+    let top = bed_boundary(bed_index + 1.0);
+    (bed_index, bottom, top)
+}
+
 // The scree (`docs/research/scree.md`)
 // ---------------------------------------------------------------------------------------------
 
@@ -274,6 +332,92 @@ pub(crate) fn scree_coverage(xz: Vec2) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The beds are **bands and not blotches**: a vertical cut across a cliff crosses a bed
+    /// every few metres, and the crossings are *bounded* — a smear has no bound.
+    ///
+    /// The measurement that started this: the old warp displaced the bed coordinate by up to
+    /// 0.78 of a bed, and a 4.5 m grid distorted by a 45 m-scale field is a set of blotches.
+    #[test]
+    fn the_beds_are_bands_and_not_blotches() {
+        // A vertical cut through the rock, 40 m of it, in the bed's own coordinate.
+        let mut crossings = 0;
+        let mut spacings = Vec::new();
+        let mut last = None;
+        let mut last_y = 0.0_f32;
+        for i in 0..1000 {
+            let y = i as f32 * 0.04;
+            // The coordinate in bed units: the height along the bed plane, in the nominal
+            // spacing, which is the lattice's spacing.
+            let bed = (y * 0.90) / ROCK_BED_M;
+            // The bed's *index*: the cut crosses a bed's edge where the index changes.
+            let (index, _, _) = bed_structure(bed);
+            if let Some(was) = last
+                && was != index
+            {
+                crossings += 1;
+                // The spacing is the distance between two crossings. The first is measured
+                // from the cut's start, which is in the middle of a bed, so it is dropped.
+                if crossings > 1 {
+                    spacings.push(y - last_y);
+                }
+                last_y = y;
+            }
+            last = Some(index);
+        }
+        assert!(
+            crossings >= 4,
+            "the beds are bands: {crossings} crossings in 40 m"
+        );
+        // The spacings are *bounded*: a bed's thickness is the gap between two boundaries, and
+        // the warp is bounded, so the distance between two edges is bounded too. A smear — the
+        // old warp — has no bound: it moves the coordinate by most of a bed, and the edges
+        // land anywhere.
+        let longest = spacings.iter().copied().fold(0.0_f32, f32::max);
+        let shortest = spacings.iter().copied().fold(f32::INFINITY, f32::min);
+        assert!(
+            longest < 3.0 * ROCK_BED_M,
+            "the beds' spacing is bounded: the longest is {longest} m"
+        );
+        assert!(
+            shortest > 0.2 * ROCK_BED_M,
+            "the beds' spacing is bounded: the shortest is {shortest} m"
+        );
+    }
+
+    /// The beds **stack**: their thicknesses are a draw, not a constant, and the draw is
+    /// heavy-tailed, so a few beds are much thicker than the rest.
+    ///
+    /// Talling 2001: a bed's thickness follows a log-normal distribution, and a succession's
+    /// thicknesses are "the sum of a series of log-normal frequency distributions".
+    #[test]
+    fn the_beds_thicknesses_vary_and_stack() {
+        // The thicknesses are the *gaps* between the lattice's boundaries, and they vary
+        // because the warp is a smooth field with a bounded derivative.
+        let mut thicknesses = Vec::new();
+        for i in 0..2000 {
+            thicknesses.push(bed_boundary(i as f32 + 1.0) - bed_boundary(i as f32));
+        }
+        thicknesses.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let p10 = thicknesses[thicknesses.len() / 10];
+        let p90 = thicknesses[thicknesses.len() * 9 / 10];
+        // The thicknesses span at least 1.25:1 between the tenth and the ninetieth
+        // percentile, and none is degenerate.
+        assert!(
+            p90 > p10 * 1.25,
+            "the beds' thicknesses span only {:.2}:1", p90 / p10
+        );
+        assert!(p10 > 0.35, "the beds' thicknesses are bounded: {p10}");
+        // The beds *stack*: the boundaries are increasing, so every bed is above the one below
+        // it and the succession is a sequence and not a set of overlapping bands.
+        let mut increasing = 0;
+        for i in 0..2000 {
+            if bed_boundary(i as f32 + 1.0) > bed_boundary(i as f32) {
+                increasing += 1;
+            }
+        }
+        assert_eq!(increasing, 2000, "the beds stack");
+    }
 
     /// The rock's blocks are **discrete**: a face's joint weight crosses the half-way mark
     /// many times along a cut, where a smooth wash crosses it once.

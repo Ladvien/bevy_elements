@@ -28,6 +28,12 @@ pub(crate) fn hash33(p: IVec3) -> Vec3 {
     h.as_vec3() * (1.0 / 16_777_216.0)
 }
 
+/// Hash of an integer lattice point to one float in [0, 1), the mirror of `hash31` in
+/// `noise.wesl`.
+pub(crate) fn hash31(p: IVec3) -> f32 {
+    hash33(p).x
+}
+
 fn lattice_gradient(cell: IVec3) -> Vec3 {
     (hash33(cell) * 2.0 - 1.0 + Vec3::splat(1e-6)).normalize()
 }
