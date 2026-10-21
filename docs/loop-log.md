@@ -2522,9 +2522,20 @@ is untouched, and the cost is nil.
   is a change of *texture* and not a brightening.
 - **Cost.** `bench_elements`, High, 1920 × 1080, `mountains`, the minimum over the diagnostic
   history, the two builds run **back to back in one session** so the card's load is the same
-  for both. The card's own state swings the total by 73 % between runs (1.87–3.24 ms for the
-  *same* build), so the totals are not comparable and the per-pass minima are: the mountains'
-  opaque pass, the pass the scree is in, is in the table in the log above.
+  for both, three rounds each. The card's own state swings the *total* by 73 % between runs
+  (1.87–3.24 ms for the *same* build), so the totals are not comparable and the per-pass
+  minima are. The mountains' opaque pass, which is the pass the scree is in:
+
+  | round | the baseline | this one |
+  |---|---|---|
+  | 1 | 0.147 ms | 0.167 ms |
+  | 2 | **0.131 ms** | 0.164 ms |
+  | 3 | 0.140 ms | **0.140 ms** |
+
+  The minimum over the rounds is 0.131 ms against 0.140 ms: **+7 %**, within the note's 10 %,
+  and the third round identical. The scree costs two cell-network lookups and one noise
+  evaluation per pixel *in the band only* (`scree > 0.01`), and the meadow and the cliff pay
+  nothing — the `plains` preset's capture is byte-identical.
 - **The full gate.** `cargo test` 296 plus the 3 new scree tests, clippy, doc, wasm, the GPU
   integration suite (22 files), the lib GPU modules clouds (10), terrain (8), cover (8) and
   dust (6), and `the_horizon_sky` alone: all pass.

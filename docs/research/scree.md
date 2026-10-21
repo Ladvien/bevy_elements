@@ -182,6 +182,15 @@ the scree is the rock's own tone — the scree fades into the cliff, as a real o
 6. **The cell is 0.45 m, not 0.28 m.** At 0.28 m the stones were 0.10 m across — pebbles. The
    note's own measurement (a median b-axis of 10 to 575 mm) puts a scree's typical stone well
    above that.
+7. **The contact shadow is the stone's own occlusion, not a cast shadow.** The ground's
+   fragment shader has no access to the sun's direction, so a *cast* shadow is not available
+   without a new uniform. What is available — and what the capture wanted — is the stone's own
+   occlusion of the matrix it lies on, which is the darkening of the ground within a stone's
+   radius of its rim. It is what makes the stones sit *in* the dirt rather than on it.
+8. **Two cell lookups and one noise evaluation per pixel, not four and two.** The contact
+   shadow is computed from the same cell the stone's coverage came from, and the stone's grain
+   is the same for both scales, so it is evaluated once. The captures are identical to the
+   last decimal.
 
 ## Pending index
 
