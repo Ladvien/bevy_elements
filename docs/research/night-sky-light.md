@@ -137,8 +137,26 @@ completely and the moonlit night not at all.
 
 ## Deviations from this plan
 
-*(filled in as the implementation settles; every changed default is recorded here with its
-citation.)*
+1. **The night sky's light reaches the ground by two paths, and both were needed.** The plan
+   put the night sky's radiance in the *ambient* (`cloud_ambient`), which is right for a camera
+   *without* a sky probe. But a camera *with* a probe has its ambient set to 0 — the light
+   comes from the probe's cube — and the isometric town has one, so the ambient change alone
+   left it black (0.907 → 0.9085 DN, no change). The probe's cube therefore carries the night
+   sky's radiance too.
+2. **The cube is display-referred, so the radiance is converted with the exposure.** The
+   probe's cube holds *display* values, not radiances (`params.probe.x` is the camera's
+   exposure), and adding the raw radiance to it put a value 10⁵ times too small in it: the
+   frame's mean went from 0.91 to 2.15 DN, the houses appeared and the ground did not. The
+   conversion is the same one the fog's haze uses: `L · exposure`.
+3. **The night sky's colour is the *scotopic* one, and it is applied to the cube as well as to
+   the ambient.** Jensen et al. 2001 §7 on the blue shift — night scenes "exhibit a bluish
+   tint" — and the rod's luminous efficiency, whose peak is at 507 nm. The colour is
+   `(0.72, 0.95, 1.28)`, which the ambient normalises to luminance 1 and the cube keeps as it
+   is.
+4. **The plan's "the moon still wins" is a property of the construction, not of a tuning.** The
+   night sky's term is *added* to the bodies' light and never multiplied by it, and the full
+   moon is 8700 times the moonless sources (Jensen's Figure 2), so a moonlit night is
+   untouched to within a part in 10⁵.
 
 ## Pending index
 

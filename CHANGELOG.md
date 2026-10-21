@@ -6,6 +6,22 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ### Changed
 
+- **A moonless night is not a black screen: the night sky lights the ground.** The isometric town
+  at 20 h rendered at **1 DN** — the sky, the ground, the houses' windows, everything — and a
+  player cannot see their character. The cause was precise: the night sky's own illumination
+  (the airglow, zodiacal light and starlight that lie *behind* the atmosphere) is the crate's
+  `ILLUMINANCE_FLOOR_LUX = 0.0005 lx`, and the crate used it for the exposure meter's floor and
+  the background's clear colour, while the **ambient that illuminates surfaces** came from
+  `cloud_ambient`, which is zero when neither the sun nor the moon is up. The sky was lit and the
+  world on it was not. The night sky's radiance is now part of the ambient *and* of the sky
+  probe's cube (which is display-referred, so the radiance is converted with the camera's
+  exposure, as the fog's haze is), in the *scotopic* colour — a cool blue-green, Jensen et al.
+  2001's blue shift and the rod's curve, whose peak is at 507 nm. Measured on the isometric
+  town in `Clear`: 20 h **0.907 → 24.763 DN** and 22 h **0.739 → 22.443 DN**, with the blue/red
+  ratio rising to 1.06; noon and the twilight are byte-identical, and the cost is nil (the
+  fix is on the CPU: the mountains' opaque pass 0.251 → 0.253 ms). A test asserted the bug
+  ("a night with no moon stays dark whatever the cloud") and now asserts the correction.
+
 - **The ground has more than one colour: a meadow is not one green.** The crate's grass was a
   single green — the hue's spread over a near-ground patch was 0.010 on the plains and 0.016 on
   the hills — so the ground was one colour from the near grain to the horizon. The turf is now a
