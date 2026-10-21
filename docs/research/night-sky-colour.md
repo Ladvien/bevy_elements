@@ -131,8 +131,23 @@ extinction, and that is the whole fix.
 
 ## Deviations from this plan
 
-*(filled in as the implementation settles; every changed default is recorded here with its
-citation.)*
+1. **The clear colour is the scotopic colour *divided by* the transmittance, and the
+   transmittance is measured, not assumed.** The plan divided by "the transmittance at the
+   zenith"; the value is the one measured from the capture against the probe's neutral clear
+   colour — (0.904, 0.640, 0.353) — and it is a *measurement*, so a change to Bevy's atmosphere
+   or to the crate's exposure would move it. The clear colour is `NIGHT_SKY_COLOUR /
+   ZENITH_TRANSMITTANCE`, and the two constants sit next to each other in `celestial/mod.rs` so
+   the relation is visible.
+2. **The first attempt put the scotopic colour into the clear colour directly, and the sky
+   stayed brown** (the zenith's red/green 1.411 → 1.415). The reason is the same fact the
+   note's own diagnosis turns on: the clear colour is *behind* the atmosphere, and the
+   atmosphere's transmittance is warm, so a blue clear colour comes through *less* blue. The
+   division is not a refinement; it is the whole fix.
+3. **The horizon is warmer than the zenith, and the fix does not change that.** The clear
+   colour is one value for the whole sky, so the zenith's transmittance is the one it is
+   divided by, and the lower sky — whose path is longer and whose transmittance is warmer —
+   comes through warmer. Measured: the red/green ratio 0.783 at the zenith, 0.993 at 30° and
+   1.626 at the low sky, against 1.411, 1.742 and 2.119 before.
 
 ## Pending index
 

@@ -119,6 +119,8 @@ The crate works in metres. A game whose world unit is something else inserts `El
 ### Clock, sun, moon and stars
 
 ![The night at 22 h with no moon. Left, before: a black screen, the sky, the ground and the houses' windows all at 1 DN. Right, after: the night sky's own glow — the airglow, zodiacal light and starlight behind the atmosphere — lights the ground, and the houses read against the stars](docs/night_town.png)
+
+![The sky at 22 h with no moon. Top, before: sepia — the clear colour behind the atmosphere is neutral and the atmosphere's warm Rayleigh extinction takes the blue out of it, so the night is brown. Bottom, after: the deep blue-black the scotopic eye expects, warmer toward the horizon where the path through the atmosphere is longer](docs/night_sky_colour.png)
 date and hour and advances by `Time<Virtual>` × `time_scale`; `GeoLocation` places the observer. `SunState` has the sun's and moon's directions, true altitudes, the synodic phase and the lit fraction. The `astro` module exposes the ephemeris functions (Meeus ch. 7–48: sidereal time, nutation, the sun at 0.01°, the moon from a 51 + 34-term series, phase, refraction, the USNO total-illuminance factor), each tested against the book's worked examples and the SPA reference case. Stars are the 8404 Yale Bright Star Catalogue stars to V = 6.5, precessed to the date, coloured from B−V; the moon is a Lommel–Seeliger-shaded disc from NASA's LROC map. See [`src/celestial/PROVENANCE.md`](src/celestial/PROVENANCE.md).
 
 ### Climate, seasons and weather

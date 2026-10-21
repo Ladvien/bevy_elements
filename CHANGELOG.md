@@ -6,6 +6,26 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ### Changed
 
+- **The night sky is blue, not brown.** The sky at 22 h with no moon was **sepia**: its linear
+  RGB was (0.00297, 0.00195, 0.00099), a red/green ratio of 1.52, and the crate's own
+  `twilight.md` says the night should be "Nothing brown". The cause is not what iteration 12
+  found and fixed — that was Bevy's default `ClearColor`, and the crate replaced it with the
+  night sky's own radiance. The clear colour *is* now neutral (the probe reads
+  `LinearRgba(0.0035603, 0.0035603, 0.0035603)`) and the sky is still brown. The clear colour is
+  what lies **behind** the atmosphere, and the atmosphere is drawn over it with its
+  transmittance — measured against that neutral clear colour, (0.904, 0.640, 0.353) at the
+  zenith and falling with elevation. That is Rayleigh extinction, which takes the blue out of the
+  line of sight most, and it is *warm*, so a neutral clear colour behind it is a brown sky. The
+  clear colour is now the *scotopic* colour divided by that transmittance, so what comes through
+  is the cool blue-black the rod's eye expects (Jensen et al. 2001 §7 on the blue shift, and the
+  scotopic curve, whose peak is at 507 nm). The ambient lights the ground with the sky's glow as
+  it reaches the ground — through the atmosphere — so it uses the scotopic colour directly; the
+  clear colour is the glow *behind* it and must be pre-extinction. Measured: the zenith's
+  red/green 1.411 → **0.783** and its blue/green 0.551 → **1.197**, the horizon still warmer
+  (red/green 2.119 → 1.626), the sky probe's path bluer too (blue/green 1.179 → 1.266), the dusk
+  and the dawn byte-identical, and the cost nil (the mountains' opaque pass 0.147 ms against
+  0.147 ms: the fix is one `vec3` written per camera per frame).
+
 - **A moonless night is not a black screen: the night sky lights the ground.** The isometric town
   at 20 h rendered at **1 DN** — the sky, the ground, the houses' windows, everything — and a
   player cannot see their character. The cause was precise: the night sky's own illumination
