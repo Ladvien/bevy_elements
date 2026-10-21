@@ -10,6 +10,20 @@
 /// Lattice period of every noise in this module, cells.
 const NOISE_PERIOD: i32 = 4096;
 
+/// How far a cell network's feature point is drawn *towards* its cell's centre, 0 to 1.
+///
+/// A cell network's cells are the same size when the feature points sit on a lattice, and a
+/// face of equal cells is a mosaic. The point's offset inside its cell is the only place the
+/// cells can differ in size: a point near its cell's corner leaves a big cell behind it, and
+/// a point at the centre a small one. An inset of 0 leaves the point anywhere in the cell and
+/// the cells' sizes vary the most; an inset of 1 puts every point at the centre and every
+/// cell is the same size.
+///
+/// The rock's blocks are the cells of a 3D network (`docs/research/rock-fragments.md`), and a
+/// cliff's blocks are not all the same size: the fracture spacing follows a Weibull whose
+/// geometric standard deviation is about 0.31 (Verdian et al. 2021).
+const CELL_INSET: f32 = 0.0;
+
 /// PCG3D hash (Jarzynski & Olano 2020, "Hash Functions for GPU Rendering").
 fn pcg3d(v_in: vec3<u32>) -> vec3<u32> {
     var v = v_in * 1664525u + 1013904223u;
@@ -326,7 +340,20 @@ fn cell3(p: vec3<f32>) -> Cell3 {
                 // The point's position inside its cell, and its factor, from one hash: the
                 // point's third component is the factor, so the point does not sit on the
                 // cell's centre.
-                let point = vec3<f32>(o) + h;
+                //
+                // The point's offset is what makes the cells **unequal**, and it is the only
+                // place a cell network's cells differ in size: the *cells* of a Voronoi
+                // network are the same size when the feature points sit on a lattice, and a
+                // face of equal cells is a mosaic. A point that sits near its cell's corner
+                // leaves a *big* cell behind it and a point at the centre a small one, so the
+                // offset's spread is the blocks' size spread.
+                //
+                // The offset is the hash's own value, drawn towards the cell's centre by
+                // `CELL_INSET`: an inset of 0 leaves the point anywhere in the cell and the
+                // cells' sizes vary the most, and an inset of 1 puts every point at the
+                // centre and every cell is the same size.
+                let inset = mix(h, vec3<f32>(0.5), CELL_INSET);
+                let point = vec3<f32>(o) + inset;
                 let d = dot(point - f, point - f);
                 if d < best {
                     best = d;

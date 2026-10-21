@@ -5,6 +5,11 @@ use bevy::math::{IVec2, IVec3, UVec3, Vec2, Vec3, Vec4};
 
 const NOISE_PERIOD: i32 = 4096;
 
+/// How far a cell network's feature point is drawn *towards* its cell's centre, 0 to 1
+/// (`noise.wesl`'s `CELL_INSET`): the cells are unequal, and a face of unequal cells is a
+/// scatter of fragments and not a mosaic.
+const CELL_INSET: f32 = 0.0;
+
 fn pcg3d(v_in: UVec3) -> UVec3 {
     let mul = |a: u32, b: u32| a.wrapping_mul(b);
     let mut v = UVec3::new(
@@ -275,7 +280,13 @@ pub(crate) fn cell3(p: Vec3) -> Cell3 {
                 }
                 let c = (i + o) & IVec3::splat(NOISE_PERIOD - 1);
                 let h = hash33(c);
-                let point = o.as_vec3() + h;
+                // The point's offset inside its cell is drawn towards the cell's centre, so
+                // the cells are **unequal**: a point near its cell's corner leaves a big cell
+                // behind it and a point at the centre a small one. A cell network's cells are
+                // the same size when the points sit on a lattice, and a face of equal cells is
+                // a mosaic (`noise.wesl`'s `CELL_INSET`).
+                let inset = h.lerp(Vec3::splat(0.5), CELL_INSET);
+                let point = o.as_vec3() + inset;
                 let d = point - f;
                 let d2 = d.dot(d);
                     if d2 < best {
