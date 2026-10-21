@@ -227,6 +227,66 @@ pub(crate) fn cell2(p: Vec2) -> Cell2 {
     }
 }
 
+/// A cell of the 3D cellular network, the mirror of `cell3` in `noise.wesl`: the distance to the
+/// nearest feature point, the distance to the second nearest (the cell's *boundary*), the point
+/// itself, and the cell's two random factors.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Cell3 {
+    /// The feature point's position, in lattice units.
+    #[allow(dead_code)]
+    pub point: Vec3,
+    /// The cell's own random factor, in [0, 1).
+    #[allow(dead_code)]
+    pub factor: f32,
+}
+
+/// Mirror of `cell3` in `noise.wesl`: the 3D cellular network's nearest feature point, the
+/// second nearest point's distance and the cell's two random factors.
+pub(crate) fn cell3(p: Vec3) -> Cell3 {
+    let i = p.floor().as_ivec3();
+    let f = p - p.floor();
+    let mut best = 1e9_f32;
+    let mut best_point = Vec3::ZERO;
+    let mut best_factor = 0.0;
+    // The cells are visited in order of increasing distance, so the prune's bound tightens
+    // quickly. The bound is exact, so the result is the same as the full search.
+    for ring in 0..3 {
+        for z in -1i32..=1 {
+            for y in -1i32..=1 {
+                for x in -1i32..=1 {
+                    // The ring the cell is in, from the point's own cell outwards.
+                    if x.abs().max(y.abs()).max(z.abs()) != ring {
+                        continue;
+                    }
+                    let o = IVec3::new(x, y, z);
+                // The cell is pruned by the distance to its nearest corner: a feature point
+                // lies inside its cell, so a cell whose corner is further than the best
+                // distance so far cannot hold a closer one. The bound is exact, so the result
+                // is the same as the full search.
+                let lo = (o.as_vec3() - f).abs().max((f - o.as_vec3() - 1.0).abs());
+                if lo.dot(lo) >= best {
+                    continue;
+                }
+                let c = (i + o) & IVec3::splat(NOISE_PERIOD - 1);
+                let h = hash33(c);
+                let point = o.as_vec3() + h;
+                let d = point - f;
+                let d2 = d.dot(d);
+                    if d2 < best {
+                        best = d2;
+                        best_point = point;
+                        best_factor = h.z;
+                    }
+                }
+            }
+        }
+    }
+    Cell3 {
+        point: best_point,
+        factor: best_factor,
+    }
+}
+
 /// `PERLIN_FBM_MAX` of `generate.wesl`: the largest |fbm| of the 3-octave periodic Perlin sum.
 pub(crate) const PERLIN_FBM_MAX: f32 = 0.55;
 /// `FIELD_MAX` of `weather.wesl`: the same for the coverage field's slice (z = 0.31, period 4),

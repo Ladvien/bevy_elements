@@ -102,10 +102,13 @@ spacing, and they are there.
 | Parameter | Value | Source |
 |---|---|---|
 | The block network's cell | 1.5 m | a block a player can read; the note's "What great looks like" |
-| The block's tone spread | the cell's random factor, ×0.78 to ×1.22 | a block is a piece of one bed, so the spread is narrow |
-| The joint's darkening | 0.55 of the rock's albedo | the crate's `ROCK_FRACTURE_DARKEN` (0.26) at the cell's scale, where a joint is a shadow |
-| The block's relief | the distance field's gradient, a dimensionless slope | the scree's `SCREE_RELIEF` (0.30) |
-| The band-limit | the cell's size | the crate's `detail_keep`, and the corduroy lesson |
+| The blocks' stretch along the bedding | 1.7 | La Pointe & Hudson 1985 on joint sets: the pieces are aligned, not a heap |
+| The warp that breaks the cells' shape | 0.09 of the cell | a cell network's cells are convex and near-equal; a rock's are not |
+| The block's tone spread | the cell's random factor, ±0.22 | a block is a piece of one bed, so the spread is narrow |
+| The joint's width | 0.11 of the cell's half-boundary, ×0.30 to ×3.70 by the cell's draw | the joint is a line a fraction of a cell wide, and the draw is what varies the block's size |
+| The joint's darkening | 0.68 of the rock's albedo | a joint is a shadow, and it is the one feature of a cliff a player reads as "solid" |
+| The block's relief | the joint's own gradient, a slope of 0.85 | a block's face is *flat* and the step is at the joint |
+| The band-limit | the joint's own width | the crate's `detail_keep`, and the corduroy lesson |
 
 ## GPU mapping
 
@@ -116,8 +119,11 @@ spacing, and they are there.
 
 ## What great looks like
 
-- **A cliff face at 6 m reads as rock**: blocks with their own tones, their edges catching the
-  light, and dark joints between them — not a smooth wash with a speckle.
+- **A cliff face at 6 m reads as rock**: **blocks** with their own tones, their edges catching
+  the light, and dark joints between them — not a smooth wash with a speckle. The blocks are
+  *tabular*, elongated along the bedding, because a rock breaks along joint sets.
+- **The joints are lines, not a field**: a joint is a fraction of a cell wide, and the rock's
+  own grain runs *inside* each block.
 - **The mountain at 200 m has more than one colour**: the massifs separate into lighter and
   darker bands, and the scree below them is a third tone. The note's own target.
 - **No weave**: the blocks are in the rock's 3D frame, so they do not stretch on a slope the way
@@ -142,8 +148,100 @@ spacing, and they are there.
 
 ## Deviations from this plan
 
-*(filled in as the implementation settles; every changed default is recorded here with its
-citation.)*
+1. **The joint is the cell's *boundary*, and not the nearest point's distance.** The plan said
+   the joint is where two cells meet, and took it from the nearest point's distance. That draws
+   a *ring* round each point, and the face read as a **giraffe's hide** — the crate's own rock
+   note's warning, reproduced exactly. The boundary is the *nearest feature point's own cell's*
+   wall, measured from the point along the direction away from it: the same boundary, from the
+   nearest point alone. (The second nearest point's distance gives the same answer and costs a
+   second distance in the search — see Deviation 13.)
+2. **The block's face is *flat*, not domed.** The plan gave each block a dome, like the scree's
+   stones. A rock block is a *facet* and the step is at the joint, so the relief is the joint's
+   own gradient and the block's face is level. A dome over each block read as a **pebble pressed
+   into the face** — and a field of them as scales.
+3. **The blocks are *one* network, not two nested.** The plan followed the scree and nested a
+   coarse and a fine network. The fine network's pieces have to be masked by the coarse ones'
+   *coverage*, and the joint is only 1 near a boundary, so the fine pieces showed almost
+   everywhere and the face read as crumpled foil. A second network is the wrong instrument
+   here: the blocks are *pieces of one rock*, and the cell network's own cells are already the
+   pieces. The variation in the blocks' *size* comes from the joint's **width** instead, which
+   is the cell's own draw — a rock's joints are not all the same, and a uniform width reads as
+   a mosaic.
+4. **The blocks are band-limited by the *joint's width*, not by the cell.** The cell is 1.5 m and
+   a pixel at 90 m is a metre, so a cell-based band-limit let the blocks survive at 90 m and
+   the massifs read as a **scaly, reptilian texture**. The joint is the finest thing the blocks
+   draw, and it aliases long before the cell does — the crate's own rule for the fractures.
+5. **The blocks are one network *squashed* along the bedding, not two networks.** The plan said
+   the blocks are tabular; the implementation squashes the network's coordinates along the
+   bedding plane's normal, so the cells stretch into slabs. That is the plan's own idea, and
+   it works.
+6. **The beds' second tone is a *value* change, not only a hue one.** The plan left the beds
+   alone. They had to change: the tone was (1.06, 0.93, 0.76), whose luminance is 0.95, so
+   the beds moved the luminance by 1.9 % and the massif from 90 m was one colour — a max−min
+   of 1.00 DN, where the crate's own note asks for 9. A bed is a *darker* band (the constant's
+   own comment says so), and the value is what carries at a distance. The tone is now
+   (0.80, 0.73, 0.66) at a mix of 0.55, a 14 % albedo drop.
+7. **The joint's width is the cell's own draw, and it is what sets the block's *size*.** The
+   cells of a network are all the same size, so without this every block would be the same
+   and the face would read as a cobblestone. A cell whose joint is wide is a *small* piece of
+   rock and one whose joint is narrow is a big slab, and the cell's factor is used for the
+   block's tone *and* for its joint's width, so a cell is consistently one piece.
+8. **The network's coordinates are *warped* before the lookup.** A cell network's cells are
+   convex polygons of nearly the same area, and a face of them reads as a mosaic — or, with the
+   blocks' step, as *shingles*. A rock breaks into irregular fragments, and the warp is what
+   makes the fragments irregular. The warp is the crate's own 3D noise at the 3D point, so it
+   does not weave on a slope. At a tenth of the cell it breaks the blocks' *shape* and not
+   their position; at a third of the cell the cells broke into a lace of amoeba-like shapes
+   with holes, and the face read as camouflage.
+9. **The cell's search is *pruned* by the distance to its nearest corner, and the second-nearest
+   point is gone.** The plan's joint was the second nearest point's distance, which needs a
+   search for two points. The joint is now the *nearest* point's own cell's far side — the
+   distance from the point to the wall of the cell it is in, along the direction away from the
+   feature point — which is the same boundary from the nearest point alone, and the lookup
+   computes one distance instead of two. The bound is exact, so the result is the same as the
+   full search, and the 27-cell lookup becomes about a dozen hashes.
+10. **The network is *stretched* along the bedding's normal, not squashed.** The plan said the
+    blocks are tabular and left the mechanism. Squashing the lattice along the normal makes
+    the cells long *across* the beds — the face read as gravel — and the joint's density
+    measured 32 crossings along the bedding against 18 across, the opposite of the geology.
+    Stretching it the other way gives the slabs.
+11. **The joint's edge is softened over the pixel's own footprint.** A joint is a line a
+    fraction of a cell wide, and a hard edge on a line that narrow stair-steps at every
+    distance. The width grows with the footprint, so the joint blurs into the rock rather
+    than aliasing along it.
+12. **The blocks are skipped entirely where they cannot resolve.** The band-limit is known
+    before the network is looked up, so the far terrain pays nothing for the blocks: the
+    mountains' opaque pass does not carry the cost over the whole massif, and at 90 m the
+    frame is byte-identical to the baseline's.
+13. **The joint is the *nearest* point's own cell's wall, and the second-nearest point is
+    gone.** The plan's joint was the second nearest point's distance, which needs a search for
+    two points. The joint is now the distance from the point to the wall of the cell the
+    *nearest feature point* is in, along the direction away from it — the same boundary, from
+    the nearest point alone, and the lookup computes one distance instead of two. The
+    cell's own wall and not the *point's* own lattice cell's wall, because the nearest feature
+    point may be in a neighbour: the point's cell's wall is not the block's edge.
+14. **The cells are visited in order of increasing distance.** The prune's bound is only as good
+    as the closest point found so far, so the point's own cell is visited first, then the ring
+    around it, then the ring around that. In the natural order the bound is loose and about
+    **fourteen** of the twenty-seven cells are hashed; in this order it is about **seven**. The
+    bound is exact, so the result is the same either way — the captures are identical to within
+    the GPU's non-determinism (the face's high-pass 5.83 against 5.74 DN).
+
+### A note on the WESL, for whoever touches this next
+
+The crate's shaders are **WESL**, and two of its rules bit during this iteration:
+
+- **The WESL parser rejects `abs()` on a compound expression** (`abs(f - vec3<f32>(o) - 1.0)`).
+  The failure is at *runtime*, in the GPU driver, and it is **silent**: the terrain's material
+  fell back to a default and the whole face rendered as a flat grey, with the capture's
+  high-pass collapsing from 5.83 DN to 0.31. The error is in the log
+  ("failed to create shader module: … parsing error"), and it is easy to miss among the
+  capture's other output.
+- **`pass` is a WGSL reserved word**, like `active` and `target` and `patch`.
+
+The fix for both is a **validator**: the `wesl` crate (the one Bevy uses) compiles a module to
+WGSL, and `naga` parses it, in a second and without a GPU. `/tmp/wesltest` is that validator;
+it found the first of the two in the time it takes to run one capture.
 
 ## Pending index
 

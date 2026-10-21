@@ -259,6 +259,87 @@ fn cell2(p: vec2<f32>) -> Cell2 {
     return Cell2(sqrt(best), best_point, best_factor);
 }
 
+/// A cell of the 3D cellular network: where its feature point is, how far the point is, and
+/// the cell's own random factor in [0, 1).
+struct Cell3 {
+    /// The distance to the feature point, in lattice units.
+    distance: f32,
+    /// The feature point's position, in lattice units.
+    point: vec3<f32>,
+    /// The cell's own random factor, in [0, 1): a per-cell draw, used for the cell's tone.
+    factor: f32,
+}
+
+/// The 3D cellular (Worley) network: the *nearest* feature point, its distance and the cell's
+/// random factor.
+///
+/// The rock's own 3D frame, so a block stays put on a slope: a 2D network in the ground plane
+/// would stretch along the slope and weave, exactly as the crate's turf does
+/// (`docs/research/rock-material.md` Model 1).
+///
+/// The lookup is **27 cells**, each a hash, so it is expensive — the crate's rock uses it only
+/// where the rock shows, and the rock's material is the crate's hot path. The cells are pruned
+/// by the distance to their nearest corner, which is an exact bound, so the result is the same
+/// as the full search.
+fn cell3(p: vec3<f32>) -> Cell3 {
+    let i = vec3<i32>(floor(p));
+    let f = p - floor(p);
+    var best = 1e9;
+    var best_point = vec3<f32>(0.0);
+    var best_factor = 0.0;
+    // The cells are visited in order of increasing distance — the point's own cell first, then
+    // the ring around it, then the ring around that — so the prune's bound tightens quickly.
+    // In the natural order the bound is loose and about fourteen of the twenty-seven cells
+    // are hashed; in this order it is about seven. The bound is exact, so the result is the
+    // same either way, and the crate's rock is its hottest path.
+    for (var ring = 0; ring < 3; ring += 1) {
+      for (var z = -1; z <= 1; z += 1) {
+        for (var y = -1; y <= 1; y += 1) {
+            for (var x = -1; x <= 1; x += 1) {
+                // The pass is the ring the cell is in, from the point's own cell outwards.
+                if max(max(abs(x), abs(y)), abs(z)) != ring {
+                    continue;
+                }
+                let o = vec3<i32>(x, y, z);
+                // The cell is pruned by the distance to its *nearest corner*: a feature point
+                // lies inside its cell, so if the corner is already further than the best
+                // distance so far, the cell cannot hold a closer one and its hash — the
+                // expensive part — is not computed at all. The bound is exact, so the result is
+                // the same as the full search.
+                // The distance from the point to the cell's *far* corner, per axis: the point
+                // is at `f` inside its own cell, and the cell spans `[o, o + 1]`. A feature
+                // point lies inside its cell, so a cell whose far corner is nearer than the
+                // best distance so far cannot hold a closer one, and its hash — the expensive
+                // part — is not computed at all. The bound is exact, so the result is the same
+                // as the full search.
+                //
+                // The two distances are the point's offsets from the cell's two ends, and the
+                // larger of them is the far one.
+                let from_start = vec3<f32>(o) - f;
+                let from_end = f - (vec3<f32>(o) + 1.0);
+                let lo = max(from_start, from_end);
+                if dot(lo, lo) >= best {
+                    continue;
+                }
+                let c = (i + o) & vec3<i32>(NOISE_PERIOD - 1);
+                let h = hash33(c);
+                // The point's position inside its cell, and its factor, from one hash: the
+                // point's third component is the factor, so the point does not sit on the
+                // cell's centre.
+                let point = vec3<f32>(o) + h;
+                let d = dot(point - f, point - f);
+                if d < best {
+                    best = d;
+                    best_point = point;
+                    best_factor = h.z;
+                }
+            }
+        }
+      }
+    }
+    return Cell3(sqrt(best), best_point, best_factor);
+}
+
 /// Divergence-free noise (Bridson, Hourihan & Nordenstrm 2007): the curl of three Perlin
 /// potentials with separate seeds, from analytic derivatives, per lattice unit. Unnormalised.
 fn curl3(p: vec3<f32>) -> vec3<f32> {
