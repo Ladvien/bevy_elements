@@ -160,8 +160,42 @@ its stripes.
 
 ## Deviations from this plan
 
-*(filled in as the implementation settles; every changed default is recorded here with its
-citation.)*
+1. **The beds are a *warped lattice*, not a cumulative sum.** The plan had the beds stack —
+   a bed's bottom is the sum of the thicknesses of the beds below. That is exact, and it is
+   what a succession is, but the sum needs an **unbounded prefix sum** from the origin and the
+   shader cannot afford one. The construction is a bounded displacement instead: the boundary
+   between the beds whose index is `i` and `i + 1` falls at `i + warp(i)`, and a bed's
+   *thickness* is the gap between two boundaries. So the thicknesses vary because the warp's
+   *derivative* varies, and the lattice does not drift and the index can be inverted in a few
+   steps.
+2. **The index is found by a fixed point, and it must be *stable*.** The index is the fixed
+   point of `i = bed − warp(i)`, and the bed is its floor. Taking the floor at the end of the
+   iteration makes the index **oscillate** between two beds at a boundary, and the face showed
+   a seam that flickered. The candidate is therefore the largest bed whose bottom is at or below
+   the coordinate, with a step down if the estimate overshot.
+3. **The warp is *smooth*, and the per-bed hash is only a jitter on it.** The warp's
+   *derivative* is what sets the spacing between two boundaries, and a smooth field's
+   derivative is bounded and can be large, while a per-bed hash's difference is uncorrelated
+   and tiny. So the smooth part is what makes the beds' thicknesses vary, and the hash is only
+   a little local jitter. (A per-bed hash alone gave a 1.06:1 spread of the thicknesses — a
+   draw with no spread at all.)
+4. **The draws use the crate's own integer hash, not a `sin`.** `sin(index · 127.1)` loses its
+   precision in f32 at the indices a bed reaches (thousands), and the thicknesses came out
+   1.0:1. `hash31` — a PCG3D hash of the index — has no such problem.
+5. **The bed's *tone* is not gated by the edge's band-limit.** The tone is a *low-frequency*
+   feature — a bed's own colour, over metres of rock — and the edge is a line a fraction of a
+   bed wide. Gating the tone by the edge's band-limit killed the tone at exactly the distance
+   the tone is for, and the massif went back to being a haze. The edge is cancelled; the tone
+   is not.
+6. **The bed's *seam* is the second tone's mix, and the bed's own tone is the primary
+   colour.** The plan had the tone as a modulation of the second tone. A bed **is** a colour,
+   so the tone carries the massif's colour at a distance and the second tone is the seam
+   between two beds.
+7. **The thicknesses' spread is 1.4:1, not the 3:1 the note's target.** A smooth warp's
+   derivative is bounded, and the bound is what limits the spread. A cumulative sum would
+   give a heavier tail, and it is the one thing the shader cannot afford. The succession reads
+   through the beds' **tones** — which vary per bed by the hash, without bound — and the
+   thicknesses' regularity is the cost.
 
 ## Pending index
 
