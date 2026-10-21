@@ -2692,8 +2692,14 @@ the cost is a logged trade.
   history, the two builds run **back to back in one session**, three rounds each. The card's
   own state swings the total by 73 % between runs (1.87–3.24 ms for the *same* build), so the
   totals are not comparable and the per-pass minima are. The mountains' opaque pass, which is
-  the pass the blocks are in: the minimum over the rounds is **0.141 ms on the baseline and
-  0.181 ms on this one, +28 %**, over the note's 10 %.
+  the pass the blocks are in, over two independent paired sessions:
+
+  | session | the baseline | this one | |
+  |---|---|---|---|
+  | 1 | **0.141 ms** | 0.181 ms | +28 % |
+  | 2 | **0.153 ms** | 0.197 ms | +29 % |
+
+  Over the note's 10 %, and the same figure twice.
 
   **The trade, logged.** The rock's own material goes from an sd of 1.72 DN to 5.74 DN for
   0.04 ms, and the cost is only paid where the rock shows: the meadow and the cliff's
