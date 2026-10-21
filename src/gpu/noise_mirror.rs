@@ -165,17 +165,10 @@ pub(crate) fn worley3(p: Vec3, period: i32) -> f32 {
     let i = p.floor().as_ivec3();
     let f = p - p.floor();
     let mut best = 1e9_f32;
-    // The cells are visited in order of increasing distance, so the prune's bound tightens
-    // quickly. The bound is exact, so the result is the same as the full search.
-    for ring in 0..3 {
-        for z in -1..=1 {
-            for y in -1..=1 {
-                for x in -1..=1 {
-                    // The ring the cell is in, from the point's own cell outwards.
-                    if x.abs().max(y.abs()).max(z.abs()) != ring {
-                        continue;
-                    }
-                    let o = IVec3::new(x, y, z);
+    for z in -1..=1 {
+        for y in -1..=1 {
+            for x in -1..=1 {
+                let o = IVec3::new(x, y, z);
                 let mut c = i + o;
                 if period > 0 {
                     c = IVec3::new(
@@ -258,9 +251,9 @@ pub(crate) fn cell3(p: Vec3) -> Cell3 {
     // The cells are visited in order of increasing distance, so the prune's bound tightens
     // quickly. The bound is exact, so the result is the same as the full search.
     for ring in 0..3 {
-        for z in -1..=1 {
-            for y in -1..=1 {
-                for x in -1..=1 {
+        for z in -1i32..=1 {
+            for y in -1i32..=1 {
+                for x in -1i32..=1 {
                     // The ring the cell is in, from the point's own cell outwards.
                     if x.abs().max(y.abs()).max(z.abs()) != ring {
                         continue;
