@@ -8,7 +8,7 @@
 
 import bevy_elements::grid::{GridParams, grid_taps};
 import bevy_elements::noise::{perlin3_d, fbm3, seed_offset};
-import bevy_elements::terrain::common::{TerrainParams, ground_detail, rock_material, terrain_live, turf_palette};
+import bevy_elements::terrain::common::{TerrainParams, ground_detail, rock_material, scree_scatter, terrain_live, turf_palette};
 import bevy_elements::surface_cover::{weather_surface, ripple_weights, ripple_offset, overcast_relief};
 import bevy_elements::trails::surface::{TrailHit, trail_fade, trail_march, trail_none};
 import bevy_pbr::render::{
@@ -464,12 +464,51 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         // grain, so the near field has colour variation in it for no extra noise.
         tint = tint * mix(vec3<f32>(1.0), turf_palette(pv, albedo, fields.large, grain.coarse, grain.fine), turf);
     }
-    // The scree: where the rock's ramp opens, the stone that has weathered off it lies below.
-    // Without it the grass meets the rock in a single step, and a mountain's foot is never a
-    // clean line — it is a scatter of stones thinning into the turf.
-    let scree = smoothstep(0.0, 0.55, alpha - 22.0) * (1.0 - rockness) * (1.0 - turf * 0.5);
+    // The scree: the stone that has weathered off the rock above lies *below* it, on the band
+    // of slope just under the rock's ramp. Without it the grass meets the rock in a single
+    // step, and a mountain's foot is never a clean line — it is a scatter of stones thinning
+    // into the turf.
+    //
+    // The band is a *band* and not a ramp: the scree is at the rock's **foot**, so it lies
+    // where the soil's band dies (it is gone by 30°) and the rock's ramp begins (it opens at
+    // 30°). A mask that rose with the slope would put the stones on the cliff, which is
+    // where the rock already is, and one that sat on the soil's band would put them in the
+    // middle of the meadow's bare earth.
+    //
+    // The band is *wide*, from the soil's own band up to the rock's ramp: a scree is an apron
+    // of stones, tens of metres deep on a big cliff, and a narrow band traces the hillside's
+    // break as a contour line, which is the one thing a scree is not. The band's weight falls
+    // towards both ends, so the stones are dense at the cliff's foot and thin out into the
+    // turf above and the bare rock below.
+    //
+    // The scatter is *stones*, not a colour (`docs/research/scree.md`): the cell network's
+    // cells are the stones, each with its own size and its own relief, and the turf shows
+    // between them.
+    let scree = smoothstep(16.0, 26.0, alpha) * (1.0 - smoothstep(31.0, 40.0, alpha)) * (1.0 - rockness);
     if scree > 0.01 {
-        tint = tint * mix(vec3<f32>(1.0), ROCK, scree * 0.55);
+        // The ground *between* the stones is the scree's own matrix, not the turf: a scree has
+        // no grass in it, and a lawn with pebbles on it is a lawn. The matrix is the crate's
+        // own SOIL tone, a little greyer: a scree's matrix is the dirt between the stones, and
+        // at full SOIL it read as warm bare earth (a dirt road tracing the hillside). It is
+        // *darker* than the stones, which is what makes them stand out: light grey rock on
+        // dark brown dirt. The *edges* of the band are broken by the same `detail` field the
+        // layer boundaries use, so the band does not end on a contour line.
+        let edge = overlay(smoothstep(0.5, 1.0, scree), detail);
+        let scree_soil = mix(SOIL, ROCK * 1.5, 0.50);
+        albedo = mix(albedo, scree_soil, edge * 0.85);
+        let stones = scree_scatter(pv.xz, footprint);
+        if stones.present > 0.0 {
+            // The stone's *occlusion* of the matrix beside it: the contact shadow that makes
+            // the stones sit in the dirt instead of on it.
+            albedo = albedo * (1.0 - 0.45 * stones.contact * scree);
+            // A stone is the *rock*, not a dark patch of whatever it lies on: the stone's own
+            // colour *replaces* the ground's. So the stone is mixed into the albedo, not
+            // multiplied into the tint.
+            let stone = ROCK * stones.tint;
+            albedo = mix(albedo, stone, stones.coverage * scree);
+            // The stones' relief, so the sun rakes their edges and they read as things.
+            grad = grad + vec3<f32>(stones.grad.x, 0.0, stones.grad.y) * scree;
+        }
     }
     if rockness > 0.01 {
         let rock = rock_material(pv, fields.large, footprint);

@@ -213,7 +213,53 @@ fn worley3(p: vec3<f32>, period: i32) -> f32 {
     return sqrt(best);
 }
 
-/// Divergence-free noise (Bridson, Hourihan & Nordenstam 2007): the curl of three Perlin
+/// A cell of the 2D cellular network: where its feature point is, how far the point is, and the
+/// cell's own random factor in [0, 1).
+struct Cell2 {
+    /// The distance to the feature point, in lattice units.
+    distance: f32,
+    /// The feature point's position, in lattice units.
+    point: vec2<f32>,
+    /// The cell's own random factor, in [0, 1): a per-cell draw, used for the cell's size.
+    factor: f32,
+}
+
+/// The 2D cellular (Worley) network: the *nearest* feature point, its distance and its cell's
+/// random factor.
+///
+/// The nearest point's *distance* is a field whose gradient points away from the point, so the
+/// field is a dome over each point: the crate's scree uses that to shade each stone
+/// (`docs/research/scree.md`). The cell's random factor is a per-cell draw, which is how one
+/// network carries stones of *many* sizes: the cell's size is its own size times the factor.
+///
+/// The lattice is periodic with [`NOISE_PERIOD`] cells on both axes, so the caller can wrap the
+/// coordinates modulo the period without a seam.
+fn cell2(p: vec2<f32>) -> Cell2 {
+    let i = vec2<i32>(floor(p));
+    let f = p - floor(p);
+    var best = 1e9;
+    var best_point = vec2<f32>(0.0);
+    var best_factor = 0.0;
+    for (var y = -1; y <= 1; y += 1) {
+        for (var x = -1; x <= 1; x += 1) {
+            let o = vec2<i32>(x, y);
+            let c = (i + o) & vec2<i32>(NOISE_PERIOD - 1);
+            let h = hash33(vec3<i32>(c.x, c.y, 0));
+            // The point's position inside its cell, and its factor, from one hash: the point's
+            // third component is the factor, so the point does not sit on the cell's centre.
+            let point = vec2<f32>(o) + h.xy;
+            let d = dot(point - f, point - f);
+            if d < best {
+                best = d;
+                best_point = point;
+                best_factor = h.z;
+            }
+        }
+    }
+    return Cell2(sqrt(best), best_point, best_factor);
+}
+
+/// Divergence-free noise (Bridson, Hourihan & Nordenstrm 2007): the curl of three Perlin
 /// potentials with separate seeds, from analytic derivatives, per lattice unit. Unnormalised.
 fn curl3(p: vec3<f32>) -> vec3<f32> {
     let a = perlin3_d(p + seed_offset(11u));

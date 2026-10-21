@@ -182,9 +182,177 @@ pub(crate) fn turf_palette(field: f32, clump: f32) -> ([f32; 3], [f32; 4]) {
     (mixed, shares)
 }
 
+// The scree (`docs/research/scree.md`)
+// ---------------------------------------------------------------------------------------------
+
+/// The cell network's cell, m (`common.wesl`): the *spacing* of the stones in it.
+pub(crate) const SCREE_CELL_M: f32 = 0.45;
+/// The spread of the stones' sizes, as the range of the per-cell factor (`common.wesl`).
+pub(crate) const SCREE_SIZE_MIN: f32 = 0.35;
+pub(crate) const SCREE_SIZE_MAX: f32 = 2.20;
+/// How much of the cell the largest stone fills (`common.wesl`).
+pub(crate) const SCREE_FILL: f32 = 0.72;
+/// The fine network's cell, as a fraction of the coarse one (`common.wesl`).
+pub(crate) const SCREE_FINE_SCALE: f32 = 0.38;
+
+/// The scree's band: the slope angles between which the stones lie (`render.wesl`). The scree
+/// is at the rock's *foot* — from the soil's own band up to the rock's ramp (which opens at
+/// 30°) — and the band is *wide*, because a scree is an apron and a narrow band would trace
+/// the hillside's break as a contour line.
+pub(crate) const SCREE_BAND_DEG: [f32; 4] = [16.0, 26.0, 31.0, 40.0];
+
+/// The scree's weight at a slope angle: 1 at the rock's foot, 0 on the meadow and 0 on the
+/// cliff (`render.wesl`).
+pub(crate) fn scree_weight(slope_deg: f32) -> f32 {
+    smoothstep(SCREE_BAND_DEG[0], SCREE_BAND_DEG[1], slope_deg)
+        * (1.0 - smoothstep(SCREE_BAND_DEG[2], SCREE_BAND_DEG[3], slope_deg))
+}
+
+/// One scale's stones: how much of the point the stone covers (`common.wesl`).
+pub(crate) fn scree_scale_coverage(xz: Vec2, cell_m: f32, size_min: f32, size_max: f32) -> f32 {
+    let cell = crate::gpu::noise_mirror::cell2(xz / cell_m);
+    let size = size_min + (size_max - size_min) * cell.factor.powi(3);
+    let radius = 0.5 * size * SCREE_FILL;
+    1.0 - smoothstep(radius * 0.80, radius, cell.distance)
+}
+
+/// The scree's coverage at a point: the coarse network's stone, and the fine network's stone
+/// where the coarse one does not cover (`common.wesl`).
+pub(crate) fn scree_coverage(xz: Vec2) -> f32 {
+    let coarse = scree_scale_coverage(xz, SCREE_CELL_M, SCREE_SIZE_MIN, SCREE_SIZE_MAX);
+    let fine = scree_scale_coverage(
+        xz,
+        SCREE_CELL_M * SCREE_FINE_SCALE,
+        SCREE_SIZE_MIN * 0.8,
+        SCREE_SIZE_MAX * 0.8,
+    );
+    coarse.max(fine * (1.0 - coarse))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The scree is a *scatter*, not a band: its coverage must be **discrete** — the ground
+    /// under the scree is stones and turf between them, not a uniform wash.
+    ///
+    /// The check is the research note's first validation target: the coverage along a cut
+    /// across the scree must have *peaks* — a histogram with a second mode — and not a
+    /// monotone gradient. A band's weight is a smooth ramp, so its coverage is smooth too.
+    #[test]
+    fn the_scree_is_discrete_and_not_a_wash() {
+        // A cut across the scree, 40 cm apart, 4 m long.
+        let mut coverage = Vec::new();
+        for i in 0..200 {
+            coverage.push(scree_coverage(Vec2::new(i as f32 * 0.04, 3.0)));
+        }
+        // The stones: how many times the coverage crosses the middle of its range on its way
+        // up. A smooth wash crosses once or twice; a scatter of stones crosses many.
+        let mut crossings = 0;
+        for w in coverage.windows(2) {
+            let a = w[0] > 0.5;
+            let b = w[1] > 0.5;
+            if a != b {
+                crossings += 1;
+            }
+        }
+        assert!(
+            crossings >= 6,
+            "the scree is a scatter, not a wash: {crossings} crossings in 8 m"
+        );
+        // And there is turf between the stones: the coverage is below one everywhere, and
+        // below the middle over a good part of the cut.
+        assert!(
+            coverage.iter().all(|c| *c <= 1.0),
+            "the coverage never exceeds one"
+        );
+        let below_half = coverage.iter().filter(|c| **c < 0.5).count();
+        assert!(
+            below_half * 2 > coverage.len(),
+            "the turf shows between the stones: {below_half} of {} below half",
+            coverage.len()
+        );
+    }
+
+    /// The stones have *many* sizes: the note's second validation target, from Verdian et al.
+    /// 2021 — a talus runs from 2 mm to 575 mm, and the median moves by more than 10-fold
+    /// between sites.
+    ///
+    /// The measure is the *area* each stone takes: a scatter of one size repeated reads as a
+    /// cobble pavement, and a scatter of many sizes reads as scree. The stones' *positions*
+    /// are checked too, because a network whose points all landed in one corner of their cells
+    /// would be a grid of stones, not a scatter.
+    #[test]
+    fn the_stones_have_many_sizes() {
+        // The coarse network's stones, over a 20 m square, and the area each one covers.
+        let mut areas = Vec::new();
+        let mut offsets = Vec::new();
+        for j in 0..200 {
+            for i in 0..200 {
+                let p = Vec2::new(i as f32 * 0.1, j as f32 * 0.1);
+                let cell = crate::gpu::noise_mirror::cell2(p / SCREE_CELL_M);
+                let size = SCREE_SIZE_MIN + (SCREE_SIZE_MAX - SCREE_SIZE_MIN) * cell.factor.powi(3);
+                let radius = 0.5 * size * SCREE_FILL;
+                areas.push(radius * radius);
+                // The point's offset inside its own cell, in [0, 1).
+                offsets.push(cell.point.fract());
+            }
+        }
+        areas.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let p10 = areas[areas.len() / 10];
+        let p90 = areas[areas.len() * 9 / 10];
+        // The areas span at least 4:1 between the tenth and the ninetieth percentile.
+        assert!(
+            p90 > p10 * 4.0,
+            "the stones' areas span only {:.1}:1", p90 / p10
+        );
+        // The stones are spread inside their cells: the mean offset is near the middle, and
+        // the offsets are not all the same point.
+        let mean = offsets.iter().fold(Vec2::ZERO, |a, b| a + *b) / offsets.len() as f32;
+        assert!(
+            mean.x > 0.35 && mean.x < 0.65 && mean.y > 0.35 && mean.y < 0.65,
+            "the stones sit in the middle of their cells on average: {mean:?}"
+        );
+        let spread = offsets
+            .iter()
+            .fold(Vec2::ZERO, |a, b| a + (*b - mean).abs())
+            / offsets.len() as f32;
+        assert!(
+            spread.x > 0.2 && spread.y > 0.2,
+            "the stones are spread inside their cells: {spread:?}"
+        );
+    }
+
+    /// The scree is at the rock's **foot**: on the meadow and on the cliff there are no
+    /// stones, and the band's weight peaks where the soil's band dies and the rock's ramp
+    /// begins (the crate's own layer weights: the soil is gone by 30° and the rock is full at
+    /// 38°).
+    #[test]
+    fn the_scree_lies_at_the_rocks_foot() {
+        assert_eq!(scree_weight(0.0), 0.0, "the meadow has no stones");
+        assert_eq!(scree_weight(15.0), 0.0, "the meadow has no stones");
+        assert_eq!(scree_weight(45.0), 0.0, "the cliff has no stones");
+        // The band's weight is strongest just below the rock's ramp.
+        let peak = (14..42)
+            .map(|d| (d as f32, scree_weight(d as f32)))
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(d, _)| d)
+            .unwrap_or(0.0);
+        assert!(
+            (22.0..=33.0).contains(&peak),
+            "the scree peaks at {peak} degrees, at the rock's foot"
+        );
+        // And it is on the ground the soil has left and the rock has not taken: at 28° the
+        // crate's own layer weights are mostly grass and soil.
+        let w = layer_weights(28.0, 0.0, 0.5);
+        assert!(w[0] < 0.1, "the rock has not begun at 28 degrees: {:?}", w);
+        // The band is an *apron*, not a contour line: it is at least six degrees wide at
+        // half its strength, or it traces the hillside's break as a line.
+        let wide = (14..42)
+            .filter(|d| scree_weight(*d as f32) > 0.5)
+            .count();
+        assert!(wide >= 6, "the scree's band is {wide} degrees wide, too narrow");
+    }
 
     /// The turf's palette: the four tones' shares must sum to one by construction (so the
     /// mixture is a convex combination and the ground's mean cannot drift), every share must
