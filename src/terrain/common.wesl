@@ -521,7 +521,7 @@ fn rock_blocks(p: vec3<f32>, footprint_m: f32) -> RockBlocks {
     // and the cells are long in the bedding's plane. (Squashing it instead — the other way
     // round — makes the cells long *across* the beds, and the face reads as gravel.)
     let normal = normalize(ROCK_BED_TILT);
-    let along = p + normal * dot(p, normal) * (ROCK_BLOCK_TABULAR - 1.0);
+    let along = p - normal * dot(p, normal) * (1.0 - 1.0 / ROCK_BLOCK_TABULAR);
     // The coordinates are **warped** before the lookup, so the cells' boundaries wander: a
     // cell network's cells are convex polygons of nearly the same area, and a face of them
     // reads as a mosaic — or, with the blocks' step, as *shingles*. A rock breaks into

@@ -148,11 +148,13 @@ spacing, and they are there.
 
 ## Deviations from this plan
 
-1. **The joint is the cell's *boundary* — the second nearest feature point — and not the
-   nearest point's distance.** The plan said the joint is where two cells meet, and took it
-   from the nearest point's distance. That draws a *ring* round each point, and the face read
-   as a **giraffe's hide** — the crate's own rock note's warning, reproduced exactly. The cell's
-   boundary is the standard construction: the half-difference of the two nearest distances.
+1. **The joint is the cell's *boundary*, and not the nearest point's distance.** The plan said
+   the joint is where two cells meet, and took it from the nearest point's distance. That draws
+   a *ring* round each point, and the face read as a **giraffe's hide** — the crate's own rock
+   note's warning, reproduced exactly. The boundary is the *nearest feature point's own cell's*
+   wall, measured from the point along the direction away from it: the same boundary, from the
+   nearest point alone. (The second nearest point's distance gives the same answer and costs a
+   second distance in the search — see Deviation 13.)
 2. **The block's face is *flat*, not domed.** The plan gave each block a dome, like the scree's
    stones. A rock block is a *facet* and the step is at the joint, so the relief is the joint's
    own gradient and the block's face is level. A dome over each block read as a **pebble pressed
@@ -211,6 +213,13 @@ spacing, and they are there.
     before the network is looked up, so the far terrain pays nothing for the blocks: the
     mountains' opaque pass does not carry the cost over the whole massif, and at 90 m the
     frame is byte-identical to the baseline's.
+13. **The joint is the *nearest* point's own cell's wall, and the second-nearest point is
+    gone.** The plan's joint was the second nearest point's distance, which needs a search for
+    two points. The joint is now the distance from the point to the wall of the cell the
+    *nearest feature point* is in, along the direction away from it — the same boundary, from
+    the nearest point alone, and the lookup computes one distance instead of two. The
+    cell's own wall and not the *point's* own lattice cell's wall, because the nearest feature
+    point may be in a neighbour: the point's cell's wall is not the block's edge.
 
 ## Pending index
 

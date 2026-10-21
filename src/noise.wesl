@@ -296,7 +296,18 @@ fn cell3(p: vec3<f32>) -> Cell3 {
                 // distance so far, the cell cannot hold a closer one and its hash — the
                 // expensive part — is not computed at all. The bound is exact, so the result is
                 // the same as the full search.
-                let lo = max(vec3<f32>(o) - f, f - vec3<f32>(o) - 1.0);
+                // The distance from the point to the cell's *far* corner, per axis: the point
+                // is at `f` inside its own cell, and the cell spans `[o, o + 1]`. A feature
+                // point lies inside its cell, so a cell whose far corner is nearer than the
+                // best distance so far cannot hold a closer one, and its hash — the expensive
+                // part — is not computed at all. The bound is exact, so the result is the same
+                // as the full search.
+                //
+                // The two distances are the point's offsets from the cell's two ends, and the
+                // larger of them is the far one.
+                let from_start = vec3<f32>(o) - f;
+                let from_end = f - (vec3<f32>(o) + 1.0);
+                let lo = max(from_start, from_end);
                 if dot(lo, lo) >= best {
                     continue;
                 }

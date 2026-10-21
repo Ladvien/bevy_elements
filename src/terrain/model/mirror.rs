@@ -196,7 +196,7 @@ pub(crate) const ROCK_JOINT_WIDTH: f32 = 0.11;
 /// so the cells stretch into slabs (`common.wesl`).
 pub(crate) fn rock_block_coords(p: Vec3) -> Vec3 {
     let normal = Vec3::new(0.32, 0.90, 0.28).normalize();
-    let along = p + normal * p.dot(normal) * (ROCK_BLOCK_TABULAR - 1.0);
+    let along = p - normal * p.dot(normal) * (1.0 - 1.0 / ROCK_BLOCK_TABULAR);
     along / ROCK_BLOCK_M
 }
 
@@ -311,9 +311,9 @@ mod tests {
     /// The blocks are **tabular**: they stretch along the bedding, so a face shows slabs and
     /// not gravel.
     ///
-    /// The measure is the joint's density along the bedding plane against its density across
-    /// it: a network squashed along the bedding's normal has cells that are longer in the
-    /// bedding's plane, so the joints are further apart there.
+    /// The measure is the *cell's* own extent: a network stretched along the bedding's normal
+    /// has cells that are longer in the bedding's plane, so a line cut along the bedding
+    /// crosses fewer cell boundaries than a line cut across it.
     #[test]
     fn the_blocks_are_tabular() {
         let normal = Vec3::new(0.32, 0.90, 0.28).normalize();
@@ -321,26 +321,33 @@ mod tests {
         let in_plane = Vec3::new(1.0, 0.0, 0.0) - normal * normal.x;
         let in_plane = in_plane.normalize();
         let across = normal.cross(in_plane).normalize();
-        // A long cut along the bedding plane, and a long cut across it.
-        let mut along = Vec::new();
-        let mut across_cut = Vec::new();
-        for i in 0..200 {
-            let t = i as f32 * 0.1;
-            along.push(rock_joint(Vec3::new(0.0, 20.0, 0.0) + in_plane * t));
-            across_cut.push(rock_joint(Vec3::new(0.0, 20.0, 0.0) + across * t));
-        }
-        let crossings = |v: &Vec<f32>| {
-            v.windows(2)
-                .filter(|w| (w[0] > 0.5) != (w[1] > 0.5))
-                .count()
+        // A long cut along the bedding plane, and a long cut across it, and the *cell* each
+        // point falls in: the cell's index changes when the cut crosses a boundary.
+        let cell_of = |p: Vec3| {
+            let q = rock_block_coords(p);
+            q.floor()
         };
-        // The joints are *further apart* along the bedding than across it, because the cells
-        // are stretched that way.
+        let mut along = 0;
+        let mut across_cut = 0;
+        let mut last = cell_of(Vec3::new(0.0, 20.0, 0.0) + in_plane * 0.05);
+        let mut last_across = cell_of(Vec3::new(0.0, 20.0, 0.0) + across * 0.05);
+        for i in 1..200 {
+            let t = i as f32 * 0.1;
+            let c = cell_of(Vec3::new(0.0, 20.0, 0.0) + in_plane * t);
+            if c != last {
+                along += 1;
+                last = c;
+            }
+            let c = cell_of(Vec3::new(0.0, 20.0, 0.0) + across * t);
+            if c != last_across {
+                across_cut += 1;
+                last_across = c;
+            }
+        }
+        // The cells are *bigger* along the bedding: fewer of them on the same length of cut.
         assert!(
-            crossings(&across_cut) > crossings(&along),
-            "the blocks stretch along the bedding: {} crossings across, {} along",
-            crossings(&across_cut),
-            crossings(&along)
+            across_cut > along,
+            "the blocks stretch along the bedding: {across_cut} cells across, {along} along"
         );
         // And the squash is in the bedding's own frame, not the world's: the normal is
         // mostly vertical, so the blocks are flattened in the vertical and stretched in the

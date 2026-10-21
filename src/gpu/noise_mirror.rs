@@ -232,8 +232,6 @@ pub(crate) fn cell2(p: Vec2) -> Cell2 {
 /// itself, and the cell's two random factors.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Cell3 {
-    /// The distance to the feature point, in lattice units.
-    pub distance: f32,
     /// The feature point's position, in lattice units.
     #[allow(dead_code)]
     pub point: Vec3,
@@ -276,7 +274,6 @@ pub(crate) fn cell3(p: Vec3) -> Cell3 {
         }
     }
     Cell3 {
-        distance: best.sqrt(),
         point: best_point,
         factor: best_factor,
     }
