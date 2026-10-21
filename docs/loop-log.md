@@ -2019,3 +2019,132 @@ are now in `AGENTS.md`:
    *readable* look is also less legible than the physical one (measured in iteration 28: the
    readable streaks carry 32 DN of contrast against the grass where the physical ones carry 44),
    which is the defect the town capture keeps showing.
+
+## Iteration 31 — 2026-10-20 — the night sky lights the ground: a moonless night is not a black screen
+
+**Commits:** `2e89e8e` (the research note `docs/research/night-sky-light.md`), `8c896cb` (the
+implementation), `6d316c3` (the docs, the changelog and the showcase image), this log. **Sibling
+repos:** none. **Not released.**
+
+### Candidates
+
+| Rank | Candidate | Class | Decision |
+|---|---|---|---|
+| 1 | A **moonless night is a black screen**: the isometric town at 20 h renders at 1 DN | 1 (physically wrong) | **this iteration** |
+| 2 | The town's ground is a flat olive-brown at 18 h | 2 | carried (the example's own material) |
+| 3 | The scree is a graded band, not a scatter | 2 | carried |
+| 4 | The dry patch's own texture (a tint on green blades) | 2 | carried |
+| 5 | The overcast dome is flat | 1 | carried (blocker diagnosed in iteration 28) |
+
+Rank 1 beat the carried items because it is the only one that is *class 1* — a physically
+wrong result rather than a beauty gap — and because it makes the game unplayable at night: the
+player cannot see their character, their ground, or their world. It has also been carried three
+iterations, so it is the most persistent defect in the crate's backlog.
+
+### What changed
+
+- **The night sky's radiance is part of the ambient.** The airglow, zodiacal light and starlight
+  that lie *behind* the atmosphere are the crate's `ILLUMINANCE_FLOOR_LUX = 0.0005 lx`, and the
+  crate used it for the exposure meter's floor and the background's clear colour — but the
+  **ambient that illuminates surfaces** came from `cloud_ambient`, which is zero when neither
+  the sun nor the moon is up. So a moonless night had no ambient at all: the sky was lit and the
+  world on it was not.
+- **The sky probe's cube carries it too.** A camera *with* a probe has its ambient set to 0 —
+  the light comes from the cube — and the probe's cube is *display-referred*, so the radiance is
+  converted with the camera's exposure, as the fog's haze is.
+- **The colour is the *scotopic* one** — a cool blue-green, from Jensen et al. 2001's blue shift
+  and the rod's curve, whose peak is at 507 nm.
+- **The cloud does not dim it**: the night sky is behind the atmosphere, and the floor is
+  *added* to the bodies' light, not multiplied with it.
+
+### Sources
+
+- **Jensen, H. W., Durand, F., Stark, M. M., Premože, S., Dorsey, J., Shirley, P. (2001)**,
+  *A Physically-Based Night Sky Model*, ACM SIGGRAPH 2001, DOI `10.1145/383259.383306` (**in the
+  corpus**, stem `10.1145_383259.383306`, read in full for this note). Used: Figure 2, the
+  sources of natural illumination at night (zodiacal $1.2\times10^{-7}$, integrated starlight
+  $3.0\times10^{-8}$, airglow $5.1\times10^{-8}$, galactic $9.1\times10^{-9}$, cosmic
+  $9.1\times10^{-10}$ W/m², the full moon $2.1\times10^{-3}$); §6, the four sources of diffuse
+  night light and the sentence that is the reason for this note — "These effects are especially
+  important on moonless nights, when **a small change in illumination can determine whether an
+  object in the scene is visible or invisible**"; §6.2, "Airglow is the principal source of
+  light in the night sky on moonless nights"; §7, "**The sky is never completely black**" and the
+  blue shift. **Not indexed** (the ONNX out-of-memory error in `corpus.md`).
+- **The crate's own `twilight.md`**: the *What great looks like* the note had already set — "a
+  moonless sky is near-black with stars and **the horizon's silhouettes still readable against
+  it**" — and its item 8, the visual target of "silhouettes against a moonless sky", which the
+  *sky* delivered and the *ground* did not.
+- **The crate's own `celestial.md`**: Jensen's numbers as the crate uses them, and the
+  non-lunar night illumination's sum.
+
+### The critique and the verdicts (`/tmp/i31/critique.md`)
+
+| Round | Finding | Verdict |
+|---|---|---|
+| 1 | The fix was in the *ambient*, which is right for a camera without a probe and invisible for one with it: the town has a probe, so it was still black (0.907 → 0.9085 DN). And the cube is display-referred: adding the raw radiance put a value 10⁵ times too small in it (the mean went 0.91 → 2.15 DN, the houses appeared and the ground did not) | NOT YET |
+| 2 | The night sky's radiance in the ambient *and* in the probe's cube, display-referred: the town is a night scene, the day is byte-identical, and the cost is nil | **GREAT** |
+
+| Feature | Verdict |
+|---|---|
+| A moonless night, isometric | **GREAT** |
+| A moonless night, `day_night` (a followed camera with a probe) | **GREAT** |
+| The twilight's continuity | **GREAT** |
+| The day | **GREAT** (byte-identical) |
+| The cost | **GREAT** (0.8 %) |
+| The night sky's *colour* | NOT YET (brown; pre-existing, and the next item) |
+| The town's ground | NOT YET (the example's own flat plane) |
+
+**The change as a whole: GREAT.** The blocker — a moonless night is a black screen, and the
+player cannot see their character — is fixed, on both the probe's path and the ambient's path,
+the day is untouched, and the cost is nil.
+
+### Measurements
+
+- **A moonless night is not black**: the isometric town in `Clear`, `ELEMENTS_ZOOM=60
+  ELEMENTS_PITCH=35`, 2026-04-15 — 20 h **0.907 → 24.763 DN** (27×) and 22 h **0.739 → 22.443
+  DN** (30×), with the blue/red ratio rising from 0.992 to 1.059.
+- **Both paths**: the `day_night` example (a followed camera, with a probe) at 22 h
+  **3.409 → 14.230 DN**, and the `terrain_tour` camera (no probe) at 22 h 20.9 → 29.2 DN.
+- **The day is untouched**: the town at 12 h reads 148.208 DN before and after, and at 18 h
+  108.565 DN before and after — byte-identical.
+- **The twilight has no step**: the terrain's mean luminance at 17, 18, 19, 19.5, 20, 21 and
+  22 h is 159.5, 150.7, 118.0, 80.9, 65.8, 22.7 and 29.2 — the sun's fall and the night sky's
+  floor meet, and the night *rises* as the twilight ends, as it must.
+- **The moon still wins**: a moonlit night is four times brighter than the moonless one on the
+  same frames, against Jensen's Figure 2: the full moon is 8700 times the moonless sources.
+- **Cost.** `bench_elements`, High, 1920 × 1080, `mountains`, the minimum over the diagnostic
+  history, the two builds run back to back in one session with the clocks logged throughout:
+  **`main_opaque_pass_3d` 0.251 ms on the baseline build, 0.253 ms on this one** — 0.8 %, and the
+  fix is on the CPU. (The GPU was contended for part of the session; the llama-swap models were
+  evicted with the `gpu-tenant` lease's own recipe and the numbers are from the clean runs, at
+  the same clocks for both builds.)
+- **The full gate.** `cargo test` 253, clippy, doc, wasm, the GPU integration suite (22 files),
+  the lib GPU modules clouds (10), terrain (8), cover (8) and dust (6), and `the_horizon_sky`
+  alone: all pass.
+
+### A test that asserted the bug
+
+`celestial::tests::the_ambient_carries_the_diffuse_share_and_nothing_at_night` asserted
+`brightness == 0.0` for a moonless night, with the comment "a night with no moon stays dark
+whatever the cloud". That was the crate's *intent*, written down and tested — and it is what
+made the night a black screen. The test now asserts the correction, and it is named
+`..._and_the_night_sky_at_night`.
+
+### The next five items, ranked
+
+1. **The night sky is brown.** The `day_night` example's sky at 22 h reads R/G = 1.542, and
+   `twilight.md`'s *What great looks like* says the night should be "**Nothing brown**". It is
+   pre-existing (the baseline reads 1.599) and unchanged by this iteration, but it is the same
+   night and it is the crate's own note that says it is wrong.
+2. **A game at night has nothing to light with.** A moonless night is *shadowless* — physics —
+   but a game wants a torch, a street lamp, a window, and the crate gives a game nothing to
+   place them with: no `Environment` query for the local light, no hook for a game's own lights.
+   That is an API gap, and it is in the crate's class-3 list.
+3. **The dry patch's own texture.** The palette gives the ground a *hue*; a dry patch needs a
+   *texture* too — the blades inside it should take the patch's hue rather than the turf's, and
+   a dry patch is coarser than green grass. The colour half is in this crate; the geometry half
+   (a grass mesh) belongs to `bevy_flora`.
+4. **The scree is a graded band, not a scatter** — stones of many sizes with turf between them.
+   The idea and the place are right; the scatter is not there.
+5. **The overcast dome is flat**, with its blocker diagnosed in iteration 28 (the `sky_gain` leak
+   at grazing); it carries its Eddington implementation and its measurements in `/tmp/i28`.
