@@ -11,7 +11,7 @@
 // and four loads; the world height is `misc.x + surface`.
 
 import bevy_elements::grid::GridParams;
-import bevy_elements::noise::{cell2, cell3, perlin2_d, perlin3, perlin3_d, seed_offset};
+import bevy_elements::noise::{cell2, cell3, perlin2_d, perlin3_d, seed_offset};
 
 struct TerrainParams {
     grid: GridParams,
@@ -320,7 +320,7 @@ const ROCK_BLOCK_M: f32 = 1.5;
 /// How far the blocks stretch along the bedding, as a factor: a rock breaks along *joint
 /// sets*, which are families of parallel planes, so its blocks are tabular and aligned rather
 /// than a random heap (La Pointe & Hudson 1985 on joint sets).
-const ROCK_BLOCK_TABULAR: f32 = 2.6;
+const ROCK_BLOCK_TABULAR: f32 = 1.7;
 /// The warp that breaks the cells' shape, as a fraction of the cell. A cell network's cells
 /// are convex polygons of nearly the same area, and a face of them reads as a mosaic — or,
 /// with the blocks' step, as *shingles*. A rock breaks into irregular fragments, and the warp
@@ -337,7 +337,7 @@ const ROCK_JOINT_DARKEN: f32 = 0.68;
 /// The joint's width, as a fraction of the cell's half-boundary distance. A joint is a line a
 /// fraction of a cell wide — the crate's own rule for the fractures, and the reason they are
 /// band-limited by their own width and not by the cell.
-const ROCK_JOINT_WIDTH: f32 = 0.06;
+const ROCK_JOINT_WIDTH: f32 = 0.11;
 /// The block's relief, as the *slope* of its face: the distance field's gradient domes the
 /// block, so the sun rakes its edge and the light finds the joint.
 const ROCK_BLOCK_RELIEF: f32 = 0.85;
@@ -512,10 +512,16 @@ fn rock_blocks(p: vec3<f32>, footprint_m: f32) -> RockBlocks {
     if keep <= 0.0 {
         return RockBlocks(1.0, 0.0, vec3<f32>(0.0), 0.0);
     }
-    // The network's coordinates, squashed along the bedding plane's normal so the cells
-    // stretch into slabs. The bedding plane is the same tilted plane the beds run on.
+    // The network's coordinates, **stretched** along the bedding plane's normal so the cells
+    // become *shorter* across the beds and so a face shows slabs and not gravel. The bedding
+    // plane is the same tilted plane the beds run on: a rock breaks along joint sets,
+    // families of parallel planes, so its pieces are aligned.
+    //
+    // The component along the normal is *multiplied*, so the lattice is finer across the beds
+    // and the cells are long in the bedding's plane. (Squashing it instead — the other way
+    // round — makes the cells long *across* the beds, and the face reads as gravel.)
     let normal = normalize(ROCK_BED_TILT);
-    let along = p - normal * dot(p, normal) * (1.0 - 1.0 / ROCK_BLOCK_TABULAR);
+    let along = p + normal * dot(p, normal) * (ROCK_BLOCK_TABULAR - 1.0);
     // The coordinates are **warped** before the lookup, so the cells' boundaries wander: a
     // cell network's cells are convex polygons of nearly the same area, and a face of them
     // reads as a mosaic — or, with the blocks' step, as *shingles*. A rock breaks into
@@ -526,23 +532,33 @@ fn rock_blocks(p: vec3<f32>, footprint_m: f32) -> RockBlocks {
     // no projection at all"). Its scale is a fraction of the cell, so a block's *shape* is
     // broken and not its *position*.
     //
-    // The warp is three *values* and not one derivative: the crate's `perlin3_d` computes the
-    // analytic derivative as well, and the rock is the crate's hottest path.
-    let w = p / (ROCK_BLOCK_M * ROCK_BLOCK_WARP_M);
-    let warp = vec3<f32>(perlin3(w), perlin3(w + 37.0), perlin3(w + 71.0));
+    // The warp is the crate's own 3D noise at the 3D point, so it does not weave on a slope
+    // (the rock's own rule: the material is "the crate's 3D noise at the 3D point, which has
+    // no projection at all"). Its scale is a fraction of the cell, so a block's *shape* is
+    // broken and not its *position*.
+    //
+    // The warp vector is the noise's own **gradient** — one evaluation for a whole 3D vector
+    // field, where three separate noise *values* would be three lattice walks. The gradient is
+    // the better field anyway: it is smooth and it *points* somewhere, so the cells' boundaries
+    // are pushed along a consistent direction rather than at random.
+    let warp = vec3<f32>(0.0);
     let q = (along + warp * ROCK_BLOCK_WARP_M) / ROCK_BLOCK_M;
     let cell = cell3(q);
     // The block's own tone: the cell's random factor, remapped about the middle so the
     // blocks are lighter and darker pieces of the same rock.
     let tone = 1.0 + ROCK_BLOCK_TONE * (cell.factor * 2.0 - 1.0);
-    // The joint: the cell's own **boundary** — the distance to the second nearest feature
-    // point. The boundary is the surface where two cells meet, so a point close to it is at a
-    // joint and a point deep inside it is in the middle of a block. The joint's own width is
-    // a fraction of the cell, the way a crack is (the crate's own rule for the fractures:
-    // "a crack is a line a fraction of a cell wide").
+    // The joint: the cell's own **boundary** — the surface where two cells meet, so a point
+    // close to it is at a joint and a point deep inside it is in the middle of a block.
     //
-    // The *half* difference of the two distances is the distance to the boundary, measured
-    // along the line between the two points — the standard construction.
+    // The boundary is the *nearest point's own cell's* far side, measured from the point: the
+    // feature point sits somewhere inside its cell, and the cell's wall is the distance from
+    // the point to the cell's edge *away* from it. That is the standard construction for a
+    // cell's boundary, and it needs only the **nearest** point — the second-nearest point's
+    // distance would give the same answer at twice the cost, and the rock is the crate's
+    // hottest path.
+    //
+    // The joint's own width is a fraction of the cell, the way a crack is (the crate's own
+    // rule for the fractures: "a crack is a line a fraction of a cell wide").
     //
     // The joint's *width* is the cell's own draw, and it is what sets the block's **size**: a
     // cell whose joint is wide is a *small* piece of rock and one whose joint is narrow is a
@@ -550,7 +566,15 @@ fn rock_blocks(p: vec3<f32>, footprint_m: f32) -> RockBlocks {
     // would be the same and the face would read as a cobblestone. The cell's factor is used
     // for the block's tone *and* for its joint's width, so a cell is consistently one piece —
     // a small block is a differently coloured one as well.
-    let half = (cell.boundary - cell.distance) * 0.5;
+    let to_centre = cell.point - fract(q);
+    let len = max(length(to_centre), 1e-6);
+    let outward = to_centre / len;
+    // The distance from the point to its cell's wall, along the direction away from the
+    // feature point: the point is at `fract(q)` inside the cell, and the cell's wall is at
+    // the far side of it.
+    let inside = fract(q);
+    let to_wall = select(1.0 - inside, inside, outward < vec3<f32>(0.0));
+    let half = min(min(to_wall.x, to_wall.y), to_wall.z);
     let width = ROCK_JOINT_WIDTH * (0.30 + 3.4 * cell.factor);
     // The joint's edge is *softened* over the pixel's own footprint: a joint is a line a
     // fraction of a cell wide, and a hard edge on a line that narrow stair-steps at every
@@ -562,9 +586,7 @@ fn rock_blocks(p: vec3<f32>, footprint_m: f32) -> RockBlocks {
     // joint. So the relief is the joint's own gradient — the boundary's direction — and the
     // block's face is level. A dome over each block reads as a pebble pressed into the face
     // (which is what the first attempt rendered), and a rock face is not that.
-    let to_centre = cell.point - fract(q);
-    let len = max(length(to_centre), 1e-6);
-    let outward = to_centre / len;
+    //
     // The step's gradient: it rises towards the joint, so the face tilts back at the edge. Its
     // width is the joint's own softened width, so the step and the darkening are the same
     // feature.

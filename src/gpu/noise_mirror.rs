@@ -234,8 +234,6 @@ pub(crate) fn cell2(p: Vec2) -> Cell2 {
 pub(crate) struct Cell3 {
     /// The distance to the feature point, in lattice units.
     pub distance: f32,
-    /// The distance to the second nearest feature point, in lattice units.
-    pub boundary: f32,
     /// The feature point's position, in lattice units.
     #[allow(dead_code)]
     pub point: Vec3,
@@ -250,7 +248,6 @@ pub(crate) fn cell3(p: Vec3) -> Cell3 {
     let i = p.floor().as_ivec3();
     let f = p - p.floor();
     let mut best = 1e9_f32;
-    let mut second = 1e9_f32;
     let mut best_point = Vec3::ZERO;
     let mut best_factor = 0.0;
     for z in -1..=1 {
@@ -258,11 +255,11 @@ pub(crate) fn cell3(p: Vec3) -> Cell3 {
             for x in -1..=1 {
                 let o = IVec3::new(x, y, z);
                 // The cell is pruned by the distance to its nearest corner: a feature point
-                // lies inside its cell, so a cell whose corner is further than the second
-                // nearest distance so far cannot hold either of the two nearest points. The
-                // bound is exact, so the result is the same as the full search.
+                // lies inside its cell, so a cell whose corner is further than the best
+                // distance so far cannot hold a closer one. The bound is exact, so the result
+                // is the same as the full search.
                 let lo = (o.as_vec3() - f).abs().max((f - o.as_vec3() - 1.0).abs());
-                if lo.dot(lo) >= second {
+                if lo.dot(lo) >= best {
                     continue;
                 }
                 let c = (i + o) & IVec3::splat(NOISE_PERIOD - 1);
@@ -271,19 +268,15 @@ pub(crate) fn cell3(p: Vec3) -> Cell3 {
                 let d = point - f;
                 let d2 = d.dot(d);
                 if d2 < best {
-                    second = best;
                     best = d2;
                     best_point = point;
                     best_factor = h.z;
-                } else if d2 < second {
-                    second = d2;
                 }
             }
         }
     }
     Cell3 {
         distance: best.sqrt(),
-        boundary: second.sqrt(),
         point: best_point,
         factor: best_factor,
     }

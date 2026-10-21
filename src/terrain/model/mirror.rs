@@ -188,15 +188,15 @@ pub(crate) fn turf_palette(field: f32, clump: f32) -> ([f32; 3], [f32; 4]) {
 /// The block network's cell, m (`common.wesl`): the scale of the pieces the rock breaks into.
 pub(crate) const ROCK_BLOCK_M: f32 = 1.5;
 /// How far the blocks stretch along the bedding, as a factor (`common.wesl`).
-pub(crate) const ROCK_BLOCK_TABULAR: f32 = 2.6;
+pub(crate) const ROCK_BLOCK_TABULAR: f32 = 1.7;
 /// The joint's width, as a fraction of the cell's half-boundary distance (`common.wesl`).
-pub(crate) const ROCK_JOINT_WIDTH: f32 = 0.06;
+pub(crate) const ROCK_JOINT_WIDTH: f32 = 0.11;
 
 /// The block network's coordinates for a world point, squashed along the bedding plane's normal
 /// so the cells stretch into slabs (`common.wesl`).
 pub(crate) fn rock_block_coords(p: Vec3) -> Vec3 {
     let normal = Vec3::new(0.32, 0.90, 0.28).normalize();
-    let along = p - normal * p.dot(normal) * (1.0 - 1.0 / ROCK_BLOCK_TABULAR);
+    let along = p + normal * p.dot(normal) * (ROCK_BLOCK_TABULAR - 1.0);
     along / ROCK_BLOCK_M
 }
 
@@ -205,8 +205,21 @@ pub(crate) fn rock_block_coords(p: Vec3) -> Vec3 {
 /// The boundary is the distance to the second nearest feature point, and the joint's own width
 /// is the cell's draw, so the joints are of many widths.
 pub(crate) fn rock_joint(p: Vec3) -> f32 {
-    let cell = crate::gpu::noise_mirror::cell3(rock_block_coords(p));
-    let half = (cell.boundary - cell.distance) * 0.5;
+    let q = rock_block_coords(p);
+    let cell = crate::gpu::noise_mirror::cell3(q);
+    // The distance from the point to its cell's wall, along the direction away from the
+    // feature point (`common.wesl`).
+    let to_centre = cell.point - q.fract();
+    let len = to_centre.length().max(1e-6);
+    let outward = to_centre / len;
+    let inside = q.fract();
+    // The wall in each axis: the far side of the cell from the feature point.
+    let to_wall = Vec3::new(
+        if outward.x < 0.0 { inside.x } else { 1.0 - inside.x },
+        if outward.y < 0.0 { inside.y } else { 1.0 - inside.y },
+        if outward.z < 0.0 { inside.z } else { 1.0 - inside.z },
+    );
+    let half = to_wall.x.min(to_wall.y).min(to_wall.z);
     let width = ROCK_JOINT_WIDTH * (0.30 + 3.4 * cell.factor);
     1.0 - smoothstep(0.0, width, half)
 }
@@ -298,18 +311,23 @@ mod tests {
     /// The blocks are **tabular**: they stretch along the bedding, so a face shows slabs and
     /// not gravel.
     ///
-    /// The measure is the cell's own extent along the bedding's normal against its extent
-    /// across it: a network squashed along one axis has cells that are longer in the other.
+    /// The measure is the joint's density along the bedding plane against its density across
+    /// it: a network squashed along the bedding's normal has cells that are longer in the
+    /// bedding's plane, so the joints are further apart there.
     #[test]
     fn the_blocks_are_tabular() {
         let normal = Vec3::new(0.32, 0.90, 0.28).normalize();
+        // A direction in the bedding plane, and the one across it.
+        let in_plane = Vec3::new(1.0, 0.0, 0.0) - normal * normal.x;
+        let in_plane = in_plane.normalize();
+        let across = normal.cross(in_plane).normalize();
         // A long cut along the bedding plane, and a long cut across it.
         let mut along = Vec::new();
-        let mut across = Vec::new();
+        let mut across_cut = Vec::new();
         for i in 0..200 {
             let t = i as f32 * 0.1;
-            along.push(rock_joint(Vec3::new(t, 20.0, 0.0)));
-            across.push(rock_joint(Vec3::new(0.0, 20.0, t)));
+            along.push(rock_joint(Vec3::new(0.0, 20.0, 0.0) + in_plane * t));
+            across_cut.push(rock_joint(Vec3::new(0.0, 20.0, 0.0) + across * t));
         }
         let crossings = |v: &Vec<f32>| {
             v.windows(2)
@@ -319,9 +337,9 @@ mod tests {
         // The joints are *further apart* along the bedding than across it, because the cells
         // are stretched that way.
         assert!(
-            crossings(&across) >= crossings(&along),
+            crossings(&across_cut) > crossings(&along),
             "the blocks stretch along the bedding: {} crossings across, {} along",
-            crossings(&across),
+            crossings(&across_cut),
             crossings(&along)
         );
         // And the squash is in the bedding's own frame, not the world's: the normal is

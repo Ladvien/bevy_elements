@@ -102,10 +102,10 @@ spacing, and they are there.
 | Parameter | Value | Source |
 |---|---|---|
 | The block network's cell | 1.5 m | a block a player can read; the note's "What great looks like" |
-| The blocks' stretch along the bedding | 2.6 | La Pointe & Hudson 1985 on joint sets: the pieces are aligned, not a heap |
+| The blocks' stretch along the bedding | 1.7 | La Pointe & Hudson 1985 on joint sets: the pieces are aligned, not a heap |
 | The warp that breaks the cells' shape | 0.09 of the cell | a cell network's cells are convex and near-equal; a rock's are not |
 | The block's tone spread | the cell's random factor, ±0.22 | a block is a piece of one bed, so the spread is narrow |
-| The joint's width | 0.06 of the cell's half-boundary, ×0.30 to ×3.70 by the cell's draw | the joint is a line a fraction of a cell wide, and the draw is what varies the block's size |
+| The joint's width | 0.11 of the cell's half-boundary, ×0.30 to ×3.70 by the cell's draw | the joint is a line a fraction of a cell wide, and the draw is what varies the block's size |
 | The joint's darkening | 0.68 of the rock's albedo | a joint is a shadow, and it is the one feature of a cliff a player reads as "solid" |
 | The block's relief | the joint's own gradient, a slope of 0.85 | a block's face is *flat* and the step is at the joint |
 | The band-limit | the joint's own width | the crate's `detail_keep`, and the corduroy lesson |
@@ -119,8 +119,11 @@ spacing, and they are there.
 
 ## What great looks like
 
-- **A cliff face at 6 m reads as rock**: blocks with their own tones, their edges catching the
-  light, and dark joints between them — not a smooth wash with a speckle.
+- **A cliff face at 6 m reads as rock**: **blocks** with their own tones, their edges catching
+  the light, and dark joints between them — not a smooth wash with a speckle. The blocks are
+  *tabular*, elongated along the bedding, because a rock breaks along joint sets.
+- **The joints are lines, not a field**: a joint is a fraction of a cell wide, and the rock's
+  own grain runs *inside* each block.
 - **The mountain at 200 m has more than one colour**: the massifs separate into lighter and
   darker bands, and the scree below them is a third tone. The note's own target.
 - **No weave**: the blocks are in the rock's 3D frame, so they do not stretch on a slope the way
@@ -188,17 +191,23 @@ spacing, and they are there.
    does not weave on a slope. At a tenth of the cell it breaks the blocks' *shape* and not
    their position; at a third of the cell the cells broke into a lace of amoeba-like shapes
    with holes, and the face read as camouflage.
-9. **The cell's search is *pruned* by the distance to its nearest corner.** A feature point lies
-   inside its cell, so a cell whose nearest corner is further than the *second* nearest
-   distance so far cannot hold either of the two nearest points, and its hash — the expensive
-   part — is not computed. The bound is exact, so the result is the same as the full search
-   (the captures are identical to within the GPU's non-determinism), and the 27-cell lookup
-   becomes about 12 hashes.
-10. **The joint's edge is softened over the pixel's own footprint.** A joint is a line a
+9. **The cell's search is *pruned* by the distance to its nearest corner, and the second-nearest
+   point is gone.** The plan's joint was the second nearest point's distance, which needs a
+   search for two points. The joint is now the *nearest* point's own cell's far side — the
+   distance from the point to the wall of the cell it is in, along the direction away from the
+   feature point — which is the same boundary from the nearest point alone, and the lookup
+   computes one distance instead of two. The bound is exact, so the result is the same as the
+   full search, and the 27-cell lookup becomes about a dozen hashes.
+10. **The network is *stretched* along the bedding's normal, not squashed.** The plan said the
+    blocks are tabular and left the mechanism. Squashing the lattice along the normal makes
+    the cells long *across* the beds — the face read as gravel — and the joint's density
+    measured 32 crossings along the bedding against 18 across, the opposite of the geology.
+    Stretching it the other way gives the slabs.
+11. **The joint's edge is softened over the pixel's own footprint.** A joint is a line a
     fraction of a cell wide, and a hard edge on a line that narrow stair-steps at every
-    distance. The width grows with the footprint, so the joint blurs into the rock rather than
-    aliasing along it.
-11. **The blocks are skipped entirely where they cannot resolve.** The band-limit is known
+    distance. The width grows with the footprint, so the joint blurs into the rock rather
+    than aliasing along it.
+12. **The blocks are skipped entirely where they cannot resolve.** The band-limit is known
     before the network is looked up, so the far terrain pays nothing for the blocks: the
     mountains' opaque pass does not carry the cost over the whole massif, and at 90 m the
     frame is byte-identical to the baseline's.

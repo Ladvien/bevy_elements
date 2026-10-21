@@ -259,39 +259,32 @@ fn cell2(p: vec2<f32>) -> Cell2 {
     return Cell2(sqrt(best), best_point, best_factor);
 }
 
-/// A cell of the 3D cellular network: where its feature point is, how far the point is, how far
-/// the *second* nearest point is, and the cell's own random factor in [0, 1).
+/// A cell of the 3D cellular network: where its feature point is, how far the point is, and
+/// the cell's own random factor in [0, 1).
 struct Cell3 {
     /// The distance to the feature point, in lattice units.
     distance: f32,
-    /// The distance to the *second* nearest feature point, in lattice units: the cell's own
-    /// boundary, which is where two cells meet.
-    boundary: f32,
     /// The feature point's position, in lattice units.
     point: vec3<f32>,
     /// The cell's own random factor, in [0, 1): a per-cell draw, used for the cell's tone.
     factor: f32,
 }
 
-/// The 3D cellular (Worley) network: the *nearest* feature point, its distance, the second
-/// nearest point's distance and the cell's random factor.
+/// The 3D cellular (Worley) network: the *nearest* feature point, its distance and the cell's
+/// random factor.
 ///
 /// The rock's own 3D frame, so a block stays put on a slope: a 2D network in the ground plane
 /// would stretch along the slope and weave, exactly as the crate's turf does
 /// (`docs/research/rock-material.md` Model 1).
 ///
-/// The **boundary** — the second nearest point's distance — is what a *cell* is: the surface
-/// where two cells meet. A block is a cell, and the joint between two blocks is its boundary.
-/// Taking the joint from the nearest point's distance instead would draw a *ring* round each
-/// point, and the face would read as a giraffe's hide — the crate's rock note's own warning.
-///
-/// The lookup is **27 cells**, so it is expensive — the crate's rock uses it only where the
-/// rock shows, and the rock's material is the crate's hot path.
+/// The lookup is **27 cells**, each a hash, so it is expensive — the crate's rock uses it only
+/// where the rock shows, and the rock's material is the crate's hot path. The cells are pruned
+/// by the distance to their nearest corner, which is an exact bound, so the result is the same
+/// as the full search.
 fn cell3(p: vec3<f32>) -> Cell3 {
     let i = vec3<i32>(floor(p));
     let f = p - floor(p);
     var best = 1e9;
-    var second = 1e9;
     var best_point = vec3<f32>(0.0);
     var best_factor = 0.0;
     for (var z = -1; z <= 1; z += 1) {
@@ -299,14 +292,12 @@ fn cell3(p: vec3<f32>) -> Cell3 {
             for (var x = -1; x <= 1; x += 1) {
                 let o = vec3<i32>(x, y, z);
                 // The cell is pruned by the distance to its *nearest corner*: a feature point
-                // lies inside its cell, so if the corner is already further than the
-                // *second* nearest distance so far, the cell cannot hold either of the two
-                // nearest points and its hash — the expensive part — is not computed at all.
-                // The bound is exact, so the result is the same as the full search, and the
-                // crate's rock is its hottest path.
+                // lies inside its cell, so if the corner is already further than the best
+                // distance so far, the cell cannot hold a closer one and its hash — the
+                // expensive part — is not computed at all. The bound is exact, so the result is
+                // the same as the full search.
                 let lo = max(vec3<f32>(o) - f, f - vec3<f32>(o) - 1.0);
-                let bound = dot(lo, lo);
-                if bound >= second {
+                if dot(lo, lo) >= best {
                     continue;
                 }
                 let c = (i + o) & vec3<i32>(NOISE_PERIOD - 1);
@@ -317,17 +308,14 @@ fn cell3(p: vec3<f32>) -> Cell3 {
                 let point = vec3<f32>(o) + h;
                 let d = dot(point - f, point - f);
                 if d < best {
-                    second = best;
                     best = d;
                     best_point = point;
                     best_factor = h.z;
-                } else if d < second {
-                    second = d;
                 }
             }
         }
     }
-    return Cell3(sqrt(best), sqrt(second), best_point, best_factor);
+    return Cell3(sqrt(best), best_point, best_factor);
 }
 
 /// Divergence-free noise (Bridson, Hourihan & Nordenstrm 2007): the curl of three Perlin
