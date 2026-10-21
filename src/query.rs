@@ -6,7 +6,8 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use crate::celestial::{
-    CelestialFrame, CloudLight, SunState, WorldClock, beam_transmittance, scene_illuminance,
+    CelestialFrame, CloudLight, ElementsExposure, SunState, WorldClock, beam_transmittance,
+    scene_illuminance,
 };
 use crate::climate::Weather;
 use crate::clouds::CloudShadowSnapshot;
@@ -74,6 +75,8 @@ pub struct Environment<'w> {
     wind: Res<'w, WindState>,
     time: Res<'w, Time<Real>>,
     units: Res<'w, ElementsUnits>,
+    /// The camera's exposure; absent without the celestial plugin.
+    exposure: Option<Res<'w, ElementsExposure>>,
 }
 
 impl Environment<'_> {
@@ -227,6 +230,84 @@ impl Environment<'_> {
         self.snapshot
             .updated_at
             .map_or(Duration::MAX, |at| self.time.elapsed().saturating_sub(at))
+    }
+
+    /// The camera's exposure factor: the number a scene's luminance is multiplied by for the
+    /// display, `2^(−EV₁₀₀) / 1.2` — the same number Bevy's `Exposure::exposure()` returns.
+    ///
+    /// The crate meters its exposure on the scene's **illuminance** and not on the frame's
+    /// content, so a game's own light does not move it (Patry 2021: an "illuminance-based
+    /// exposure system… takes albedo out of the equation altogether",
+    /// `docs/research/game-lights.md`). This is what a game reads to balance its own light
+    /// against the camera.
+    ///
+    /// Without the celestial plugin there is no metered exposure, and this is Bevy's own
+    /// default (the "Blender" calibration, EV100 9.7).
+    pub fn exposure(&self) -> f32 {
+        self.exposure
+            .as_ref()
+            .map_or(bevy::camera::Exposure::BLENDER.exposure(), |e| e.exposure)
+    }
+
+    /// The display value a scene luminance of `luminance` cd/m² has under the camera's
+    /// exposure: the number the camera's target holds for it.
+    ///
+    /// The forward direction: given the light a game has, how bright does it read? A display
+    /// value of 1.0 is the reference white, and the crate's target tops out at 4096.
+    pub fn display_value(&self, luminance: f32) -> f32 {
+        crate::celestial::light::display_value(luminance, self.exposure())
+    }
+
+    /// The scene luminance, in cd/m², that reads at a given `display` value under the camera's
+    /// exposure: the inverse of [`display_value`](Self::display_value).
+    ///
+    /// The direction a game authors in: "I want the ground under my lamp to read at 0.3, so it
+    /// must be lit to this many cd/m²." A `display` of 0 is the black point.
+    pub fn luminance_for_display(&self, display: f32) -> f32 {
+        crate::celestial::light::luminance_for_display(display, self.exposure())
+    }
+
+    /// The `PointLight::intensity` or `SpotLight::intensity` (Bevy's **luminous power in
+    /// lumens**) that lights a surface `distance` metres away to a scene luminance of
+    /// `luminance` cd/m², for a surface of `albedo`.
+    ///
+    /// This is the answer to "how bright must my light be": the crate knows the camera's
+    /// exposure, the game knows its surface's albedo and how far the lamp stands from it, and
+    /// this turns those into the one number Bevy's light wants.
+    ///
+    /// **The same number works for a point light and for a spot light.** Bevy maps *both* to
+    /// `Φ / 4π` ("we choose to use the same 4\*PI divisor in both cases so that toggling
+    /// between point light and spot light keeps lit areas lit equally",
+    /// `bevy_pbr-0.20.0/src/render/light.rs:711`), so a spot's cone decides only *where* the
+    /// light lands, not how bright it is on the axis.
+    ///
+    /// `distance` is in **metres** (the metre frame: world ÷
+    /// [`ElementsUnits::units_per_metre`](crate::ElementsUnits::units_per_metre)), because the
+    /// falloff is a physical one and a world in feet has a light whose power scales with the
+    /// square of the units — the same scaling the crate's own lightning uses
+    /// (`src/lightning/visual.rs`).
+    pub fn light_intensity(&self, luminance: f32, distance_m: f32, albedo: f32) -> f32 {
+        crate::celestial::light::light_intensity(luminance, distance_m, albedo)
+    }
+
+    /// The illuminance (lx) a light of `intensity` (luminous power in lumens) puts on a surface
+    /// `distance` metres away: `Φ / 4πd²`.
+    ///
+    /// The inverse of the falloff [`light_intensity`](Self::light_intensity) uses, without the
+    /// surface's albedo: this is the light *falling* on the surface.
+    pub fn light_illuminance(&self, intensity: f32, distance_m: f32) -> f32 {
+        crate::celestial::light::light_illuminance(intensity, distance_m)
+    }
+
+    /// The colour a light reads as at night: the *scotopic* colour, the cool blue-green the
+    /// rod's eye expects when the cones have given way (Jensen et al. 2001 §7 on the blue
+    /// shift, and the scotopic curve, whose peak is at 507 nm).
+    ///
+    /// It is the crate's own night sky's colour, so a game's lamp and the crate's sky are
+    /// *one* night and not two. A warm lamp in the crate's night reads as a different scene
+    /// laid over the sky.
+    pub fn night_light_colour(&self) -> Vec3 {
+        crate::celestial::light::night_light_colour()
     }
 }
 

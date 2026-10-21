@@ -3,10 +3,12 @@
 
 pub mod astro;
 mod clock;
+pub mod light;
 mod moon;
 mod stars;
 
 use bevy::camera::Exposure;
+use bevy::ecs::system::SystemParam;
 use bevy::light::light_consts::lux;
 use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, SunDisk, VolumetricLight};
 use bevy::prelude::*;
@@ -19,6 +21,41 @@ use crate::clouds::{CloudShadows, SkyProbe};
 use crate::plugin::{
     ElementsCamera, ElementsSystems, ElementsUnits, ElementsView, SkyBackground, ensure_gpu_core,
 };
+
+/// The camera's exposure, as the crate meters it, published every frame.
+///
+/// The crate's exposure is **illuminance-based**: it is computed from the scene's illuminance
+/// (the sun, the moon and the cloud's diffuse share) and not from the frame's content, so a
+/// game's own light does not move it (Patry 2021: an "illuminance-based exposure system… takes
+/// albedo out of the equation altogether", `docs/research/game-lights.md`). A game places a
+/// hand-held light, a street lamp or a window and the camera's exposure stays where the sky
+/// put it.
+///
+/// Read it through [`Environment::exposure`](crate::Environment::exposure) and
+/// [`Environment::display_value`](crate::Environment::display_value), or from this resource
+/// directly.
+#[derive(Resource, Clone, Copy, Debug, Reflect)]
+pub struct ElementsExposure {
+    /// The camera's EV100, the exposure value the crate meters: `log₂` of the scene's
+    /// luminance over the reference white point's. The same number Bevy's `Exposure::ev100`
+    /// carries.
+    pub ev100: f32,
+    /// The exposure factor the scene's luminance is multiplied by for the display:
+    /// `2^(−ev100) / 1.2`, the same number `bevy::camera::Exposure::exposure()` returns.
+    pub exposure: f32,
+}
+
+impl Default for ElementsExposure {
+    fn default() -> Self {
+        // Bevy's own default (the "Blender" calibration, EV100 9.7), so a world without the
+        // celestial plugin still has a sane exposure.
+        let ev100 = bevy::camera::Exposure::EV100_BLENDER;
+        Self {
+            ev100,
+            exposure: bevy::camera::Exposure { ev100 }.exposure(),
+        }
+    }
+}
 
 /// Marks the sun's `DirectionalLight`.
 #[derive(Component, Clone, Copy, Debug, Default, Reflect)]
@@ -134,6 +171,7 @@ impl Plugin for CelestialPlugin {
         stars::plugin(app);
         moon::plugin(app);
         app.init_resource::<CelestialFrame>()
+            .init_resource::<ElementsExposure>()
             .add_systems(Startup, spawn_lights)
             .add_systems(
                 Update,
@@ -142,6 +180,7 @@ impl Plugin for CelestialPlugin {
                     drive_lights,
                     update_ambient,
                     auto_exposure,
+                    publish_exposure,
                     sky_background,
                     fit_shadow_cascades,
                 )
@@ -783,22 +822,32 @@ pub(crate) fn exposure_for_adaptation(la: f32) -> f32 {
     10f32.powf(log10_threshold(display) - log10_threshold(la)) / DISPLAY_MAX_NITS
 }
 
+/// The sky's state the exposure is metered from.
+#[derive(SystemParam)]
+pub(crate) struct ExposureSky<'w> {
+    state: Res<'w, SunState>,
+    frame: Res<'w, CelestialFrame>,
+    weather: Res<'w, Weather>,
+    shadows: Option<Res<'w, CloudShadows>>,
+}
+
 fn auto_exposure(
     time: Res<Time<Real>>,
-    state: Res<SunState>,
-    frame: Res<CelestialFrame>,
-    weather: Res<Weather>,
-    shadows: Option<Res<CloudShadows>>,
-    mut cameras: Query<(Entity, &ElementsCamera, &mut Exposure)>,
+    sky: ExposureSky,
+    mut published: ResMut<ElementsExposure>,
+    mut cameras: Query<(Entity, Option<&ElementsCamera>, &mut Exposure)>,
     mut adapted: Local<Vec<Entity>>,
 ) {
     // Illuminance-based, with the sky toward the sun as the highlight that caps it (Patry 2021;
     // `docs/research/twilight.md`).
-    let cloud = cloud_light(weather.cloud_cover, shadows.as_deref());
-    let target = ev100_for(scene_illuminance(&state, frame.moon_lux, cloud))
-        .max(ev100_for_glow(state.altitude_deg, weather.cloud_cover));
+    let cloud = cloud_light(sky.weather.cloud_cover, sky.shadows.as_deref());
+    let target = ev100_for(scene_illuminance(&sky.state, sky.frame.moon_lux, cloud))
+        .max(ev100_for_glow(sky.state.altitude_deg, sky.weather.cloud_cover));
     let k = 1.0 - (-time.delta_secs() / EXPOSURE_TAU_S).exp();
     for (entity, camera, mut exposure) in &mut cameras {
+        let Some(camera) = camera else {
+            continue;
+        };
         if !camera.auto_exposure {
             continue;
         }
@@ -809,6 +858,39 @@ fn auto_exposure(
             adapted.push(entity);
         }
     }
+    // The crate's metered target, which is what a camera gets when there is none.
+    published.ev100 = target;
+    published.exposure = bevy::camera::Exposure { ev100: target }.exposure();
+}
+
+/// Publish the exposure the camera really has, so a game that lights its own night can balance
+/// its own light against it.
+///
+/// What the camera has, whether the crate metered it or the game drove it (`auto_exposure`
+/// off): a game needs the exposure the camera is really using, not the one the crate would
+/// have chosen. With no camera at all (a headless world, or one whose camera is added later)
+/// the crate's own metered target is what a camera would get, so that is what it publishes.
+fn publish_exposure(
+    view: Res<ElementsView>,
+    mut published: ResMut<ElementsExposure>,
+    cameras: Query<(Entity, &Exposure)>,
+) {
+    let mut followed: Option<f32> = None;
+    let mut any: Option<f32> = None;
+    for (entity, exposure) in &cameras {
+        let ev = exposure.ev100;
+        if any.is_none() {
+            any = Some(ev);
+        }
+        if Some(entity) == view.entity {
+            followed = Some(ev);
+        }
+    }
+    let Some(ev100) = followed.or(any) else {
+        return;
+    };
+    published.ev100 = ev100;
+    published.exposure = bevy::camera::Exposure { ev100 }.exposure();
 }
 
 /// Luminance of the moonless night sky behind the atmosphere (airglow, zodiacal light,
@@ -1320,3 +1402,4 @@ mod tests {
         assert!(glow < lux, "{glow} against {lux}");
     }
 }
+

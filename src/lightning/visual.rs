@@ -18,9 +18,6 @@ use crate::plugin::{ElementsSystems, ElementsUnits, ElementsView};
 
 /// Scene luminance of the channel core at a first stroke's peak, cd/m² (plan 2.3).
 const BOLT_LUMINANCE: f32 = 50_000.0;
-/// Largest display value written per layer: `Rgba16Float` tops out at 65 504 and about sixteen
-/// layers (crossed ribbons, branches, restrikes) can overlap.
-const DISPLAY_MAX: f32 = 4096.0;
 /// Blue-white, linear RGB.
 const TINT: Vec3 = Vec3::new(0.85, 0.92, 1.0);
 /// Half the 6.5 cm mean channel diameter, m.
@@ -101,9 +98,7 @@ pub(crate) fn quad_half_width(core: f32) -> f32 {
 /// The display value of scene luminance `luminance` (cd/m²) under camera exposure `exposure`
 /// (`2^−EV₁₀₀ / 1.2`): Bevy writes an unlit colour as it is, so the exposure is applied here,
 /// and the result is clamped so it stays finite in `Rgba16Float`.
-pub(crate) fn display_value(luminance: f32, exposure: f32) -> f32 {
-    (luminance * exposure).min(DISPLAY_MAX)
-}
+pub(crate) use crate::celestial::light::display_value;
 
 /// Material colour for a layer at envelope `mean` under `exposure`.
 pub(crate) fn layer_color(mean: f32, exposure: f32) -> LinearRgba {
@@ -427,6 +422,7 @@ fn animate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::celestial::light::DISPLAY_MAX;
     use crate::lightning::bolt::generate;
 
     fn exposure(ev100: f32) -> f32 {
