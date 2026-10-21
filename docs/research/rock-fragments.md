@@ -129,12 +129,16 @@ must be **cancelled**, not averaged, or the face turns into a corduroy.
 
 | Parameter | Value | Source |
 |---|---|---|
-| The block network's cell | 1.5 m | iteration 35: a block a player can read |
-| The warp's amplitude | 0.09 of the cell, as a *gradient* | iteration 35's note: a tenth breaks the shape, a third tears the cells |
-| The blocks' size spread | a Weibull with a geometric standard deviation of 0.31 | Verdian et al. 2021: the fracture spacing's GSD, 0.214–0.551 across fifteen sites |
+| The block network's cell | 0.95 m | a block a player can read, and two blocks across a face at 3 m |
+| The warp's amplitude | 0.30 m, as a *gradient* | the gradient's mean magnitude is 0.94, so 0.30 m is 0.20 of a cell |
+| The warp's scale | 9 cells | a warp over one cell scrambles the lattice instead of bending it |
+| The blocks' size spread | the feature points drawn towards their cell's centre, `CELL_INSET` 0 | a cell network's cells can only differ in size through the points' offsets |
+| The joint's width's draw | a Weibull, shape 1.6, scale 0.85 | Verdian et al. 2021: the fracture spacing's Weibull fit |
 | The blocks' size range | a hand's width to a metre | Verdian et al. 2021: the spacings run 2 to 5000 mm, the site medians 10 to 390 mm |
 | The blocks' flatness | the c : a ratio of 0.45 | Domokos et al. 2015's universal value, via Verdian et al. 2021 |
-| The band-limit | the *smallest* block's own width | the crate's `detail_keep`, and the corduroy lesson |
+| The band-limit | the *joint's* own width | the crate's `detail_keep`, and the corduroy lesson |
+| The joint's darkening | 0.76 of the rock's albedo | a joint is a shadow, and a shadow is wider than the crack |
+| The block's relief | a slope of 0.95 | the joint's own gradient, so the sun rakes each block's edge |
 
 ## GPU mapping
 
@@ -173,8 +177,60 @@ must be **cancelled**, not averaged, or the face turns into a corduroy.
 
 ## Deviations from this plan
 
-*(filled in as the implementation settles; every changed default is recorded here with its
-citation.)*
+1. **The warp is the noise's own *gradient*, and the commit that asked for it never wrote it.**
+   The plan inherited the warp from iteration 35, where the commit that replaced three noise
+   *values* with the noise's *gradient* left the line as `let warp = vec3<f32>(0.0);` — the
+   warp had been **off** since iteration 35, and the cells had been a perfect lattice ever
+   since. The commit's message describes the warp as "the best version of the three"; the code
+   does not have it. This is the *cause* of the quilt, and it is a one-line regression, not a
+   tuning problem.
+2. **The warp's *amplitude* is calibrated for the gradient, not for the value.** The note's
+   0.09 was the amplitude for the noise's *value*, whose range is ±1. The gradient's mean
+   magnitude is **0.94** and its max 2.37, so 0.09 displaced a cell's boundary by **0.06 of a
+   cell** — a fifth of what it needed to be, and the cells stayed regular. The amplitude is
+   now **0.30 m**, which is a mean displacement of **0.20 of a cell** and a max of 0.44.
+3. **The warp's *scale* is many cells, not one.** A warp that varies over the length of a
+   cell moves different points by different amounts and **scrambles** the lattice instead of
+   bending it: the cell's index stopped being monotonic along a straight cut, and the joint was
+   crossed **zero times in 30 m**. The warp now varies over **nine cells**, so the whole
+   lattice bends coherently — which is what a rock's fracture set does.
+4. **The size spread comes from the network's *feature points*, not from a second network.**
+   The plan's second generation — a fine network at a third of the cell, the scree's own
+   construction — was tried and **rejected**: a seam every few pixels turned the face into a
+   **dark speckle**, and the material's own high-pass fell from 10.0 DN to 6.5 DN, *below* the
+   baseline's 6.7. Made tone-only, it was a mottle of patches of a slightly different rock
+   and not a cliff either.
+   The spread comes instead from the **cells themselves**: the feature points are drawn
+   *towards* their cell's centre (`CELL_INSET` in `noise.wesl`), so a point near its cell's
+   corner leaves a big cell behind it and a point at the centre a small one. That is the only
+   place a cell network's cells can differ in size, and it costs one multiply.
+5. **The joint's width is a *Weibull* draw, and the width is in the cell's own units.** The
+   plan left the width as a linear draw, `0.30 + 3.4 · factor`, which is uniform. The
+   Weibull's inverse transform is `λ · (−ln(1 − u))^(1/k)`, with the **shape 1.6** — between
+   the exponential (1) and the Rayleigh (2), with the longer tail a cliff's spacings have. The
+   width's scale had to be cut from 1.5 to **0.85**: at 1.5 the widest joint was *half* the
+   cell, which ate the block, and the joint's weight was a field and not a line.
+6. **The block's cell is 0.95 m, not 1.5 m.** A block a player can read is a metre or two
+   across, and the rock face in the capture is 2 m across the frame at 3 m, so a 1.5 m cell
+   put two blocks across the frame. At 0.95 m the face reads as a *fracture network* — the
+   blocks are countable and the seams are a crack, not a line.
+7. **The joint's darkening is a *shadow at* the joint, and the joint's width is 0.19.** The
+   first version of the change had the joints at 0.13, and the face read as a **giraffe's
+   hide** — a network of thin dark lines with flat blocks between them, which is the crate's
+   own rock note's warning about drawing a cell network's boundaries as *lines*. A joint is a
+   shadow, and a shadow is *wider* than the crack: the darkening is 0.76 of the rock's
+   albedo, and the relief's step is 0.95 so the sun rakes each block's edge.
+8. **The CPU mirror's `fract` was the wrong one.** Bevy's `Vec3::fract` is `x − trunc(x)` and
+   so is **negative** for a negative coordinate, while WGSL's is `x − floor(x)` and is always
+   in [0, 1). The two disagreed about where every cell's wall was, and the joint's weight came
+   out at **zero** on the negative half of the world. The mirror now has its own `wesl_fract`.
+9. **The two block tests measure the *cell* and not the *joint*.** The joint is a line a
+   fraction of a cell wide, so two heights on the same vertical line are usually *both* off a
+   joint and trivially agree — the test passed for a 2D network, and failed for a 3D one once
+   the joint grew narrow. The tabular test measured the *joint's crossings*, which are the
+   **warp's** long-range bending as much as the lattice's, and the warp does not know about
+   the bedding. Both now measure the cell: the *extent* of the network's coordinates along
+   the bedding and across it, and the *index* of the cell at two heights.
 
 ## Pending index
 
