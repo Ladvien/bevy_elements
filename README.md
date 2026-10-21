@@ -436,6 +436,42 @@ fn seek_shelter(env: Environment) {
 
 `cloud_shadow_at(Vec3)` is the direct transmittance of the clouds toward the sun (the moon at night) at a world position, 0 in a thick cloud's shadow to 1 in the open, from the cloud shadow map sampled every 31.25 m over 8 km around the camera (1 outside it); `illuminance_at(Vec3)` is the horizontal illuminance there in lux, the clear-sky sun and moon light times `0.25 + 0.75 · T`. Only the clouds shadow them, not terrain or meshes. `cloud_shadow_at` is `None` before the first readback; `illuminance_at` then uses the cover-only estimate.
 
+**A game lights its own night.** The crate meters its exposure on the scene's *illuminance* and
+not on the frame's content, so a game's own light does not move the camera's exposure (Patry
+2021's "illuminance-based exposure system… takes albedo out of the equation altogether"). What
+a game needs is the other side of that: what power its light must have to read. The crate
+answers it, in the camera's own terms:
+
+```rust
+fn torch(env: Environment, mut lights: Query<&mut SpotLight>) {
+    for mut light in &mut lights {
+        // The scene-linear value the ground should read at: 0.18 is 18 % grey, the middle of
+        // the picture, and the crate's metering holds it there at every hour.
+        let luminance = env.luminance_for_display(0.18);
+        // The lumens that put a surface of that albedo at that luminance, `distance` metres
+        // away. The same number works for a `PointLight` and a `SpotLight`.
+        light.intensity = env.light_intensity(luminance, 2.0, 0.14);
+        // The night's own colour, so the light and the sky are one night.
+        let c = env.night_light_colour();
+        light.color = Color::linear_rgb(c.x, c.y, c.z);
+    }
+}
+```
+
+`exposure()` is the camera's exposure factor (`2^(−EV₁₀₀) / 1.2`, the same number Bevy's
+`Exposure::exposure()` returns), and `display_value(luminance)` is the scene-linear value a
+luminance has under it — the tonemapper's input, since Bevy applies the exposure inside the
+PBR shader. `luminance_for_display(display)` is the inverse, `light_intensity(luminance,
+distance, albedo)` gives a light's power in **lumens** (Bevy's `PointLight::intensity` and
+`SpotLight::intensity` are luminous power, not candela), and `light_illuminance(intensity,
+distance)` is the falloff on its own. The same numbers are in the `light` module and in the
+`ElementsExposure` resource, for a system that does not hold an `Environment`.
+
+The power a light needs scales *inversely* with the exposure: the same lamp wants 62 253 lm at
+noon and 2.8 lm at midnight, for the same picture. A game that hard-codes a lamp's lumens is
+wrong by five orders of magnitude between the two; a game that asks the crate is never wrong.
+See `docs/research/game-lights.md`.
+
 **Saving the weather and the snowpack.** The weather's save state is `WorldClock`, `Climate`, `GeoLocation` and `WeatherDirector` (the scheduler's chain position, a forced preset and the blend in progress); `Weather` is recomputed from them each frame. The ground's is `SurfaceWeathering` (the snowpack and the wetness). With the `serde` feature all five serialize; insert the saved copies before the next `ElementsSystems::Weather` run and the weather and the snow continue exactly as saved, where a fresh director would restart the chain at `Clear` and a fresh `SurfaceWeathering` at bare, dry ground. A snowpack loaded onto a clock more than an hour from the one it was saved at neither melts nor grows across the gap. The ground-cover maps on a terrain are not saved: they are re-seeded from the loaded snowpack, times each cell's slope and shelter exposure, so roofs keep the ground under them bare; drifts re-form as it snows. The other GPU layers (water, terrain) are not part of it. `tests/save.rs` shows the round trip; `weathered_town` writes and loads a save with `ELEMENTS_SAVE` and `ELEMENTS_LOAD`.
 
 **A forecast.** `WeatherDirector::forecast(&climate, &location, &clock, hours)` returns the preset the scheduler will choose for each of the next `hours` game hours, by running the same seeded chain forward without changing anything: the weather then comes as forecast (with the same climate and location), whatever is forced meanwhile, since the chain keeps stepping underneath a force. A morning board can say that a storm comes this afternoon. `SurfaceWeathering` compares with `==` (its private snowpack state included), so a save that holds it can derive `PartialEq`.

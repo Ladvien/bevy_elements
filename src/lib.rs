@@ -38,8 +38,8 @@ pub use query::{Environment, EnvironmentSnapshot};
 
 // Celestial: clock, location, sun, moon, exposure; `astro` holds the ephemeris functions.
 pub use celestial::{
-    CelestialPlugin, CelestialSettings, CivilDate, GeoLocation, Moon, Sun, SunState, WorldClock,
-    astro,
+    CelestialPlugin, CelestialSettings, CivilDate, ElementsExposure, GeoLocation, Moon, Sun,
+    SunState, WorldClock, astro, light,
 };
 
 // Climate, seasons, weather.
