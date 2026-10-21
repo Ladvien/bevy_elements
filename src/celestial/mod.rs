@@ -816,13 +816,32 @@ fn auto_exposure(
 /// floor, `E / π`.
 pub(crate) const NIGHT_SKY_LUMINANCE: f32 = ILLUMINANCE_FLOOR_LUX / std::f32::consts::PI;
 
+/// The atmosphere's transmittance at the zenith, per channel: what the sky behind it comes
+/// through. Measured from the capture against the probe's neutral clear colour
+/// (`docs/research/night-sky-colour.md`, Deviation 1): (0.904, 0.640, 0.353). It is Rayleigh
+/// extinction — the blue is scattered out of the line of sight most — and it is *warm*, so a
+/// neutral clear colour behind it is a brown sky.
+pub(crate) const ZENITH_TRANSMITTANCE: Vec3 = Vec3::new(0.904, 0.640, 0.353);
+
 /// Clear every [`SkyBackground`] camera to the night sky's background radiance at its exposure.
 /// The clear colour is written to the target before the sky and is never exposed, so it is
 /// given in display units; Bevy's atmosphere then draws over it with its transmittance.
+///
+/// The clear colour is what lies **behind** the atmosphere, and the atmosphere's transmittance is
+/// warm — it takes the blue out of the line of sight most — so a neutral clear colour comes
+/// through as a sepia sky. The clear colour is therefore the night sky's *scotopic* colour
+/// divided by that transmittance: the sky that comes out is the cool blue-black the rod's eye
+/// expects (Jensen et al. 2001 §7 on the blue shift, and the scotopic curve, whose peak is at
+/// 507 nm), and the horizon, whose path is longer, is warmer — as it is in the capture
+/// (red/green 1.41 at the zenith, 2.12 at the low sky).
 fn sky_background(mut cameras: Query<(&mut Camera, Option<&Exposure>), With<SkyBackground>>) {
     for (mut camera, exposure) in &mut cameras {
         let v = NIGHT_SKY_LUMINANCE * exposure.copied().unwrap_or_default().exposure();
-        let colour = Color::linear_rgb(v, v, v);
+        let colour = Color::linear_rgb(
+            v * NIGHT_SKY_COLOUR.x / ZENITH_TRANSMITTANCE.x,
+            v * NIGHT_SKY_COLOUR.y / ZENITH_TRANSMITTANCE.y,
+            v * NIGHT_SKY_COLOUR.z / ZENITH_TRANSMITTANCE.z,
+        );
         if !matches!(camera.clear_color, ClearColorConfig::Custom(c) if c == colour) {
             camera.clear_color = ClearColorConfig::Custom(colour);
         }
@@ -1123,6 +1142,44 @@ mod tests {
         };
         let (colour, _) = cloud_ambient(&sunrise, 0.0, storm);
         assert!(colour.x > colour.y && colour.y > colour.z, "{colour}");
+    }
+
+    /// The clear colour behind the atmosphere must be blue enough to survive the atmosphere's
+    /// warm transmittance. A *neutral* clear colour comes through as a sepia sky: the night sky
+    /// measured R/G 1.52 and B/G 0.51 before this, and the crate's own `twilight.md` says the
+    /// night should be "Nothing brown" (`docs/research/night-sky-colour.md`).
+    ///
+    /// The test checks the sky's *result* rather than the clear colour: the ratio of the
+    /// clear colour to the zenith's transmittance must be the scotopic colour, and the
+    /// transmittance must be warm — that is what makes the division necessary.
+    #[test]
+    fn the_night_sky_behind_the_atmosphere_is_blue() {
+        // The atmosphere's transmittance is warm: the blue is scattered out of the line of sight
+        // most.
+        assert!(
+            ZENITH_TRANSMITTANCE.x > ZENITH_TRANSMITTANCE.z,
+            "the transmittance is not warm: {ZENITH_TRANSMITTANCE:?}"
+        );
+        // The clear colour is the scotopic colour divided by the transmittance, so what comes
+        // through is the scotopic colour.
+        let clear = NIGHT_SKY_COLOUR / ZENITH_TRANSMITTANCE;
+        let through = clear * ZENITH_TRANSMITTANCE;
+        assert!(
+            through.z > through.x,
+            "the sky behind the atmosphere is not blue: {through:?}"
+        );
+        for c in 0..3 {
+            assert!(
+                (through[c] - NIGHT_SKY_COLOUR[c]).abs() < 1e-4,
+                "the round trip is not the scotopic colour: {through:?}"
+            );
+        }
+        // And the clear colour is *more* blue than the scotopic colour, not less: that is what
+        // the division buys.
+        assert!(
+            clear.z / clear.x > NIGHT_SKY_COLOUR.z / NIGHT_SKY_COLOUR.x,
+            "the clear colour is not blue enough: {clear:?}"
+        );
     }
 
     #[test]
