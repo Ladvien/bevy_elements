@@ -99,9 +99,54 @@ fn perlin3_d(p: vec3<f32>) -> vec4<f32> {
     return vec4<f32>(value, grad) * 1.1547;
 }
 
-/// Gradient (Perlin) noise, roughly in [-1, 1].
+/// Gradient (Perlin) noise, roughly in [-1, 1]: the **value only**.
+///
+/// The same function as `perlin3_d` with the **derivative omitted**: the derivative is a second
+/// large polynomial — eight vector differences, a `du` term and three swizzles — and it is
+/// computed for every evaluation whether or not the caller wants it.
+///
+/// The crate makes **five** evaluations per rock pixel and **four** of them use the value
+/// alone: the bed's region, the rock's rind, the second joint set's segment field, the turf's
+/// patch field and the scree's grain. So the derivative is computed and thrown away most of
+/// the time, on the crate's hottest path (`docs/research/rock-cost.md`).
+///
+/// The value is **bit-identical** to `perlin3_d(p).x`: the same eight lattice gradients and the
+/// same interpolation, with only the derivative's terms left out. So a call site can switch
+/// without changing a single pixel.
 fn perlin3(p: vec3<f32>) -> f32 {
-    return perlin3_d(p).x;
+    let i = vec3<i32>(floor(p));
+    let f = p - floor(p);
+    let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+
+    let ga = lattice_gradient(i);
+    let gb = lattice_gradient(i + vec3<i32>(1, 0, 0));
+    let gc = lattice_gradient(i + vec3<i32>(0, 1, 0));
+    let gd = lattice_gradient(i + vec3<i32>(1, 1, 0));
+    let ge = lattice_gradient(i + vec3<i32>(0, 0, 1));
+    let gf = lattice_gradient(i + vec3<i32>(1, 0, 1));
+    let gg = lattice_gradient(i + vec3<i32>(0, 1, 1));
+    let gh = lattice_gradient(i + vec3<i32>(1, 1, 1));
+
+    let va = dot(ga, f);
+    let vb = dot(gb, f - vec3<f32>(1.0, 0.0, 0.0));
+    let vc = dot(gc, f - vec3<f32>(0.0, 1.0, 0.0));
+    let vd = dot(gd, f - vec3<f32>(1.0, 1.0, 0.0));
+    let ve = dot(ge, f - vec3<f32>(0.0, 0.0, 1.0));
+    let vf = dot(gf, f - vec3<f32>(1.0, 0.0, 1.0));
+    let vg = dot(gg, f - vec3<f32>(0.0, 1.0, 1.0));
+    let vh = dot(gh, f - vec3<f32>(1.0, 1.0, 1.0));
+
+    let k1 = vb - va;
+    let k2 = vc - va;
+    let k3 = ve - va;
+    let k4 = va - vb - vc + vd;
+    let k5 = va - vc - ve + vg;
+    let k6 = va - vb - ve + vf;
+    let k7 = -va + vb + vc - vd + ve - vf - vg + vh;
+
+    let value = va + u.x * k1 + u.y * k2 + u.z * k3 + u.x * u.y * k4 + u.y * u.z * k5
+        + u.z * u.x * k6 + u.x * u.y * u.z * k7;
+    return value * 1.1547;
 }
 
 /// Gradient (Perlin) noise on a lattice that wraps every `period` cells on every axis, so the

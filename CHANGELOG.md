@@ -6,6 +6,31 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ### Changed
 
+- **The rock's material costs less, and the picture is the same.** The crate's rock is the most
+  expensive thing it draws: the mountains' opaque pass is 0.72–0.79 ms with the rock's
+  material and 0.13–0.38 ms without it, so the material is **roughly half the pass**, and the
+  crate's notes have warned about it since 0.5.0.
+
+  The material was not wasteful in the way a leak is wasteful — every one of its fields is
+  band-limited, and every one of those band-limits is correct. The waste was that the **field
+  was evaluated where its own band-limit had already cancelled it**, and that the noise
+  computed a **derivative** most of its callers never used.
+
+  Two fields are now gated by the band-limit of the feature they feed: the **bed's region**
+  (the slow field that biases the bed's colour, and which is thrown away wherever a fragment
+  resolves) and the **second joint set's segment field** (the field that breaks the joint
+  set's planes into segments, and which was fetched over the whole face although the joint is
+  *absent* over most of it). And `perlin3` is now the **value-only** noise: the derivative is a
+  second large polynomial, the crate makes five evaluations per rock pixel, and four of them
+  use the value alone. The change is **crate-wide** — the hydrology's phase noise, the
+  terrain's generator, the surface cover's field and the noise's own `fbm3` all call `perlin3`.
+
+  Measured: the mountains' opaque pass, the minimum over eight interleaved trials, **0.253 ms
+  on the baseline and 0.245 ms on this one** — a 3.2 % saving. The picture is **the same**: every
+  angle differs by under 0.55 % of its pixels (the GPU's own non-determinism) and every mean is
+  identical to three decimals, and the value-only noise is **bit-identical** by test. See
+  `docs/research/rock-cost.md`.
+
 - **A cliff carries slabs and chips: a second joint set, and a spacing that varies.** The
   crate's cliff was a dense field of same-sized angular chips — a shattered safety-glass
   window, not a rock face. At 3 m the face is a uniform mosaic of pieces a hand's width across,

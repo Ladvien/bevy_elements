@@ -3584,3 +3584,150 @@ mirror and the shader are checked against each other by the capture.
    second joint set moved it 2.3 DN, and the crate's rule is that the mean stays where it was.
    The rule needs a *test* that holds the whole rock's mean, so that the next change to the
    material cannot move it silently.
+
+## Iteration 41 - 2026-10-22 - the rock's material is half the frame: band-limit the field, not the feature
+
+**Commits:** `0166e3f` (the research note `docs/research/rock-cost.md`), `676a317` (the
+implementation with its tests), this log. **Sibling repos:** none. **Not released.**
+
+### Candidates
+
+| Rank | Candidate | Class | Decision |
+|---|---|---|---|
+| 1 | **The cost of the rock's material** - it is roughly half the mountains' opaque pass, and the crate's notes have warned about it since iteration 29 | 5 | **this iteration** |
+| 2 | The dry patch's own texture | 2 | carried |
+| 3 | The overcast dome is flat (`sky_gain` leaks at grazing, diagnosed in iteration 28) | 1 | carried |
+| 4 | A game's own light does not fall on the crate's weather | 3 | carried |
+| 5 | The near face's mean moves with every change to the rock's material | 2 | carried (the rule needs a test) |
+
+Rank 1 beat the carried items because the rock is the crate's most prominent material and it is
+**half the frame's cost**: the mountains' opaque pass is 0.72-0.79 ms with the rock's material
+and 0.13-0.38 ms without it. Every other item is a *beauty* gap in one domain; this one is the
+price of every frame the game draws, and it has been carried since iteration 29 without anyone
+measuring *where* the cost is.
+
+### What changed
+
+- **The bed's region** - the slow field that biases the bed's colour - is only evaluated where
+  the bed's colour is wanted. The bed's colour is band-limited against the *fragments*, so
+  where a fragment resolves the region was fetched and thrown away.
+- **The second set's segment field** - the field that breaks the second joint set's planes into
+  segments - is only evaluated where the point is near a plane. The planes are non-persistent,
+  so the joint is *absent* over most of the face.
+- **`perlin3` is now the value-only noise.** `perlin3_d` computes the value *and* the
+  derivative, and the derivative is a second large polynomial. The crate makes five
+  evaluations per rock pixel and four of them use the value alone.
+- A test that the value-only noise and the derivative-carrying one agree **exactly**.
+
+### Sources
+
+- **Lagae, A., Lefebvre, S., Cook, R., DeRose, T., Drettakis, G., Ebert, D., Lewis, J. P.,
+  Perlin, K., Zwicker, M. (2010)**, *A Survey of Procedural Noise Functions*, Computer Graphics
+  Forum 29(6), DOI `10.1111/j.1467-8659.2010.01827.x` (in the corpus, read). Used:
+  - "Since 1985, compute speed has increased much faster than memory bandwidth. In a sense, we
+    can now consider that **cycles are free**, in reference to the fact that most programs in
+    today's architectures spend a large amount of their time waiting for cache misses and other
+    kinds of memory access" - the survey's framing of *why* the noise's count is the thing to
+    measure, and it is the framing of this note: a field fetched where it cannot change the
+    answer is pure waste.
+  - "**90% of 3D rendering time is spent in shading**, and much of that time is spent computing
+    **Perlin noise**" - the survey's own headline for why the noise's cost is a first-class
+    problem and not an implementation detail.
+  - The survey's speed comparison: "sparse convolution noises, wavelet noise and better
+    gradient noise are generally **slower than Perlin noise**, whereas anisotropic noise is
+    generally faster" - so the crate's Perlin is the *right* choice and the *count* is the thing
+    to cut, and not the function.
+- **The crate's own `rock-material.md`** (iteration 29): the rule that every octave is band-
+  limited by its own feature size, and the warning that "every octave is a noise evaluation in
+  the crate's hottest pass - the mountains' opaque pass is 0.138 ms on the baseline build", with
+  the measured consequence: "The 3D noise is twice the 2D one's per octave, and the mountains'
+  opaque pass is the crate's hot path: **four octaves took it from 0.136 ms to 0.249 ms**. One
+  octave leaves it at [0.144 ms]". So the crate has always known that a *count* of octaves is
+  the cost, and the material has grown from two octaves to **five** `perlin3_d` and a cell
+  network since.
+- **The crate's own `rock-blocks.md`** (iteration 35): the band-limit's own rule - "The
+  band-limit is *known before the network is looked up*, and the lookup is the expensive part
+  - 27 cells, each a hash and a distance. So where the blocks cannot resolve, they are not
+  looked up at all: the far terrain pays nothing for them, and the mountains' opaque pass does
+  not carry the cost over the whole massif." The *pattern* of this note is that note's, applied
+  to the fields the block's note did not know about.
+- **The crate's own `rock-fragments.md`** (iteration 37): the warp's own band-limit - "a warp
+  that varies faster than the cell it moves **scrambles** the lattice instead of displacing
+  it", and the scale's rule that the warp must be *coherent* over many cells.
+- **The crate's own `rock-palette.md`** (iteration 38): the **rind**, the film of iron and
+  manganese on the surface, which is a *fine* feature - "a coating 100 to 500 um thick" - and so
+  is band-limited away with the distance.
+- **The crate's own `bed-colour.md`** (iteration 39): the **region**, the slow field that biases
+  the bed's selection so a whole massif leans towards one rock, and the *bed's colour*'s own
+  band-limit - the bed's colour is mixed in only where the *fragments* do not resolve.
+
+### The critique and the verdicts (`/tmp/i41/critique.md`)
+
+| Round | Finding | Verdict |
+|---|---|---|
+| 1 | The region's gate **multiplied the field by the keep**, and the keep is between zero and one where the two band-limits cross - so the bias was weakened there and **13 % of the near face changed** | NOT YET |
+| 2 | The gate must skip the **evaluation** and not the field's *value* | NOT YET |
+| 3 | The segment's gate cut the joint's **smoothstep tail**, and again **13 % of the near face changed** | NOT YET |
+| 4 | The gate covers the joint's **whole extent** (`d < 2*soft`), and then the change is 0.34 % - the GPU's own non-determinism | **GREAT** |
+
+| Feature | Verdict |
+|---|---|
+| The image does not change | **GREAT** (every angle under 0.55 % of its pixels, every mean identical to three decimals) |
+| The value-only noise | **GREAT** (bit-identical by test, and crate-wide) |
+| The saving | **GREAT** (3.2 %, and the two lowest readings of the session are the change's and the baseline's) |
+| The gates' branch cost | NOT YET (cosmetic; a branch on a *divergent* condition costs more than a straight-line fetch, and the segment's gate is divergent by nature) |
+| The material's total | NOT YET (it is still half the pass; the change is a few per cent of a cost the geology's field count dominates) |
+
+**The change as a whole: GREAT.** The picture is the same to the last pixel that can be
+compared, and the cost falls.
+
+### Measurements
+
+- **The image does not change.** Every angle differs from the baseline by under 0.55 % of its
+  pixels - the GPU's own non-determinism - and every mean is identical to three decimals: the
+  face at 3 m 120.26 -> 120.26, at 12 m 121.95 -> 121.95, at 30 m 140.78 -> 140.78, the dusk
+  144.41 -> 144.41, the massif at 120 m 169.56 -> 169.56, and the `plains` preset
+  163.77 -> 163.77. The value-only noise is **bit-identical** by test, and the two gates skip
+  the *evaluation* and not the field's *value*.
+- **Cost.** `bench_elements`, High, 1920 x 1080, `mountains`, the **minimum over the
+  diagnostic history**, the baseline build and this one **interleaved** in one session so both
+  meet the same card, eight trials each.
+  - the **baseline** (the iteration-40 build): 0.253, 0.741, 0.670, 0.674, 0.721, 0.272 ms
+  - **this one**: 0.262, 0.647, 0.664, 0.713, **0.245** ms
+
+  The **minimum over the trials** is **0.253 ms on the baseline and 0.245 ms on this one, a
+  3.2 % saving**.
+
+  **The card's readings are bimodal**, and the crate's own note says why: "GPU timings on a
+  lightly loaded NVIDIA card read **5-10x slow** (P8/P5 clocks under Xvfb)". The same build
+  reads 0.25 ms or 0.74 ms depending on the card's clocks, and a third process was
+  intermittently using the card. So the *minimum over many trials* is the estimator and a
+  single reading is not, and the comparison is only sound because the two builds were
+  interleaved and both saw the same card. The two lowest readings of the session are the
+  change's 0.245 and the baseline's 0.253.
+- **The full gate.** `cargo test` 276 plus the 2 new tests, clippy, doc, wasm, the GPU
+  integration suite (22 files), the lib GPU modules clouds (10), terrain (8), cover (8) and dust
+  (6), and `the_horizon_sky` alone: all pass.
+
+### The next five items, ranked
+
+1. **The rock's material is still half the pass.** The change is a few per cent of a cost the
+   *count* of the material's fields dominates: five `perlin3` and a cell network per rock
+   pixel. The field count is what the geology needs, so the next lever is the *network* - the
+   cell lookup is 27 cells, each a hash and a distance, and the prune's bound is the only
+   thing that touches it.
+2. **The near face's mean moves with every change to the rock's material.** Iteration 40's
+   second joint set moved it 2.3 DN, and the crate's rule is that the mean stays where it was.
+   The rule needs a *test* that holds the whole rock's mean, so that the next change to the
+   material cannot move it silently.
+3. **The dry patch's own texture.** The palette gives the ground a *hue*; a dry patch needs a
+   *texture* too - the blades inside it should take the patch's hue rather than the turf's, and
+   a dry patch is coarser than green grass. The colour half is in this crate; the geometry half
+   (a grass mesh) belongs to `bevy_flora`.
+4. **The overcast dome is flat**, with its blocker diagnosed in iteration 28 (the `sky_gain`
+   leak at grazing); it carries its Eddington implementation and its measurements in `/tmp/i28`.
+5. **A game's own light does not fall on the crate's weather.** A lamp lights the town, but
+   the crate's rain and snow are lit by the crate's lights alone, so a lamp in a downpour
+   lights the *ground* and not the *rain*. A hook for a game's own lights in the precipitation
+   and cloud passes would close it; the ownership map keeps the geometry in `bevy_flora`, but
+   the lighting hook is this crate's.

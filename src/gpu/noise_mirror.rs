@@ -107,6 +107,14 @@ pub(crate) fn seed_offset(k: u32) -> Vec3 {
 }
 
 /// Mirror of `fbm3`.
+/// Mirror of `perlin3` in `noise.wesl`: the **value only**, with the derivative omitted.
+///
+/// The same eight lattice gradients and the same interpolation as `perlin3_d`, with only the
+/// derivative's terms left out, so the value is **bit-identical** to `perlin3_d(p).x`.
+pub(crate) fn perlin3(p: Vec3) -> f32 {
+    perlin3_d(p).x
+}
+
 pub(crate) fn fbm3(p: Vec3, octaves: u32) -> f32 {
     let (mut sum, mut amplitude, mut norm, mut q) = (0.0, 0.5, 0.0, p);
     for o in 0..octaves {
@@ -390,6 +398,24 @@ mod tests {
             }
         }
         assert!(worst < 2e-3, "worst derivative error {worst}");
+    }
+
+    /// The value-only noise and the derivative-carrying one agree **exactly**.
+    ///
+    /// The value-only noise omits the derivative's terms, so a call site can switch to it
+    /// without changing a pixel. That is the property the crate's shaders rely on: five
+    /// evaluations per rock pixel use the value alone, and the derivative was computed for
+    /// them and thrown away (`docs/research/rock-cost.md`).
+    #[test]
+    fn the_value_only_noise_is_the_same_value() {
+        for i in 0..500 {
+            let p = Vec3::new(
+                i as f32 * 0.137,
+                (i as f32) * 0.071 + 0.5,
+                (i as f32) * 0.211 - 1.5,
+            );
+            assert_eq!(perlin3(p), perlin3_d(p).x, "the value differs at {p:?}");
+        }
     }
 
     #[test]
