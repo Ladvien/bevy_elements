@@ -113,7 +113,9 @@ fragments' was: the equal-weight mean is exactly (1, 1, 1).
 | The palette | the fragments' four rocks, at the bed's scale | iteration 38's palette; a bed is a rock |
 | The score's shape | a narrow split on the bed's index | iteration 38's construction: a product of smooth fields blends, and the blend is what left the cliff at one hue |
 | The palette's mean | exactly (1, 1, 1) | the crate's rule: the mean colour and brightness stay where they were |
-| The band-limit | the *fragments'* band-limit | the fragments carry the near field; the beds carry the far one |
+| The band's limit | the *fragments'* band-limit: the joint's width | the fragments carry the near field; the beds carry the far one |
+| The region's scale | 260 m | a formation is a massif, and a massif is hundreds of metres |
+| The region's bias | 0.30, on the noise's own range | a bias and not a replacement: a saturated bias moved the frame's mean 66 DN |
 | The saturation | the palette's own, 0.10 to 0.30 | iteration 38: rock is a desaturated colour |
 
 ## GPU mapping
@@ -152,8 +154,38 @@ fragments' was: the equal-weight mean is exactly (1, 1, 1).
 
 ## Deviations from this plan
 
-*(filled in as the implementation settles; every changed default is recorded here with its
-citation.)*
+1. **The region is a *slow field* that biases the bed's selection, and not the bed's own
+   draw.** The plan had the bed's colour drawn on the bed's index alone. That gives the beds
+   their colour, and the beds are *horizontal*, so the result at a distance is a set of
+   **stripes** — and a range of mountains is not banded, it is made of *formations*, and a
+   formation is a whole massif. So a slow field at the massif's scale (**260 m**) biases the
+   bed's selection, and the massifs separate into warm and cool.
+2. **The region's bias is WEAK, and its value is the noise's own range.** The first version
+   normalised the field by the noise's rms and multiplied it by 0.42, and it **saturated** the
+   selection: one tone took a whole massif, the rock's mean colour then depended on which tone
+   a massif happened to get, the frame's mean moved **66 DN**, and the massif came out as a
+   **flat dark blue silhouette**. The field is a *bias* and not a replacement, the bias is
+   **0.30**, and the field's value is the noise's own range rather than its rms.
+3. **The bed's colour is band-limited against the *fragments*, and the limit is the
+   fragments' own.** The plan said the band-limit was the fragments' band-limit, and it is:
+   their limit is the **joint's width**, and it is a *known* number, so the limit is computed
+   directly and the blocks' lookup is not needed for it. The two are then band-limited against
+   each other **exactly once**: where a fragment resolves it wears its own rock, and where it
+   is gone the bed's own rock shows through.
+   The limit has to be applied **inside** the bed's own value and not to the finished tone.
+   Applied to the finished tone, the bed's colour was mixed in at *every* distance, the two
+   palettes compounded, and the face at 3 m changed in **83 %** of its pixels.
+4. **The bed's tone is a `vec3` and not a scalar, and the bed's *value* is unchanged.** The
+   bed's brightness spread — `1 + ROCK_BED_TONE·(h·2 − 1)` — is exactly what it was, and the
+   *colour* is mixed in on top of it at the palette's own strength. The mean therefore holds by
+   construction, and the frame's mean moves **0.3 DN** at 120 m and **not at all** at 300 m.
+5. **The note's validation target at 300 m is not reachable, and the reason is the
+   atmosphere.** The target was the hue's resultant falling by 0.05, and it falls by **0.076**
+   — the target is met. But the *chroma's* median does not rise at all (0.0235 before and
+   after): the rock's colour varies in **hue** and not in **saturation**, because at 300 m the
+   frame's rock is about 70 % haze and the haze's own blue is the colour the eye reads. That is
+   physically right and it is the atmosphere's limit, not the palette's. The target is
+   restated on the *hue* and not on the chroma.
 
 ## Pending index
 
