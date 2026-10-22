@@ -246,6 +246,8 @@ pub(crate) const ROCK_TONES: [Vec3; 4] = [
 ];
 /// The width of a split in the palette, as a fraction of the draw's range (`common.wesl`).
 pub(crate) const ROCK_PALETTE_EDGE: f32 = 0.12;
+/// How far the region's field biases the bed's selection (`common.wesl`).
+pub(crate) const BED_REGION_BIAS: f32 = 0.30;
 /// How far the palette is mixed in, 0 to 1 (`common.wesl`).
 pub(crate) const ROCK_PALETTE_STRENGTH: f32 = 0.90;
 
@@ -282,6 +284,50 @@ pub(crate) fn rock_palette(p: Vec3) -> Vec3 {
     // The palette is mixed in at its own strength (`common.wesl`), so the mirror's colour is
     // the shader's.
     Vec3::ONE.lerp(mixed, ROCK_PALETTE_STRENGTH)
+}
+
+/// The rock's **palette** at the *bed's* scale (`docs/research/bed-colour.md`).
+///
+/// The same four rocks as the fragments' palette, and the same normalisation: the
+/// equal-weight mean is exactly (1, 1, 1), so the rock's mean colour cannot drift.
+pub(crate) const BED_TONES: [Vec3; 4] = ROCK_TONES;
+/// The width of a split in the palette, as a fraction of the draw's range (`common.wesl`).
+pub(crate) const BED_PALETTE_EDGE: f32 = ROCK_PALETTE_EDGE;
+/// How far the palette is mixed in, 0 to 1 (`common.wesl`).
+pub(crate) const BED_PALETTE_STRENGTH: f32 = ROCK_PALETTE_STRENGTH;
+
+/// A bed's own **colour** at a bed index: the palette's mixture for that index, and its own
+/// brightness.
+///
+/// The **selection** is the bed's index's own hash and the **distribution** a second,
+/// independent hash of the same index. The **region** is a slow field that biases both, so a
+/// whole massif leans towards one rock and the massifs separate into warm and cool.
+pub(crate) fn bed_palette(index: f32, region: f32) -> Vec3 {
+    let i = index.floor() as i32;
+    let h = crate::gpu::noise_mirror::hash31(IVec3::new(i, 7, 0));
+    let h2 = crate::gpu::noise_mirror::hash31(IVec3::new(i, 11, 0));
+    let sel = smoothstep(
+        0.5 - BED_PALETTE_EDGE,
+        0.5 + BED_PALETTE_EDGE,
+        (h + region * BED_REGION_BIAS).clamp(0.0, 1.0),
+    );
+    let reg = smoothstep(
+        0.5 - BED_PALETTE_EDGE,
+        0.5 + BED_PALETTE_EDGE,
+        (h2 + region * BED_REGION_BIAS).clamp(0.0, 1.0),
+    );
+    let shares = [
+        (1.0 - sel) * (1.0 - reg),
+        (1.0 - sel) * reg,
+        sel * (1.0 - reg),
+        sel * reg,
+    ];
+    let total: f32 = shares.iter().sum();
+    let mut mixed = Vec3::ZERO;
+    for (share, tone) in shares.iter().zip(BED_TONES.iter()) {
+        mixed += *tone * (*share / total);
+    }
+    Vec3::ONE.lerp(mixed, BED_PALETTE_STRENGTH)
 }
 
 /// The joint's weight at a world point, 0 to 1: how close the point is to a block's boundary.
@@ -657,6 +703,66 @@ mod tests {
         assert!(
             differ * 100 / samples > 60,
             "the fragments are of different rock: {differ} of {samples} neighbours differ"
+        );
+    }
+
+    /// The **beds** carry a palette too, and the beds of a succession are of *different rock*.
+    ///
+    /// The measure: the hue of the beds' colours over a run of bed indices. A succession's beds
+    /// are a sandstone, a shale, a limestone — different minerals, different colours — and the
+    /// crate's bed's tone was a *scalar*, so a distant massif was one grey.
+    #[test]
+    fn the_beds_are_of_different_rock() {
+        // The beds' own hues over a run of indices, and the *region*'s effect on them.
+        let mut hues = Vec::new();
+        for i in 0..200 {
+            let c = bed_palette(i as f32, 0.0);
+            let max = c.x.max(c.y).max(c.z);
+            let min = c.x.min(c.y).min(c.z);
+            let d = max - min;
+            if d < 1e-6 {
+                continue;
+            }
+            let h = if max == c.x {
+                ((c.y - c.z) / d).rem_euclid(6.0)
+            } else if max == c.y {
+                (c.z - c.x) / d + 2.0
+            } else {
+                (c.x - c.y) / d + 4.0
+            };
+            hues.push(h * 60.0);
+        }
+        assert!(hues.len() > 150, "the hues to measure: {}", hues.len());
+        let mut sorted = hues.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let spread = sorted[sorted.len() - 1] - sorted[0];
+        assert!(
+            spread > 60.0,
+            "the beds are of different rock: the hue's spread is {spread:.1} degrees"
+        );
+    }
+
+    /// The **region** shifts the beds' colour, so a whole massif is one rock and not a set of
+    /// stripes.
+    ///
+    /// The measure: the *same* bed's colour under two different regions. A range of mountains
+    /// is made of *formations*, and a formation is a massif — so the field is at the massif's
+    /// scale and the bed's own draw only tints it.
+    #[test]
+    fn the_region_shifts_the_beds_colour() {
+        let mut differ = 0;
+        let mut samples = 0;
+        for i in 0..200 {
+            let a = bed_palette(i as f32, -0.5);
+            let b = bed_palette(i as f32, 0.5);
+            if (a - b).length() > 0.02 {
+                differ += 1;
+            }
+            samples += 1;
+        }
+        assert!(
+            differ * 100 / samples > 50,
+            "the region shifts the beds' colour: {differ} of {samples} beds differ"
         );
     }
 
