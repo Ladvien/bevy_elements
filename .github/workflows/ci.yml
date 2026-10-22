@@ -16,7 +16,6 @@ env:
 jobs:
   build:
     name: build (standalone) + test
-    needs: lint
     runs-on: [self-hosted, big]
     steps:
       - uses: actions/checkout@v4
@@ -76,7 +75,6 @@ jobs:
 
   wasm:
     name: wasm32 (WebGPU) library build
-    needs: lint
     runs-on: [self-hosted, big]
     steps:
       - uses: actions/checkout@v4
