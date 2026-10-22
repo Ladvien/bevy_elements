@@ -3399,3 +3399,188 @@ near field is untouched, and the meadow is untouched.
    lights the *ground* and not the *rain*. A hook for a game's own lights in the precipitation
    and cloud passes would close it; the ownership map keeps the geometry in `bevy_flora`, but
    the lighting hook is this crate's.
+
+## Iteration 40 - 2026-10-22 - a cliff carries slabs and chips: a second joint set, and a spacing that varies
+
+**Commits:** `d0a9d08` (the research note `docs/research/block-sizes.md`), `3502f23` (the
+implementation with its test), `76ee3ae` (the note's Deviations), `c9b50b6` (the README, the
+changelog and the showcase image), this log. **Sibling repos:** none. **Not released.**
+
+### Candidates
+
+| Rank | Candidate | Class | Decision |
+|---|---|---|---|
+| 1 | **The cliff is a field of equal pieces** - a shattered safety-glass window, every cell the same size and shape | 2 | **this iteration** |
+| 2 | The cost of the blocks, +28 % on the rock's pass in iteration 35 and the warps and the palettes on top of it | 5 | carried |
+| 3 | The dry patch's own texture | 2 | carried |
+| 4 | The overcast dome is flat (`sky_gain` leaks at grazing, diagnosed in iteration 28) | 1 | carried |
+| 5 | A game's own light does not fall on the crate's weather | 3 | carried |
+
+Rank 1 beat the carried items because the cliff is the crate's most prominent material and the
+*last* thing it was missing: iteration 35 gave it pieces, 36 gave the massif its succession, 37
+gave the pieces their irregularity, 38 gave them their colour and 39 gave the colour to the
+distance - and through all of that the pieces were all the *same size*. The measurement is
+simple and damning: the face at 3 m is a uniform mosaic, and the dusk capture reads as
+**cracked mud**.
+
+### What changed
+
+- **A second joint set**: a family of parallel planes across the bedding, and the blocks
+  between the two sets are *slabs*. A family of planes is a **period**, and a period is a
+  **coordinate** - so the second set costs a dot product, a division and a `fract`, and *no
+  second lookup*.
+- **The second set's spacing is a *formation's* own draw**, and the formation is 46 m across,
+  so the spacing is constant within a formation and changes between formations.
+- **The spacing's draw is a Weibull**, the distribution the fracture spacing follows.
+- **The planes wander and they end**: a joint set's fractures are non-persistent, and a
+  perfectly straight plane set reads as a wire fence across the face.
+- The second set's **relief** is along its own normal, so the two sets' steps cross.
+
+### Sources
+
+- **Verdian, J. P., Sklar, L. S., Riebe, C. S., Moore, J. R. (2021)**, *Sediment size on talus
+  slopes correlates with fracture spacing on bedrock cliffs*, Earth Surface Dynamics 9:1073-1090,
+  DOI `10.5194/esurf-9-1073-2021` (open access; the PDF was downloaded to
+  `/tmp/research/verdian2021.pdf` and read in full, 914 lines). Used, and it is the model this
+  note adopts:
+  - The **mechanism**: the initial size distribution "should depend on three factors: the size
+    distribution of discrete blocks latent within bedrock, the weathering processes that modify
+    rock in situ, and the weathering processes that detach and mobilize the sediment. Where
+    effects of weathering on size are minimal, the initial size distribution should strongly
+    reflect the size distribution of latent blocks (i.e., the **"latent size distribution"**),
+    which is **set by the spacing and orientation of fractures, foliations, and bedding planes**
+    (Sklar et al., 2017). These represent preexisting planes of weakness and determine the
+    volume and shape of newly created sediment particles".
+  - So a block is the **intersection of THREE families of planes**, and its size is the product
+    of three spacings - and a product of three is a much heavier-tailed distribution than one.
+  - The **spacings'** own distribution: the fracture spacing's is a **Weibull** ("the Weibull
+    form of the exponential distribution ... yielded the best fit to the data in most cases"),
+    running "from 2 to 5000 mm" with the site medians "from 10 to 390 mm" and a **geometric
+    standard deviation** of 0.214 to 0.551 across the fifteen sites.
+  - The **shape**: the blocks are rods, slabs and equi-sided blocks, with the b : a and c : a
+    ratios of a site's talus averaging 0.64 and 0.35 for the granodiorite and 0.57 and 0.26 for
+    the metasediment, and the universal values for mechanically weathered blocks being **0.67
+    and 0.45** (Domokos et al. 2015). A block is **flat and elongated**, and not a cube.
+  - The **caveat**: the lower tails "follow a steeper trend than the rest of the data ...
+    potentially reflecting an **undersampling of the smallest fractures**" - a survey misses the
+    smallest, so a real cliff has *more* small pieces than a measured one.
+- **Strauhal, T., Zangerl, C. (2021)**, *The Impact of Fracture Persistence and Intact Rock
+  Bridge Failure on the In Situ Block Area Distribution*, Applied Sciences 11, DOI
+  `10.3390/app11093973` (the record and the abstract were read; **the PDF was not obtained** -
+  MDPI returns 403). Used: "The **in situ block size distribution** is an essential
+  characteristic of fractured rock masses"; and the simplification the crate made: "The block
+  size distribution can be estimated rather easily for **fully persistent fractures**, but it is
+  a challenge to determine this parameter when **non-persistent fractures** in a rock mass
+  should be considered. In many approaches, the block size distribution is estimated by
+  **assuming that the fractures are fully persistent**, resulting in an underestimation of the
+  block sizes for many fracture geometries."
+  So the crate's single, always-persistent cell network is exactly the *simplification* this
+  paper names - and the simplification is what makes every piece the same kind of piece.
+- **Macciotta, R., Grapel, C., Skirrow, R. (2020)**, *Fragmented Rockfall Volume Distribution
+  from Photogrammetry-Based Structural Mapping and Discrete Fracture Networks*, Applied Sciences
+  10, DOI `10.3390/app10196977` (the record and the abstract were read; **the PDF was not
+  obtained**). Used: "the **fragmented volume-relative frequency distribution** of rockfalls"
+  is what a fragmentation model needs, and "simple **discrete fracture network** realizations
+  ... can be used to reliably estimate rock fall block volumes" - the block volumes are the
+  *network's* volumes, so the network is where the size distribution has to live.
+- **The crate's own `rock-fragments.md`** (iteration 37): the blocks, the warp and the unequal
+  cells, and the sentence that frames this change - "The size spread comes from the **cells
+  themselves**: the network's feature points are drawn *towards* their cell's centre, so the
+  cells are unequal ... That is the only place a cell network's cells can differ in size, and it
+  costs one multiply." The hole in it: the cells differ in size, but every cell is drawn the
+  *same way*, so the *pieces* do not read as different kinds.
+- **The crate's own `rock-blocks.md`** (iteration 35): the blocks, the joint and the note's own
+  warning - "A Worley cell network cannot make them - it bounds *cells*, so a face reads as a
+  giraffe's hide" - and the **joint sets** (La Pointe & Hudson 1985): "a rock breaks along
+  *joint sets* - families of parallel planes - so its pieces are aligned, not a random heap".
+
+### The critique and the verdicts (`/tmp/i40/critique.md`)
+
+| Round | Finding | Verdict |
+|---|---|---|
+| 1 | The lattice's scale was varied by a *field of the point*, so the cells' boundaries folded over each other and the face came out a **moire of concentric rings** | NOT YET |
+| 2 | The second set is a **coordinate** and not a second network: a family of planes is a period, and a period is a coordinate - so it costs no lookup at all | NOT YET |
+| 3 | The spacing's draw was a *power of a uniform*, which concentrates the values near zero, and the spread came out at 2.2:1 where the Weibull's is 3.2:1 | NOT YET |
+| 4 | The planes were **straight and evenly spaced** - a **wire fence** across the face, the lines running unbroken from edge to edge | NOT YET |
+| 5 | The planes **wander** and they **end**: a finer field breaks them into segments, and the joint is absent where the segment is not | NOT YET |
+| 6 | The pieces' areas at 3 m went *down* (the second set's seams divide the pieces) and the lattice's regularity went down by 30 % | **GREAT** |
+
+| Feature | Verdict |
+|---|---|
+| The face at dusk | **GREAT** (the lattice's regularity is broken: the edge-orientation resultant 0.312 -> 0.219) |
+| The face at 3 m and at 8 m | **GREAT** (the pieces' areas spread at 8 m: the p75/p25 ratio 2.29 -> 3.35) |
+| The face at 20 m | **GREAT** |
+| The distance at 120 m | **GREAT** (unchanged to four decimals) |
+| The meadow | **GREAT** (0 of 921 600 pixels differ) |
+| The cost | see the measurements |
+| The second set's seams' softness | NOT YET (cosmetic; they read as broad grooves rather than cracks) |
+| The lattice's diamonds | NOT YET (cosmetic; faintly visible where the second set's segments are sparse) |
+| The near face's mean | NOT YET (it moves 2.3 DN, because the second set's relief is along its own normal) |
+
+**The change as a whole: GREAT.** The cliff carries slabs and chips, the lattice's regularity
+is broken, the distance is calm, and the meadow is untouched.
+
+### Measurements
+
+- **The lattice's regularity is broken.** The blocks' **edge-orientation resultant** - the
+  circular resultant of the edge angles, which is how strongly the pieces' edges agree on a
+  direction - falls at dusk from **0.312 to 0.219**, and the gradient's direction's resultant
+  from **0.057 to 0.017**. That is the crate's own measure from iteration 37, and it is the
+  measure the defect needed: a lattice of equal cells gives every edge the same direction.
+- **The pieces' areas spread.** At 8 m the area's p75/p25 ratio rises from **2.29 to 3.35**; at
+  3 m it *falls* from 3.19 to 2.68, because the second set's seams *divide* the pieces rather
+  than making them bigger. The measure that improved is the *regularity*, and the log says so
+  rather than quoting the one that did not.
+- **The distance is calm.** The view from 120 m: the material's own high-pass **4.4185 DN
+  before and 4.4184 DN after**, the same to four decimals, and the mean RGB identical.
+- **The meadow is untouched.** The `plains` preset at 6 m: **0 of 921 600 pixels differ**.
+- **The near face's mean moves 2.3 DN** (122.9/122.1/122.6 -> 120.6/120.1/120.8), because the
+  second set's relief is along its own normal and the face's shading changes where the two
+  sets' steps cross. The far field and the meadow are untouched, so the move is confined to the
+  near rock.
+- **Cost.** `bench_elements`, High, 1920 x 1080, `mountains`, the **minimum over the
+  diagnostic history**. The card was contended for most of the session - a *third* process was
+  intermittently using it, and most readings were 0.55-0.85 ms for **both** halves - so the
+  cost was measured by **toggling the second joint set** in the shader, with the two halves
+  **alternating** and each **rebuilt**, so both met the same card. The comparison is immune to
+  the card's state, because both halves met it:
+  - the second joint set **off**: 0.281, 0.672, **0.259** ms
+  - the second joint set **on**: **0.274**, 0.260, 0.719 ms
+
+  The minimum over the three is **0.259 ms off and 0.260 ms on, a 0.4 % regression** - the
+  second joint set is nearly free, which is what the construction says: a family of planes is a
+  **period**, and a period is a **coordinate**, so the set costs a dot product, a division and
+  a `fract` and *no second lookup*. The only new field is the segment's, and it is a single
+  `perlin3_d` on the rock's path.
+- **The full gate.** `cargo test` 274 plus the new spacing test, clippy, doc, wasm, the GPU
+  integration suite (22 files), the lib GPU modules clouds (10), terrain (8), cover (8) and dust
+  (6), and `the_horizon_sky` alone: all pass.
+
+### The new test, and what it measures
+
+`the_second_joint_sets_spacing_varies` measures the second set's **spacing** over many
+formations. It **fails on the baseline** - a crate with no second joint set has one spacing for
+the whole cliff, and the ratio is 1.00 - and it passes on this one at 3.2:1. The test reads the
+spacing from the mirror's *own* function, so the mirror and the test cannot diverge, and the
+mirror and the shader are checked against each other by the capture.
+
+### The next five items, ranked
+
+1. **The cost of the rock's material.** +28 % on the rock's pass in iteration 35, and the two
+   warps, the two palettes and the second joint set on top of it. The prune's bound and the
+   band-limit are the two levers left, and the second set's own segment field is a third.
+2. **The dry patch's own texture.** The palette gives the ground a *hue*; a dry patch needs a
+   *texture* too - the blades inside it should take the patch's hue rather than the turf's, and
+   a dry patch is coarser than green grass. The colour half is in this crate; the geometry half
+   (a grass mesh) belongs to `bevy_flora`.
+3. **The overcast dome is flat**, with its blocker diagnosed in iteration 28 (the `sky_gain`
+   leak at grazing); it carries its Eddington implementation and its measurements in `/tmp/i28`.
+4. **A game's own light does not fall on the crate's weather.** A lamp lights the town, but
+   the crate's rain and snow are lit by the crate's lights alone, so a lamp in a downpour
+   lights the *ground* and not the *rain*. A hook for a game's own lights in the precipitation
+   and cloud passes would close it; the ownership map keeps the geometry in `bevy_flora`, but
+   the lighting hook is this crate's.
+5. **The near face's mean moves with every change to the rock's material.** Iteration 40's
+   second joint set moved it 2.3 DN, and the crate's rule is that the mean stays where it was.
+   The rule needs a *test* that holds the whole rock's mean, so that the next change to the
+   material cannot move it silently.

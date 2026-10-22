@@ -191,6 +191,24 @@ pub(crate) const ROCK_BLOCK_M: f32 = 0.95;
 pub(crate) const ROCK_BLOCK_TABULAR: f32 = 2.6;
 /// The joint's width, as a fraction of the cell's half-boundary distance (`common.wesl`).
 pub(crate) const ROCK_JOINT_WIDTH: f32 = 0.19;
+/// The **second joint set's** normal: a cross joint, roughly perpendicular to the bedding and
+/// tilted (`common.wesl`).
+pub(crate) const ROCK_JOINT2_NORMAL: Vec3 = Vec3::new(0.71, 0.46, -0.53);
+/// The second joint set's **spacing range**, m (`common.wesl`).
+pub(crate) const ROCK_JOINT2_MIN_M: f32 = 0.55;
+pub(crate) const ROCK_JOINT2_MAX_M: f32 = 2.60;
+/// The **formation's** cell, m: the scale at which the second set's spacing is constant
+/// (`common.wesl`).
+pub(crate) const ROCK_FORMATION_M: f32 = 46.0;
+/// How far the second set's planes **wander**, as a fraction of their own spacing
+/// (`common.wesl`).
+pub(crate) const ROCK_JOINT2_WANDER: f32 = 0.48;
+/// How long the second set's segments are, in multiples of their own spacing (`common.wesl`).
+pub(crate) const ROCK_JOINT2_SEGMENT_M: f32 = 1.9;
+/// How sharply a segment ends (`common.wesl`).
+pub(crate) const ROCK_JOINT2_BREAK: f32 = 0.30;
+/// The second set's joint's width, as a fraction of its own spacing (`common.wesl`).
+pub(crate) const ROCK_JOINT2_WIDTH: f32 = 0.075;
 /// The warp that breaks the cells' shape, in metres (`common.wesl`): the warp's vector is the
 /// crate's own 3D noise's *gradient*, whose mean magnitude is 0.94, so the amplitude is also
 /// the displacement's scale. At 0.50 m over a 1.5 m cell the mean displacement is 0.31 of a
@@ -330,6 +348,20 @@ pub(crate) fn bed_palette(index: f32, region: f32) -> Vec3 {
     Vec3::ONE.lerp(mixed, BED_PALETTE_STRENGTH)
 }
 
+/// The **second joint set's** spacing at a world point, m: a *formation's* own draw.
+///
+/// A formation's cross-joint spacing is a property of the formation, so the spacing is
+/// **constant within** it and changes from one formation to the next (`docs/research/
+/// block-sizes.md`).
+pub(crate) fn rock_joint2_spacing(p: Vec3) -> f32 {
+    let formation = (p / ROCK_FORMATION_M).floor();
+    let h = crate::gpu::noise_mirror::hash31(formation.as_ivec3());
+    let weibull = (-(1.0 - h).max(1e-6).ln())
+        .powf(1.0 / ROCK_BLOCK_WEIBULL)
+        .min(ROCK_BLOCK_WEIBULL_MAX);
+    ROCK_JOINT2_MIN_M + (ROCK_JOINT2_MAX_M - ROCK_JOINT2_MIN_M) * weibull / ROCK_BLOCK_WEIBULL_MAX
+}
+
 /// The joint's weight at a world point, 0 to 1: how close the point is to a block's boundary.
 ///
 /// The boundary is the distance to the second nearest feature point, and the joint's own width
@@ -356,7 +388,23 @@ pub(crate) fn rock_joint(p: Vec3) -> f32 {
         .powf(1.0 / ROCK_BLOCK_WEIBULL)
         .min(ROCK_BLOCK_WEIBULL_MAX);
     let width = ROCK_JOINT_WIDTH * (0.25 + ROCK_BLOCK_WEIBULL_SPREAD * weibull);
-    1.0 - smoothstep(0.0, width, half)
+    let joint = 1.0 - smoothstep(0.0, width, half);
+    // The **second joint set**: a family of parallel planes across the bedding, whose spacing
+    // is a *formation's* own draw (`docs/research/block-sizes.md`).
+    let spacing = rock_joint2_spacing(p);
+    let cross = p.dot(ROCK_JOINT2_NORMAL.normalize());
+    let wander = crate::gpu::noise_mirror::perlin3_d(p / (ROCK_BLOCK_M * ROCK_BLOCK_WARP_CELLS)).x
+        * spacing
+        * ROCK_JOINT2_WANDER;
+    let cross_w = cross + wander;
+    let phase = cross_w / spacing;
+    let to_plane = (phase - phase.round()).abs() * spacing;
+    // The planes are **non-persistent**: they end, and a finer field breaks them into
+    // segments (Strauhal & Zangerl 2021).
+    let segment = crate::gpu::noise_mirror::perlin3_d(p / (spacing * ROCK_JOINT2_SEGMENT_M)).x;
+    let present2 = smoothstep(-ROCK_JOINT2_BREAK, ROCK_JOINT2_BREAK, segment);
+    let joint2 = (1.0 - smoothstep(0.0, spacing * ROCK_JOINT2_WIDTH, to_plane)) * present2;
+    joint.max(joint2)
 }
 
 // The beds (`docs/research/bedding.md`)
@@ -630,6 +678,37 @@ mod tests {
             "the blocks are of many sizes: the p90/p10 ratio is {ratio:.2} over {} blocks \
              ({p10:.2} m to {p90:.2} m)",
             sizes.len()
+        );
+    }
+
+    /// The **second joint set's spacing** varies, and that is what makes the pieces many-sized.
+    ///
+    /// A block is the intersection of *two* families of planes, so where the second set's
+    /// planes are close the pieces are chips and where they are far the pieces are slabs
+    /// (`docs/research/block-sizes.md`). The spacing is a *formation's* own draw, so the spread
+    /// is *between* formations, and the formations are 46 m apart.
+    ///
+    /// The measure: the spacing over a run of formations. The spacing's own distribution is a
+    /// Weibull (Verdian et al. 2021: the Weibull form "yielded the best fit to the data in
+    /// most cases"), so the spread is wide.
+    #[test]
+    fn the_second_joint_sets_spacing_varies() {
+        let mut spacings = Vec::new();
+        // The formations are 46 m apart, so the cut crosses many of them.
+        for i in 0..400 {
+            let p = Vec3::new(i as f32 * 3.1, 18.0 + (i as f32) * 0.91, 0.0);
+            spacings.push(rock_joint2_spacing(p));
+        }
+        let mut sorted = spacings.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let p10 = sorted[sorted.len() / 10];
+        let p90 = sorted[sorted.len() * 9 / 10];
+        let ratio = p90 / p10.max(1e-6);
+        assert!(
+            ratio >= 2.5,
+            "the second set's spacing varies: the p90/p10 ratio is {ratio:.2} over {} \
+             formations ({p10:.2} m to {p90:.2} m)",
+            spacings.len()
         );
     }
 
