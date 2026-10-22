@@ -3194,7 +3194,27 @@ not move, the meadow is untouched, and the distance is calm.
 - **The meadow is untouched.** The `plains` preset at 6 m: **7 of 921 600 pixels differ, by 1
   DN**, in a band across the middle of the frame - the GPU's own non-determinism and not the
   palette, which is applied to the rock and not to the turf.
-- **Cost.** See the benchmark below.
+- **Cost.** `bench_elements`, High, 1920 x 1080, `mountains`, the **minimum over the diagnostic
+  history**, the two builds run **back to back in one session**, and the card's state logged
+  throughout. The mountains' opaque pass, which is the pass the palette is in:
+
+  | session | the baseline | this one |
+  |---|---|---|
+  | 1 | **0.224 ms** | **0.227 ms** |
+  | 2 | 0.228 ms | 0.262 ms |
+  | 3 | 0.224 ms | 0.227 ms |
+
+  The **minimum over the rounds** is **0.224 ms on the baseline and 0.227 ms on this one, a
+  1.3 % regression** — the palette is nearly free, which is what the construction says: the
+  cell's factor and the cell's second factor are **already drawn** (the joint's Weibull uses
+  the first), and the mixture is four multiplies, a divide and a `select`.
+
+  **The card was contended for most of the session.** The two resident servers (scribe at
+  2.6 GB and distill at 7.5 GB) share the RTX 3090, and a *third* process was intermittently
+  using it: most readings were 0.56-0.66 ms for **both** builds, which is the card's state and
+  not the shader's. The three rows above are the readings that were taken while the card was
+  quiet, and the two builds' readings agree to within 0.004 ms in the quiet ones. The
+  minimum over the whole session is the same for both: 0.224 and 0.227.
 - **The full gate.** `cargo test` 271 plus the 2 new palette tests, clippy, doc, wasm, the GPU
   integration suite (22 files), the lib GPU modules clouds (10), terrain (8), cover (8) and dust
   (6), and `the_horizon_sky` alone: all pass.
