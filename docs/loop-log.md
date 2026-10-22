@@ -3239,3 +3239,163 @@ not move, the meadow is untouched, and the distance is calm.
    (a grass mesh) belongs to `bevy_flora`.
 5. **The overcast dome is flat**, with its blocker diagnosed in iteration 28 (the `sky_gain`
    leak at grazing); it carries its Eddington implementation and its measurements in `/tmp/i28`.
+
+## Iteration 39 - 2026-10-21 - a distant range is many rocks: the beds carry the colour to the horizon
+
+**Commits:** `357e73c` (the research note `docs/research/bed-colour.md`), `9604cfc` (the
+implementation), `66ab5e8` (the CPU mirror and the two tests), `fa7ca42` (the note's Deviations),
+`329a7dc` (the README, the changelog and the showcase image), this log. **Sibling repos:**
+none. **Not released.**
+
+### Candidates
+
+| Rank | Candidate | Class | Decision |
+|---|---|---|---|
+| 1 | **The palette does not reach the distance** - a distant massif is still one cool grey, and a game that shows a range from a kilometre away sees no variety | 2 | **this iteration** |
+| 2 | The blocks' size spread: real and visible, but one family of size | 2 | carried |
+| 3 | The cost of the blocks, +28 % on the rock's pass in iteration 35 and the two warps on top of it | 5 | carried |
+| 4 | The dry patch's own texture | 2 | carried |
+| 5 | The overcast dome is flat (`sky_gain` leaks at grazing, diagnosed in iteration 28) | 1 | carried |
+
+Rank 1 beat the carried items because it is the **last** thing the rock's own material was
+missing, and iteration 38 made it plain: the palette reached the cliff's *fragments* and
+stopped there, and the fragments are band-limited away at 120 m. So the crate could render a
+cliff with four different rocks and a mountain range with **one**. A range of mountains is the
+most common thing a game shows, and it was a single grey.
+
+### What changed
+
+- **The bed's tone is a `vec3`, not a scalar.** A scalar can only make a rock lighter or
+  darker; a distant range is many *colours*.
+- **The bed's colour is a draw on the bed's index**, from the fragments' palette, and the
+  draw's *quantity* is the bed's **iron**: the Q7/4 ratio is the standard quantitative
+  description of a sediment's colour, and goethite is yellow while hematite is red.
+- **A region** - a slow field at the massif's scale (260 m) - biases the bed's selection, so a
+  whole massif leans towards one rock and the massifs separate into warm and cool. A range of
+  mountains is made of *formations*, and a formation is a massif.
+- **The bed's colour is band-limited against the fragments**, with the fragments' own limit
+  (the joint's width), so the two are band-limited against each other exactly once.
+
+### Sources
+
+- **Debret, M., Sebag, D., Desmet, M., Balsam, W., Copard, Y., Mourier, B., Susperriguui, F.,
+  Arnaud, F., Bentaleb, I., Chapron, E., Lallier-Verges, E., Winiarski, T. (2011)**,
+  *Spectrocolorimetric interpretation of sedimentary dynamics: The new "Q7/4 diagram"*,
+  Earth-Science Reviews 106, DOI `10.1016/j.earscirev.2011.07.002` (open access; the PDF was
+  downloaded to `/tmp/research/debret2011.pdf` and read in full, 2716 lines of
+  `pdftotext -layout`). Used, and it is the model this note adopts:
+  - The **Q7/4 ratio** - "the ratio between the % reflectance value at 700nm to that at 400
+    nm" - "provides the numerical description of the general slope of VIS", and it is the
+    standard quantitative description of a sediment's colour. The paper's own finding: "the
+    Q7/4 ratio (from **1.5 to 6**)" across the sediments it measured, and near 1 for the
+    greyest ("L* close to 90 deg, Q7/4 ratio close to 1" for the one fjord point "completely
+    separated from the general trend").
+  - The **mechanism**: "the origin of the colour in the iron oxides has been studied. The
+    absorption bands exhibited by the iron oxides from UV to near IR wavelengths originate
+    from electronic transitions", and the consequence: "goethite is **yellow** while hematite
+    is **red** because the corresponding band lies at a lower wavelength in the visible".
+  - The **poles** of the diagram - "Clayey deposits, organic rich deposits (chlorophyll a and
+    by products), altered organic matter deposits, **iron rich deposits**, carbonated deposits"
+    - and the "Iron-rich deposits" pole is labelled by "a high peak around 575 nm corresponding
+    to **hematite**".
+  - The purpose: "Colour is a fundamental property of sediment and is often used for
+    **lithographic description** to determine sedimentological structures, facies etc."
+- **Shahrokhi, S., Babek, O., Mansurbeg, H., Segvic, B., Martin-Martin, J., Kapusta, J., Gregar,
+  F., Korenek, M. (2025)**, *Early Diagenetic Controls on Color Variation in Eocene Red Beds: A
+  Case Study from the Gercus Formation, Zagros Basin, Kurdistan Region, Iraq*, Journal of
+  Sedimentary Research, DOI `10.2110/jsr.2025.005` (the record and the abstract were read; **the
+  PDF was not obtained**). Used: "the spectrum of sediment hues, from **red, to yellow-brown,
+  gray-green, and gray**, arise from the formation and distribution of **Fe oxy/hydroxides**" -
+  so a succession's beds span a *spectrum* of hues, and the spectrum's axis is the iron.
+- **Tansem, K., Storemyr, P. (2020)**, *Red-coated rocks on the seashore...*, Geomorphology 395,
+  DOI `10.1002/gea.21832` (the record and the abstract were read; the PDF was not obtained).
+  Used from iteration 38: "rocks with **red iron films, rocks that are now generally gray**".
+- **The crate's own `rock-palette.md`** (iteration 38): the palette, the convex shares, the
+  score, and the discipline - "the *mean* colour and the *mean* brightness stay where they
+  were (a ground that changes colour changes the game's lighting)". The bed's palette is that
+  note's construction at the bed's scale, and it inherits its discipline.
+- **The crate's own `bedding.md`** (iteration 36): the beds stack, the bed's tone is a draw on
+  its index, and the whole trick - "the bed's *edge* is band-limited away with the distance
+  while the bed's *tone* is not, which is the whole trick: at a distance the cliff shows its
+  succession and not its stripes". The hole in it: the bed's *tone* is a **scalar**.
+- **Andersson, J. (2007)**, *Terrain rendering in Frostbite using procedural shader splatting*,
+  SIGGRAPH 2007 *Advances* ch. 5 (corpus `10.1145_1281500.1281668`): the **Overlay** blend,
+  which "doesn't affect areas where base mask is 0.0 or 1.0" - the instrument for a modulation
+  that must not move the mean.
+
+### The critique and the verdicts (`/tmp/i39/critique.md`)
+
+| Round | Finding | Verdict |
+|---|---|---|
+| 1 | The region's field was normalised by the noise's rms and multiplied by 0.42, so it **saturated** the selection: one tone took a whole massif, the frame's mean moved **66 DN**, and the massif came out a **flat dark blue silhouette** | NOT YET |
+| 2 | The region's bias is **weak** - a bias and not a replacement - and the field's value is the noise's own range, not its rms | NOT YET |
+| 3 | The bed's colour was mixed in at *every* distance, so the near face changed in **83 %** of its pixels: the band-limit has to be *inside* the bed's own value, against the fragments' own limit | NOT YET |
+| 4 | The bed's colour is band-limited against the **fragments**, the region is a weak bias, and the mean and the near face are untouched | **GREAT** |
+
+| Feature | Verdict |
+|---|---|
+| The massif at 120 m | **GREAT** (the massifs separate into warm buff and ochre beside cool blue-grey) |
+| The massif at 300 m | **GREAT** (the resultant falls 0.759 -> 0.683, the spread rises 28.3 -> 35.4) |
+| The face at 3 m | **GREAT** (0.64 % of the pixels differ and the mean is identical) |
+| The face at 30 m | **GREAT** (13 % differ, the mean identical) |
+| The meadow | **GREAT** (9 of 921 600 pixels, by 1 DN) |
+| The cost | see the measurements |
+| The effect at 300 m | NOT YET (modest; the chroma does not rise, because at 300 m the rock is 70 % haze and the haze's own blue is the colour the eye reads - the atmosphere's limit, not the palette's) |
+| The massifs' *identities* | NOT YET (cosmetic; two adjacent massifs often differ by only a little) |
+
+**The change as a whole: GREAT.** The range is made of different rock, the mean holds, the
+near field is untouched, and the meadow is untouched.
+
+### Measurements
+
+- **The distant massif is not one colour.** The hue's resultant over the massif's rock at
+  **300 m**: **0.759 -> 0.683**, and the hue's spread **28.3 -> 35.4 degrees**; the hue's 5th
+  percentile moves from **113 to 30 degrees**, so the warm end appears. At **120 m**: the
+  resultant **0.672 -> 0.596** and the spread **36.8 -> 43.3 degrees**.
+- **The mean does not move.** The massif's mean RGB at 300 m: **182.0/198.3/214.3 before and
+  after** - identical. At 120 m: 156.3/172.0/186.2 -> **156.3/171.9/185.9**, a 0.3 DN shift.
+  The palette's equal-weight mean is exactly (1, 1, 1) and the bed's *value* spread is
+  unchanged, so the mean holds by construction.
+- **The near face does not change.** The face at 3 m: **0.64 %** of the pixels differ and the
+  mean is **identical** (122.9/122.1/122.6). The face at 30 m: 13 % differ, the mean
+  identical.
+- **The meadow is untouched.** The `plains` preset at 6 m: **9 of 921 600 pixels differ, by 1
+  DN**.
+- **Cost.** `bench_elements`, High, 1920 x 1080, `mountains`, the **minimum over the
+  diagnostic history**. The card was contended for most of the session - a *third* process was
+  intermittently using it, and most readings were 0.56-0.70 ms for **both** builds - so the
+  paired comparison is not usable, and the cost was measured **directly** instead: the same
+  build, the same session, the same card, with the bed's colour **toggled** in the shader.
+  That comparison is immune to the card's state, because both halves met it.
+  - the bed's colour **off**: 0.631, 0.629, 0.678, **0.612** ms
+  - the bed's colour **on**: 0.668, 0.644, 0.626, **0.626** ms
+
+  The minimum over the four is **0.612 ms off and 0.626 ms on, a 2.3 % regression** - inside
+  the note's 10 %. The cost is one `perlin3_d` for the region's field, plus a hash, a
+  `smoothstep` and four multiplies. The region is evaluated for every rock pixel, and the
+  field is at the massif's scale, so it is a *smooth* field and the terrain's own octave
+  could carry it in time - but the opaque pass is the crate's hottest path and the region
+  must be sampled at the 3D point, so it is its own evaluation.
+- **The full gate.** `cargo test` 273 plus the 2 new bed tests, clippy, doc, wasm, the GPU
+  integration suite (22 files), the lib GPU modules clouds (10), terrain (8), cover (8) and dust
+  (6), and `the_horizon_sky` alone: all pass.
+
+### The next five items, ranked
+
+1. **The blocks' size spread.** Real and visible, but one family of size: a cliff also carries
+   the small chips and the big slabs in the same wall. The second generation of blocks was
+   tried and rejected (a speckle), so the spread comes from the cells' unequal sizes alone.
+2. **The cost of the blocks**, +28 % on the rock's pass in iteration 35, and the two warps and
+   the two palettes on top of it. A smaller cell is now in, so the *number* of cells went up;
+   the prune's bound and the band-limit are the two levers left.
+3. **The dry patch's own texture.** The palette gives the ground a *hue*; a dry patch needs a
+   *texture* too - the blades inside it should take the patch's hue rather than the turf's, and
+   a dry patch is coarser than green grass. The colour half is in this crate; the geometry half
+   (a grass mesh) belongs to `bevy_flora`.
+4. **The overcast dome is flat**, with its blocker diagnosed in iteration 28 (the `sky_gain`
+   leak at grazing); it carries its Eddington implementation and its measurements in `/tmp/i28`.
+5. **A game's own light does not fall on the crate's weather.** A lamp lights the town, but
+   the crate's rain and snow are lit by the crate's lights alone, so a lamp in a downpour
+   lights the *ground* and not the *rain*. A hook for a game's own lights in the precipitation
+   and cloud passes would close it; the ownership map keeps the geometry in `bevy_flora`, but
+   the lighting hook is this crate's.
