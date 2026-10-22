@@ -3361,7 +3361,21 @@ near field is untouched, and the meadow is untouched.
   identical.
 - **The meadow is untouched.** The `plains` preset at 6 m: **9 of 921 600 pixels differ, by 1
   DN**.
-- **Cost.** See the benchmark below.
+- **Cost.** `bench_elements`, High, 1920 x 1080, `mountains`, the **minimum over the
+  diagnostic history**. The card was contended for most of the session - a *third* process was
+  intermittently using it, and most readings were 0.56-0.70 ms for **both** builds - so the
+  paired comparison is not usable, and the cost was measured **directly** instead: the same
+  build, the same session, the same card, with the bed's colour **toggled** in the shader.
+  That comparison is immune to the card's state, because both halves met it.
+  - the bed's colour **off**: 0.631, 0.629, 0.678, **0.612** ms
+  - the bed's colour **on**: 0.668, 0.644, 0.626, **0.626** ms
+
+  The minimum over the four is **0.612 ms off and 0.626 ms on, a 2.3 % regression** - inside
+  the note's 10 %. The cost is one `perlin3_d` for the region's field, plus a hash, a
+  `smoothstep` and four multiplies. The region is evaluated for every rock pixel, and the
+  field is at the massif's scale, so it is a *smooth* field and the terrain's own octave
+  could carry it in time - but the opaque pass is the crate's hottest path and the region
+  must be sampled at the 3D point, so it is its own evaluation.
 - **The full gate.** `cargo test` 273 plus the 2 new bed tests, clippy, doc, wasm, the GPU
   integration suite (22 files), the lib GPU modules clouds (10), terrain (8), cover (8) and dust
   (6), and `the_horizon_sky` alone: all pass.
