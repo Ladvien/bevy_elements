@@ -6,6 +6,32 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ### Changed
 
+- **A distant range is many rocks: the beds carry the colour to the horizon.** The crate's
+  palette reached the cliff's *fragments* and stopped there, and the fragments are band-limited
+  away at 120 m — so a distant massif was still one cool grey, every massif the same, the
+  beds' banding showing only as faint value stripes.
+
+  That was by design: iteration 36 established that **the beds carry the distance**, the bed's
+  *edge* band-limited away and the bed's *tone* not. The design was right and the bed's *tone*
+  was the hole in it — it was a **scalar**, and a scalar can only make a rock lighter or
+  darker.
+
+  The bed's tone is now a **colour**, drawn from the fragments' palette by the bed's index, and
+  the geology says how. Debret et al. (2011) on spectrocolorimetry: the **Q7/4 ratio** — "the
+  ratio between the % reflectance value at 700nm to that at 400nm" — "provides the numerical
+  description of the general slope of VIS", and it is the standard quantitative description of a
+  sediment's colour, running "from 1.5 to 6" across the sediments they measured. And the
+  mechanism: "goethite is **yellow** while hematite is **red**". A bed's colour is its **iron**,
+  and the iron is a draw on the bed's index — the same construction the crate's beds already
+  use for their thickness and their tone, with the quantity changed from a brightness to a
+  **hue**.
+
+  Measured: the massif's hue's resultant falls from **0.759 to 0.683** at 300 m and from
+  **0.672 to 0.596** at 120 m, and the hue's spread rises by 7° and 6.5°. The mean moves
+  **0.3 DN** at 120 m and not at all at 300 m, the face at 3 m differs in **0.64 %** of its
+  pixels with an identical mean, and the `plains` preset differs in 9 of 921 600 pixels, by
+  1 DN. See `docs/research/bed-colour.md`.
+
 - **The cliff is not one grey: a rock face carries a palette.** The crate's cliff was a single
   cool grey, from the near face to the horizon: at dusk and at dawn the face was a **single
   hue** — the circular resultant of the hue angles 0.998 and the spread 2.1° — and the
