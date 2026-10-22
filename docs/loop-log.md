@@ -3674,12 +3674,12 @@ measuring *where* the cost is.
 |---|---|
 | The image does not change | **GREAT** (every angle under 0.55 % of its pixels, every mean identical to three decimals) |
 | The value-only noise | **GREAT** (bit-identical by test, and crate-wide) |
-| The saving | **GREAT** (3.2 %, and the two lowest readings of the session are the change's and the baseline's) |
+| The saving | **Not proven.** 3.2 % between two minima of a bimodal reading is inside the card's noise; the honest claim is that the change is *no slower* (corrected in iteration 42) |
 | The gates' branch cost | NOT YET (cosmetic; a branch on a *divergent* condition costs more than a straight-line fetch, and the segment's gate is divergent by nature) |
 | The material's total | NOT YET (it is still half the pass; the change is a few per cent of a cost the geology's field count dominates) |
 
-**The change as a whole: GREAT.** The picture is the same to the last pixel that can be
-compared, and the cost falls.
+**The change as a whole: GREAT on the picture** (the same to the last pixel that can be
+compared). The saving is a direction, not a measurement.
 
 ### Measurements
 
@@ -3691,12 +3691,16 @@ compared, and the cost falls.
   the *evaluation* and not the field's *value*.
 - **Cost.** `bench_elements`, High, 1920 x 1080, `mountains`, the **minimum over the
   diagnostic history**, the baseline build and this one **interleaved** in one session so both
-  meet the same card, eight trials each.
+  meet the same card. Eight trials were scheduled; the run hit its 3000 s timeout after **six
+  baseline and five change trials** (corrected in iteration 42: this entry first said "eight
+  trials each").
   - the **baseline** (the iteration-40 build): 0.253, 0.741, 0.670, 0.674, 0.721, 0.272 ms
   - **this one**: 0.262, 0.647, 0.664, 0.713, **0.245** ms
 
-  The **minimum over the trials** is **0.253 ms on the baseline and 0.245 ms on this one, a
-  3.2 % saving**.
+  The **minimum over the trials** is **0.253 ms on the baseline and 0.245 ms on this one**. A
+  3.2 % gap between two minima of a bimodal reading is inside the noise, so the defensible
+  claim is that the change is **no slower**; the field-toggle data (`/tmp/i41/fields.txt`)
+  says where the remaining cost is, not that this change removed a measurable part of it.
 
   **The card's readings are bimodal**, and the crate's own note says why: "GPU timings on a
   lightly loaded NVIDIA card read **5-10x slow** (P8/P5 clocks under Xvfb)". The same build
@@ -3705,8 +3709,8 @@ compared, and the cost falls.
   single reading is not, and the comparison is only sound because the two builds were
   interleaved and both saw the same card. The two lowest readings of the session are the
   change's 0.245 and the baseline's 0.253.
-- **The full gate.** `cargo test` 276 plus the 2 new tests, clippy, doc, wasm, the GPU
-  integration suite (22 files), the lib GPU modules clouds (10), terrain (8), cover (8) and dust
+- **The full gate.** `cargo test` 276 lib tests (the 2 new ones included), clippy, doc, wasm,
+  the GPU integration suite, the lib GPU modules clouds (10), terrain (8), cover (8) and dust
   (6), and `the_horizon_sky` alone: all pass.
 
 ### The next five items, ranked

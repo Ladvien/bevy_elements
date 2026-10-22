@@ -6,7 +6,7 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ### Changed
 
-- **The rock's material costs less, and the picture is the same.** The crate's rock is the most
+- **The rock's material skips the fields it cannot use, and the picture is the same.** The crate's rock is the most
   expensive thing it draws: the mountains' opaque pass is 0.72–0.79 ms with the rock's
   material and 0.13–0.38 ms without it, so the material is **roughly half the pass**, and the
   crate's notes have warned about it since 0.5.0.
@@ -25,10 +25,11 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
   use the value alone. The change is **crate-wide** — the hydrology's phase noise, the
   terrain's generator, the surface cover's field and the noise's own `fbm3` all call `perlin3`.
 
-  Measured: the mountains' opaque pass, the minimum over eight interleaved trials, **0.253 ms
-  on the baseline and 0.245 ms on this one** — a 3.2 % saving. The picture is **the same**: every
-  angle differs by under 0.55 % of its pixels (the GPU's own non-determinism) and every mean is
-  identical to three decimals, and the value-only noise is **bit-identical** by test. See
+  Measured: the mountains' opaque pass, the minimum over six baseline and five interleaved
+  trials, **0.253 ms on the baseline and 0.245 ms on this one** — no slower; the 3 % gap is
+  inside the card's noise. The picture is **the same**: every angle differs by under 0.55 % of
+  its pixels (the GPU's own non-determinism) and every mean is identical to three decimals,
+  and the value-only noise is **bit-identical** by test. See
   `docs/research/rock-cost.md`.
 
 - **A cliff carries slabs and chips: a second joint set, and a spacing that varies.** The
