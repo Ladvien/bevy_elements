@@ -498,6 +498,10 @@ const ROCK_BLOCK_FINE: f32 = 0.0;
 const ROCK_BLOCK_WEIBULL: f32 = 1.6;
 /// The Weibull's scale, as a multiple of the joint's width.
 const ROCK_BLOCK_WEIBULL_SPREAD: f32 = 0.85;
+/// The Weibull's draw's ceiling: the 95th percentile, and not the unbounded tail. The
+/// fracture spacing's own distribution is *undersampled* in its lower tail, so the tail is
+/// bounded in the data and it is bounded here.
+const ROCK_BLOCK_WEIBULL_MAX: f32 = 2.0;
 
 // The scree (`docs/research/scree.md`)
 //
@@ -759,7 +763,15 @@ fn rock_block_scale(p: vec3<f32>, cell_m: f32, footprint_m: f32, jointed: bool) 
     // transform is `λ · (−ln(1 − u))^(1/k)`, and the *shape* `k` below is 1.6: a cliff's
     // spacings have a longer tail than a uniform draw and a shorter one than a pure
     // exponential.
-    let weibull = pow(-log(max(1.0 - cell.factor, 1e-6)), 1.0 / ROCK_BLOCK_WEIBULL);
+    // The draw is **clamped** at the 95th percentile, and the note says why: "the lower
+    // tails of the distributions follow a steeper trend than the rest of the data ...
+    // potentially reflecting an undersampling of the smallest fractures". A Weibull's tail is
+    // unbounded, and an unbounded joint's width eats the block: at the 99th percentile the
+    // width was 47 % of the cell's half-boundary, so a block in one cell was a sliver.
+    let weibull = min(
+        pow(-log(max(1.0 - cell.factor, 1e-6)), 1.0 / ROCK_BLOCK_WEIBULL),
+        ROCK_BLOCK_WEIBULL_MAX,
+    );
     let width = ROCK_JOINT_WIDTH * (0.25 + ROCK_BLOCK_WEIBULL_SPREAD * weibull);
     // The joint's edge is *softened* over the pixel's own footprint: a joint is a line a
     // fraction of a cell wide, and a hard edge on a line that narrow stair-steps at every

@@ -203,6 +203,10 @@ pub(crate) const ROCK_BLOCK_WARP_CELLS: f32 = 4.0;
 pub(crate) const ROCK_BLOCK_WEIBULL: f32 = 1.6;
 /// The Weibull's scale, as a multiple of the joint's width.
 pub(crate) const ROCK_BLOCK_WEIBULL_SPREAD: f32 = 0.85;
+/// The Weibull's draw's ceiling: the 95th percentile, and not the unbounded tail. The
+/// fracture spacing's own distribution is *undersampled* in its lower tail, so the tail is
+/// bounded in the data and it is bounded here.
+pub(crate) const ROCK_BLOCK_WEIBULL_MAX: f32 = 2.0;
 
 /// The fractional part, as WGSL's `fract` (`common.wesl`).
 ///
@@ -252,7 +256,9 @@ pub(crate) fn rock_joint(p: Vec3) -> f32 {
     let half = to_wall.x.min(to_wall.y).min(to_wall.z);
     // The joint's width is a **Weibull** draw, the shape the fracture spacing's distribution
     // follows (Verdian et al. 2021).
-    let weibull = (-(1.0 - cell.factor).max(1e-6).ln()).powf(1.0 / ROCK_BLOCK_WEIBULL);
+    let weibull = (-(1.0 - cell.factor).max(1e-6).ln())
+        .powf(1.0 / ROCK_BLOCK_WEIBULL)
+        .min(ROCK_BLOCK_WEIBULL_MAX);
     let width = ROCK_JOINT_WIDTH * (0.25 + ROCK_BLOCK_WEIBULL_SPREAD * weibull);
     1.0 - smoothstep(0.0, width, half)
 }

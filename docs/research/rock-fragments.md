@@ -133,7 +133,7 @@ must be **cancelled**, not averaged, or the face turns into a corduroy.
 | The warp's amplitude | 0.30 m, as a *gradient* | the gradient's mean magnitude is 0.94, so 0.30 m is 0.20 of a cell |
 | The warp's scale | 9 cells | a warp over one cell scrambles the lattice instead of bending it |
 | The blocks' size spread | the feature points drawn towards their cell's centre, `CELL_INSET` 0 | a cell network's cells can only differ in size through the points' offsets |
-| The joint's width's draw | a Weibull, shape 1.6, scale 0.85 | Verdian et al. 2021: the fracture spacing's Weibull fit |
+| The joint's width's draw | a Weibull, shape 1.6, scale 0.85, clamped at 2.0 | Verdian et al. 2021: the fracture spacing's Weibull fit, and its undersampled tail |
 | The blocks' size range | a hand's width to a metre | Verdian et al. 2021: the spacings run 2 to 5000 mm, the site medians 10 to 390 mm |
 | The blocks' flatness | the c : a ratio of 0.45 | Domokos et al. 2015's universal value, via Verdian et al. 2021 |
 | The band-limit | the *joint's* own width | the crate's `detail_keep`, and the corduroy lesson |
@@ -224,7 +224,14 @@ must be **cancelled**, not averaged, or the face turns into a corduroy.
    so is **negative** for a negative coordinate, while WGSL's is `x − floor(x)` and is always
    in [0, 1). The two disagreed about where every cell's wall was, and the joint's weight came
    out at **zero** on the negative half of the world. The mirror now has its own `wesl_fract`.
-9. **The two block tests measure the *cell* and not the *joint*.** The joint is a line a
+9. **The Weibull's draw is *clamped* at its 95th percentile.** A Weibull's tail is unbounded, and
+   an unbounded joint's width eats the block: at the 99th percentile the width was 47 % of the
+   cell's half-boundary, so a block in that cell was a sliver. The note says why the tail is
+   bounded in the data: "the lower tails of the distributions follow a steeper trend than the
+   rest of the data, as is the case for CB-3, GP-1, and EP-26, potentially reflecting an
+   **undersampling of the smallest fractures**" — a survey misses the smallest, so the measured
+   distribution has a bounded tail and the render does too.
+10. **The two block tests measure the *cell* and not the *joint*.** The joint is a line a
    fraction of a cell wide, so two heights on the same vertical line are usually *both* off a
    joint and trivially agree — the test passed for a 2D network, and failed for a 3D one once
    the joint grew narrow. The tabular test measured the *joint's crossings*, which are the
