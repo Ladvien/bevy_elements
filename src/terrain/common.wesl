@@ -298,6 +298,15 @@ const ROCK_BED_WARP_AMP: f32 = 1.0;
 /// beds are *different rock* — a sandstone, a shale, a limestone — and the tone is a draw on
 /// the bed's index, so the beds differ from one another and not only in their thickness.
 const ROCK_BED_TONE: f32 = 0.34;
+/// The **region**'s scale, m: the field that biases the bed's colour, so a whole massif leans
+/// towards one rock and the massifs separate into warm and cool. A range of mountains is made
+/// of *formations*, and a formation is a massif — so the field is at the massif's scale,
+/// hundreds of metres, and the bed's own draw only tints it.
+const ROCK_BED_REGION_M: f32 = 260.0;
+/// How far the region's field biases the bed's selection. It is **weak**: the field is a bias
+/// and not a replacement, because a bias that saturates the selection pins one tone over a
+/// whole massif and the rock's mean colour then depends on which tone a massif happened to get.
+const ROCK_BED_REGION_BIAS: f32 = 0.30;
 
 /// A bed's own value: the tone it wears, and how much of it there is.
 ///
@@ -306,10 +315,14 @@ const ROCK_BED_TONE: f32 = 0.34;
 /// draw like the thickness is, and the beds of a cliff differ from one another the way a
 /// succession's do, instead of every bed wearing the same colour.
 struct BedValue {
-    /// The bed's tone, a multiplier around 1. It is a *low-frequency* feature — a bed's own
-    /// colour, over metres of rock — so it survives every distance the eye can see the cliff
-    /// from. This is what a distant massif shows: the succession's tones and not its stripes.
-    tone: f32,
+    /// The bed's own **colour**, a multiplier on the rock's albedo, one channel each. It is a
+    /// *low-frequency* feature — a bed's own colour, over metres of rock — so it survives every
+    /// distance the eye can see the cliff from. This is what a distant massif shows: the
+    /// succession's colours and not its stripes.
+    ///
+    /// It is a **vector** and not a scalar, because a scalar can only make a rock lighter or
+    /// darker and a distant range is many *colours* (`docs/research/bed-colour.md`).
+    tone: vec3<f32>,
     /// 1 inside the bed's own layer, 0 outside it: the bed's edge.
     mask: f32,
     /// 1 where the bed's edge survives the pixel's footprint, 0 where it does not.
@@ -329,7 +342,7 @@ struct BedValue {
 /// A true cumulative sum would need an unbounded prefix sum, and the shader cannot afford
 /// one. The draw is the same rhythm done in a bounded way: each bed's own span is its draw,
 /// and the *sequence* of spans is what the eye reads as a succession.
-fn bed_value(bed: f32, footprint_m: f32) -> BedValue {
+fn bed_value(p: vec3<f32>, bed: f32, footprint_m: f32, colour_keep: f32) -> BedValue {
     // The index whose boundary is at or below the coordinate: the fixed point of
     // `i = (bed - warp(i)) / mean`. The warp is a bounded displacement, so the iteration
     // converges in a couple of steps.
@@ -370,7 +383,68 @@ fn bed_value(bed: f32, footprint_m: f32) -> BedValue {
     // own integer hash, for the same reason the thickness's is: a `sin` of a large argument
     // loses its precision in f32.
     let h = hash31(vec3<i32>(i32(floor(index)), 7, 0));
-    let tone = 1.0 + ROCK_BED_TONE * (h * 2.0 - 1.0);
+    // The bed's own **colour**, and not only its brightness (`docs/research/bed-colour.md`).
+    //
+    // A bed's colour is its **iron**: goethite is yellow and hematite is red, and the ratio
+    // of the surface's reflectance at 700 nm to its reflectance at 400 nm is the standard
+    // quantitative description of a sediment's colour (Debret et al. 2011: "the numerical
+    // description of the general slope of VIS", running "from 1.5 to 6" across the sediments
+    // they measured and near 1 for the greyest). So the bed's draw is its iron, and the
+    // palette's members are the iron-bearing rocks.
+    //
+    // The score is a **narrow split** on the draw, exactly as the fragments' palette is
+    // (iteration 38): a product of smooth fields is smooth, and a smooth field blends, and
+    // the blend is what left the cliff at one hue. The split's width is Papavasiliou's `p`,
+    // written as a `smoothstep`'s width and not as a `pow` — the crate's own rule is that
+    // three `pow` calls per pixel cost the mountains' opaque pass 0.137 ms → 0.252 ms.
+    //
+    // The **region** is a *slow* field that biases the selection, so a whole massif leans
+    // towards one rock and the massifs separate into warm and cool. A range of mountains is
+    // made of *formations*, and a formation is a massif — so the field is at the massif's
+    // scale, hundreds of metres.
+    //
+    // The field's bias is **weak** and its value is the noise's *own* range: the field is a
+    // bias and not a replacement. A bias that saturates the selection pins one tone over a
+    // whole massif, and the rock's mean colour then depends on which tone a massif happened
+    // to get — the frame's mean moved 66 DN, and the crate's own rule is that the mean stays
+    // where it was.
+    let region = perlin3_d(p / ROCK_BED_REGION_M + seed_offset(113u)).x;
+    let sel = smoothstep(
+        0.5 - ROCK_PALETTE_EDGE,
+        0.5 + ROCK_PALETTE_EDGE,
+        clamp(h + region * ROCK_BED_REGION_BIAS, 0.0, 1.0),
+    );
+    // The bed's second draw: the distribution, which member of the half. A *separate* hash of
+    // the same index, so the two are independent.
+    let h2 = hash31(vec3<i32>(i32(floor(index)), 11, 0));
+    let reg = smoothstep(
+        0.5 - ROCK_PALETTE_EDGE,
+        0.5 + ROCK_PALETTE_EDGE,
+        clamp(h2 + region * ROCK_BED_REGION_BIAS, 0.0, 1.0),
+    );
+    let s_basalt = (1.0 - sel) * (1.0 - reg);
+    let s_sandstone = (1.0 - sel) * reg;
+    let s_limestone = sel * (1.0 - reg);
+    let s_varnish = sel * reg;
+    let shares = s_basalt + s_sandstone + s_limestone + s_varnish;
+    let inv = 1.0 / max(shares, 1e-5);
+    // The mixture: a convex combination of the palette, so the rock's mean colour cannot
+    // drift (the crate's own rule from the ground's palette).
+    let mixed = (s_basalt * ROCK_TONE_BASALT
+        + s_sandstone * ROCK_TONE_SANDSTONE
+        + s_limestone * ROCK_TONE_LIMESTONE
+        + s_varnish * ROCK_TONE_VARNISH) * inv;
+    // The bed's *value*: the bed's own brightness spread, as it was before the colour.
+    let value = 1.0 + ROCK_BED_TONE * (h * 2.0 - 1.0);
+    // The bed's **colour** is band-limited against the *fragments*: the fragments carry the
+    // near field and the beds carry the far one. Where a fragment is visible it wears its own
+    // rock and the bed's colour is not mixed in at all, so the near face is untouched; where
+    // the fragments are gone the bed's own rock shows through.
+    //
+    // The limit is the *fragments'* own: their band-limit is the joint's width, and the
+    // blocks' `present` is that limit, so the two are band-limited against each other exactly
+    // once and there is no gap and no overlap.
+    let tone = mix(vec3<f32>(value), mixed * value, ROCK_PALETTE_STRENGTH * colour_keep);
     return BedValue(tone, inside * edge, keep);
 }
 
@@ -643,7 +717,14 @@ fn rock_material(p: vec3<f32>, warp: f32, footprint_m: f32) -> RockMaterial {
     // thicknesses vary and they are a succession and not a stripe pattern; and the bed's
     // *edge* is band-limited away with the distance while the bed's *tone* is not, so a
     // distant cliff shows its layers and not its stripes.
-    let bed_value = bed_value(bed, footprint_m);
+    // The bed's own colour is band-limited against the *fragments*, and the fragments' own
+    // band-limit is a **known** number — the joint's width — so the limit is computed here
+    // and the blocks' lookup below is not needed for it. The two are band-limited against
+    // each other exactly once: where a fragment resolves it wears its own rock, and where it
+    // is gone the bed's own rock shows through.
+    let bed_colour_keep = 1.0
+        - detail_keep(ROCK_BLOCK_M * ROCK_JOINT_WIDTH * 1.85, footprint_m);
+    let bed_value = bed_value(p, bed, footprint_m, bed_colour_keep);
     let bed_mask = bed_value.mask;
     // The rock's own field: two octaves, one coarse and one fine, band-limited by their own
     // feature sizes. The fractures are the ridges of the coarse one.
@@ -681,9 +762,27 @@ fn rock_material(p: vec3<f32>, warp: f32, footprint_m: f32) -> RockMaterial {
     // browner and darker rock — shows. The edge is a line a fraction of a bed wide, so it is
     // band-limited away with the distance, and what is left is the succession's tones and not
     // its stripes. That is the whole trick.
+    // The rock's *blocks*: the pieces it breaks into (`docs/research/rock-blocks.md`). Their
+    // own colour, the joint's darkening and their own relief — the three things that turn a
+    // smooth face into a face made of pieces.
+    //
+    // The lookup is here and not lower down because the bed's own colour is band-limited
+    // against it: the fragments carry the near field and the beds carry the far one.
+    let blocks = rock_blocks(p, footprint_m);
+    let blocks_present = blocks.present;
+    // The bed's own **colour** is mixed in only where the *fragments* do not resolve
+    // (`docs/research/bed-colour.md`). The fragments carry the near field and the beds carry
+    // the far one, and the two are band-limited against each other: where a fragment is
+    // visible it wears its own rock, and where it is gone the bed's own rock shows through.
+    // Without the split the two palettes would compound and the near face would be tinted.
     let bed_tone = bed_value.tone
         * mix(vec3<f32>(1.0), ROCK_SECOND_TONE, bed_mask * bed_value.present * ROCK_BED_MIX);
     var tint = bed_tone;
+    if blocks_present > 0.0 {
+        // The block's own **colour** multiplies the rock's colour, and the joint darkens it.
+        let joint = mix(1.0, ROCK_JOINT_DARKEN, blocks.joint);
+        tint = tint * blocks.tone * joint;
+    }
     let dark = mix(1.0, ROCK_FRACTURE_DARKEN, crack);
     let grain_tint = 1.0 + ROCK_GRAIN_AMP * grain_value;
     // The rock's relief. A face with no relief is a painted colour: the light does no work on
@@ -691,14 +790,8 @@ fn rock_material(p: vec3<f32>, warp: f32, footprint_m: f32) -> RockMaterial {
     // small relief, and the fractures give it the *step* a crack has: the ridge's gradient
     // turns the crack from a drawn line into a groove the sun rakes.
     var relief = world_grad * (ROCK_GRAIN_AMP * 0.20);
-    // The rock's *blocks*: the pieces it breaks into (`docs/research/rock-blocks.md`). Their
-    // own tone, the joint's darkening and their own relief — the three things that turn a
-    // smooth face into a face made of pieces.
-    let blocks = rock_blocks(p, footprint_m);
-    if blocks.present > 0.0 {
-        // The block's own **colour** multiplies the rock's colour, and the joint darkens it.
-        let joint = mix(1.0, ROCK_JOINT_DARKEN, blocks.joint);
-        tint = tint * blocks.tone * joint;
+    // The blocks' own relief: the joint's gradient, so the sun rakes each fragment's edge.
+    if blocks_present > 0.0 {
         relief = relief + blocks.grad;
     }
     // The rock's **rind**: the film of iron and manganese on the surface. It is a separate
