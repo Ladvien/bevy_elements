@@ -129,7 +129,10 @@ bed's *edge* is band-limited away and the bed's *tone* is not).
 |---|---|---|
 | The rock's own tone | the crate's `(0.072, 0.069, 0.067)` | `rock-material.md` Deviation 4: "a stone face under a blue sky is grey with the blue in it" |
 | The palette's size | 4 rocks and a rind | a succession is four or five rocks, not a continuum |
-| The score's exponent | 2 (a square, a multiply) | Papavasiliou's `p`, and the crate's own: three `pow` calls cost the opaque pass 0.137 → 0.252 ms |
+| The tones' hues and saturations | 215°/0.10, 35°/0.30, 45°/0.10, 25°/0.20 | rock is a desaturated colour; the raw RGB triples came out as primaries |
+| The palette's mean | exactly (1, 1, 1) | the crate's rule: "the *mean* colour and the *mean* brightness stay where they were" |
+| The split's width | 0.12 of the draw's range | Papavasiliou's `p`, as a `smoothstep`'s width and not a `pow` |
+| The score's shape | two narrow splits, not a product | a product of smooth fields is smooth, and a smooth field blends |
 | The shares' sum | 1 | the convex combination that cannot drift the mean |
 | The rind's coverage | a fraction of the surface, patchy at the rind's own scale | Reneau et al.: the varnish's "percentage of clast surfaces covered" is the age indicator |
 | The rind's band-limit | the rind's own patch size | the crate's `detail_keep`, and the corduroy lesson |
@@ -174,8 +177,51 @@ bed's *edge* is band-limited away and the bed's *tone* is not).
 
 ## Deviations from this plan
 
-*(filled in as the implementation settles; every changed default is recorded here with its
-citation.)*
+1. **The palette is written in *hue and saturation*, and not as RGB triples.** The plan named
+   four rocks and left their colours to be written down. Written as RGB triples, the tones came
+   out at saturations of **0.84** (a strong blue) and **0.75** (a strong orange) — and the cliff
+   read as a **rust-painted fence**. Rock is a *desaturated* colour: the tones are now written as
+   a hue and a saturation and converted, so the hues are the ones a geologist would name
+   (215°, 35°, 45°, 25°) and the saturations are the ones a rock has (0.10 to 0.30).
+2. **The palette's equal-weight mean is exactly (1, 1, 1).** The first version's mean was 0.93
+   and the face's mean luminance fell **2.7 DN**. The rule is the crate's own, from the
+   ground's palette: "the *mean* colour and the *mean* brightness stay where they were (a
+   ground that changes colour changes the game's lighting)". The tones are normalised so that
+   they do not, and the face's mean luminance now moves **0.38 DN**. The tones' own luminances
+   span 0.65 to 1.26, so a fragment is a lighter or darker piece of rock as well.
+3. **The distribution is the cell's *second* draw, and not a field.** The plan had the score be
+   a *field* (which rocks are around) times the *clump* (which rock this piece wears), exactly
+   as the ground's palette is. A field at six cells was tried first, and the cliff read as
+   **blotches** — coloured regions with every fragment in a region one rock. A cliff's colour
+   must vary from fragment to fragment, so the distribution is the cell's own second draw.
+   The cell needed a *second* draw for it, and one hash gives one draw: the cell's factor is
+   `hash33(c).z`, so the second is a **separate hash** of the same cell and the two are
+   independent.
+4. **The score is a *sharp split*, and not a product.** The plan had the score be the
+   *product* of a distribution and a selection. The product of two smooth fields is a smooth
+   field, and a smooth field blends — and the blend is what left the cliff at one hue. The
+   score is two **narrow splits** instead: the selection splits the palette into its cool half
+   and its warm half, and the distribution splits each half again, so the four members are the
+   four combinations. The width of a split is Papavasiliou's `p`, written as a `smoothstep`'s
+   width and not as a `pow` — the crate's own rule is that three `pow` calls per pixel cost the
+   mountains' opaque pass 0.137 ms → 0.252 ms.
+5. **The *rind* is a layer with a *coverage*, and the coverage is a threshold.** The plan said
+   the rind is a separate layer with its own colour and its own patchy coverage. The coverage
+   is a **threshold on a field at the film's own scale**, softened — the varnish's "percentage
+   of clast surfaces covered" is the age indicator (Reneau et al. 1993), so the film takes
+   *some* of the surface and not all of it. The film's own tone has a luminance of exactly 1,
+   so the film moves the surface's *hue* and not its *value*: a rind is a colour on the rock and
+   not a darkening of it.
+6. **The note's validation target at *dusk* was the wrong measure.** The target was the hue's
+   resultant below 0.95 at dusk, and it is not reachable: at dusk the *sun's own tint*
+   dominates the hue — everything is one hue under a warm sun — and the rock's hue is a small
+   perturbation on it. The resultant moves from 0.9977 to 0.9966 at dusk while the **spread**
+   moves from 2.1° to 3.2°, so the variety is there and the resultant is the wrong statistic at
+   that hour. The target is restated on the *noon* face, where the light is neutral.
+7. **The palette does not reach the distance, by design.** The blocks are band-limited away at
+   120 m and the massif carries the *beds'* banding and the beds' own tone, so the palette
+   stops at the distance the blocks stop. That is the crate's design — the beds carry the
+   distance (iteration 36) — and it is a known gap, not a defect of this change.
 
 ## Pending index
 
