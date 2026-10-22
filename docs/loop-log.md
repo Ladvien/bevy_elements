@@ -2988,6 +2988,25 @@ the distance is calm, the meadow is untouched.
 - **The distance is calm.** The view from 120 m is **byte-identical**: the blocks are
   band-limited away, and the massif carries the beds' banding.
 - **The meadow is untouched.** The `plains` preset at 6 m is **byte-identical**.
+- **Cost.** `bench_elements`, High, 1920 x 1080, `mountains`, the **minimum over the
+  diagnostic history**, the two builds run **back to back in one session**, three rounds each.
+  The mountains' opaque pass, which is the pass the blocks are in:
+
+  | round | the baseline | this one |
+  |---|---|---|
+  | 1 | 0.221 ms | 0.226 ms |
+  | 2 | 0.219 ms | 0.579 ms (the card was busy) |
+  | 3 | 0.219 ms | 0.228 ms |
+
+  The **minimum over the rounds** is **0.219 ms on the baseline and 0.226 ms on this one, a
+  3.2 % regression** — inside the note's 10 %. The baseline's three readings agree to within
+  0.002 ms, so the card was quiet; the 0.579 is contention and the two clean rounds read
+  0.226 and 0.228.
+
+  The cost is the **warp**: one `perlin3_d` per rock pixel, and the cell is smaller (0.95 m and
+  not 1.5 m), so the network's cells are 2.4x denser and the prune visits more of them. The
+  warp is *inside* the band-limit, so the far terrain pays nothing for it, and the view from
+  120 m is byte-identical.
 - **The full gate.** `cargo test` 269 plus the 3 new block tests, clippy, doc, wasm, the GPU
   integration suite (22 files), the lib GPU modules clouds (10), terrain (8), cover (8) and dust
   (6), and `the_horizon_sky` alone: all pass.
