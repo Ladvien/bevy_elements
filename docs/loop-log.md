@@ -3538,7 +3538,20 @@ is broken, the distance is calm, and the meadow is untouched.
   second set's relief is along its own normal and the face's shading changes where the two
   sets' steps cross. The far field and the meadow are untouched, so the move is confined to the
   near rock.
-- **Cost.** See the benchmark below.
+- **Cost.** `bench_elements`, High, 1920 x 1080, `mountains`, the **minimum over the
+  diagnostic history**. The card was contended for most of the session - a *third* process was
+  intermittently using it, and most readings were 0.55-0.85 ms for **both** halves - so the
+  cost was measured by **toggling the second joint set** in the shader, with the two halves
+  **alternating** and each **rebuilt**, so both met the same card. The comparison is immune to
+  the card's state, because both halves met it:
+  - the second joint set **off**: 0.281, 0.672, **0.259** ms
+  - the second joint set **on**: **0.274**, 0.260, 0.719 ms
+
+  The minimum over the three is **0.259 ms off and 0.260 ms on, a 0.4 % regression** - the
+  second joint set is nearly free, which is what the construction says: a family of planes is a
+  **period**, and a period is a **coordinate**, so the set costs a dot product, a division and
+  a `fract` and *no second lookup*. The only new field is the segment's, and it is a single
+  `perlin3_d` on the rock's path.
 - **The full gate.** `cargo test` 274 plus the new spacing test, clippy, doc, wasm, the GPU
   integration suite (22 files), the lib GPU modules clouds (10), terrain (8), cover (8) and dust
   (6), and `the_horizon_sky` alone: all pass.
