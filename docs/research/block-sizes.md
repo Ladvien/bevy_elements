@@ -119,7 +119,11 @@ rock's own scale.
 | Parameter | Value | Source |
 |---|---|---|
 | The lattice's stretch along the bedding | the crate's 1.7 | `rock-blocks.md`: the blocks are tabular (La Pointe & Hudson 1985 on joint sets) |
-| The second set's stretch | 1.0 (a second, independent direction) | a joint set is a family of parallel planes |
+| The second set's spacing | 0.55 m to 2.60 m, a Weibull draw per formation | Verdian et al. 2021: the fracture spacing's Weibull fit |
+| The second set's normal | `(0.71, 0.46, −0.53)`, across the bedding | a joint set is a family of parallel planes |
+| The formation's cell | 46 m | the spacing is constant within a formation and changes between them |
+| The planes' wander | 0.48 of the spacing | a joint set's planes are not straight |
+| The planes' segments | 1.9 spacings long | the planes are non-persistent and end |
 | The cell's own size spread | the product of the three extents | Verdian et al. 2021: the latent size distribution is "set by the spacing and orientation of fractures, foliations, and bedding planes" |
 | The joint's width | scaled with the cell's own size | a joint is a feature of the rock's own scale |
 | The block's c : a | 0.45 | Domokos et al. 2015's universal value, via Verdian et al. 2021 |
@@ -157,8 +161,49 @@ rock's own scale.
 
 ## Deviations from this plan
 
-*(filled in as the implementation settles; every changed default is recorded here with its
-citation.)*
+1. **The second joint set is a *coordinate*, not a second network.** The plan said the second
+   and third sets are applied by stretching the lattice's coordinates. That was tried and it
+   **fails**: a lattice whose own scale varies from point to point has cells whose boundaries
+   *fold over* each other, and the face came out a **moiré of concentric rings**. The scale has
+   to be **constant within a cell**, and a field of the *point* is not.
+2. **The second set is a family of *parallel planes*, and the lattice is not stretched at all.**
+   A family of planes is a **period**, and a period is a coordinate: the planes are at the
+   multiples of their spacing, so the joint is where the coordinate crosses one. That is a dot
+   product, a division and a `fract` — **no lookup at all** — and it is the whole reason a
+   second set is affordable on the crate's hottest path. The lattice's stretch (the bedding's
+   own) stays as it was, and the second set is *added* to it.
+3. **The second set's *spacing* is a FORMATION's own draw, and the formation is 46 m across.**
+   The plan had the spacing vary with the point. A spacing that varies *smoothly* makes the
+   planes **fold** instead of fracture, and the face came out a moiré. The spacing must be
+   **constant within a formation** and change from one formation to the next, so it is the
+   formation's own hash.
+4. **The spacing's draw is a *Weibull*, not a power of a uniform.** The plan had a power of the
+   draw, the power being the number of spacings. A power of a *uniform* concentrates the values
+   near zero, and the spacing's spread came out at **2.2:1** where the Weibull's is **3.2:1** —
+   and the Weibull is the distribution the fracture spacing actually follows (Verdian et al.
+   2021: the Weibull form "yielded the best fit to the data in most cases"). The power survives
+   only in the *note*, as the reason the product of three spacings has a heavier tail.
+5. **The planes are NON-PERSISTENT: they wander and they end.** The plan did not say. A
+   perfectly straight, evenly spaced plane set reads as a **wire fence** across the face, and
+   one smooth wander made the planes *bend* but not *end* — the lines still ran unbroken from
+   edge to edge. So the planes **wander** (a slow field, the warp's own value, free) and a
+   finer field **breaks them into segments**, and the joint is simply absent where the segment
+   is not. This is the geometry Strauhal & Zangerl 2021 name: the difficulty of determining the
+   block size distribution "when non-persistent fractures in a rock mass should be considered".
+6. **The measurement of the size spread is the *spacing's*, and the test is on it.** The
+   pieces' *areas* on the image do not show the spread — the second set's seams *divide* the
+   pieces rather than making them bigger, and the area's p75/p25 ratio went *down* at 3 m
+   (3.19 → 2.68) and up at 8 m (2.29 → 3.35). What the change does is break the **lattice's
+   regularity**, and the measure for that is the crate's own from iteration 37: the blocks'
+   **edge-orientation resultant**, which falls at dusk from **0.312 to 0.219**. The permanent
+   test measures the second set's **spacing** over many formations, and it **fails on the
+   baseline** (a 1.00 ratio) — a crate with no second set has one spacing for the whole cliff.
+7. **The near face's mean moves 2.3 DN.** The second set's *relief* is along its own normal, so
+   the face's shading changes where the two sets' steps cross. The change is small and it is
+   the price of a second family of joints, but it is a change in the rock's mean brightness at
+   3 m, and the crate's rule is that the mean stays where it was. The far field is untouched
+   (the view from 120 m is unchanged to four decimals) and the meadow is untouched, so the move
+   is confined to the near rock, where the fragments' own palette is the dominant term.
 
 ## Pending index
 
