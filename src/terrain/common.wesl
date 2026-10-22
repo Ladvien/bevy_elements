@@ -578,6 +578,40 @@ const ROCK_BLOCK_M: f32 = 0.95;
 /// sets*, which are families of parallel planes, so its blocks are tabular and aligned rather
 /// than a random heap (La Pointe & Hudson 1985 on joint sets).
 const ROCK_BLOCK_TABULAR: f32 = 2.6;
+/// The **second joint set's** normal: a cross joint, roughly perpendicular to the bedding and
+/// tilted, so the two sets are not parallel and the blocks between them are *slabs* and not
+/// boxes. A rock breaks along *joint sets* — families of parallel planes (La Pointe & Hudson
+/// 1985) — and a cliff has more than one.
+const ROCK_JOINT2_NORMAL: vec3<f32> = vec3<f32>(0.71, 0.46, -0.53);
+/// The second joint set's **spacing range**, m: the blocks between two sets of planes are
+/// slabs of this thickness, and a formation's spacing is a property of the formation.
+const ROCK_JOINT2_MIN_M: f32 = 0.55;
+const ROCK_JOINT2_MAX_M: f32 = 2.60;
+/// The **formation's** cell, m: the scale at which the second set's spacing is constant. The
+/// spacing must be constant *within* a formation — a spacing that varies smoothly makes the
+/// planes *fold* instead of fracture — and it changes from one formation to the next.
+const ROCK_FORMATION_M: f32 = 46.0;
+/// The second joint set's joint's width, as a fraction of its own spacing: a joint is a
+/// feature of the rock's own scale, and a crack is a line a fraction of a cell wide.
+const ROCK_JOINT2_WIDTH: f32 = 0.075;
+/// How far the second set's planes **wander** from their regular positions, as a fraction of
+/// their own spacing. A joint set's planes are non-persistent: they end, and their spacing
+/// varies along them (Strauhal & Zangerl 2021). A perfectly straight, evenly spaced plane
+/// set reads as a wire fence across the face.
+const ROCK_JOINT2_WANDER: f32 = 0.48;
+/// How long the second set's segments are, in multiples of their own spacing: the plane
+/// wanders by a fraction of a spacing over a few metres and then the joint is simply absent
+/// (Strauhal & Zangerl 2021 on the non-persistent fractures).
+const ROCK_JOINT2_SEGMENT_M: f32 = 1.9;
+/// How sharply a segment *ends*: the threshold on the finer field. A plane that bends but
+/// never ends still reads as a wire fence across the face.
+const ROCK_JOINT2_BREAK: f32 = 0.30;
+/// The **power** of the draw that sets the second set's spacing. A block's size is the
+/// *product* of three spacings (Verdian et al. 2021: the latent size distribution is "set by
+/// the spacing and orientation of fractures, foliations, and bedding planes"), and a product
+/// of three heavy-tailed draws has a heavier tail than one - and the heavier tail is what
+/// "slabs and chips in the same wall" is.
+const ROCK_BLOCK_SIZE_POWER: f32 = 2.4;
 /// The warp that breaks the cells' shape, as a fraction of the cell. A cell network's cells
 /// are convex polygons of nearly the same area, and a face of them reads as a mosaic — or,
 /// with the blocks' step, as *shingles*. A rock breaks into irregular fragments, and the warp
@@ -902,9 +936,50 @@ fn rock_block_scale(p: vec3<f32>, cell_m: f32, footprint_m: f32, jointed: bool) 
     // that varies over ten cells bends the lattice, which is what a rock's fracture set does.
     //
     // The noise is sampled at the *unwarped* point, so the warp does not chase itself.
-    let warp = perlin3_d(p / (cell_m * ROCK_BLOCK_WARP_CELLS)).yzw;
+    let warp_sample = perlin3_d(p / (cell_m * ROCK_BLOCK_WARP_CELLS));
+    let warp = warp_sample.yzw;
     let q = (along + warp * ROCK_BLOCK_WARP_M) / cell_m;
     let cell = cell3(q);
+    // The **second joint set**: a family of parallel planes across the bedding, and the blocks
+    // between the two sets are *slabs* (`docs/research/block-sizes.md`).
+    //
+    // A family of planes is a *period*, and a period is a coordinate: the second set's planes
+    // are at the multiples of its spacing, so the joint is where the coordinate crosses one.
+    // That is **no lookup at all** — a dot product, a division and a `fract` — and it is the
+    // whole reason a second set is affordable on the crate's hottest path.
+    //
+    // The **spacing** is a draw, and it is the spacing's own distribution: the fracture
+    // spacing's is a Weibull (Verdian et al. 2021: the Weibull "yielded the best fit to the
+    // data in most cases", with a geometric standard deviation of 0.214 to 0.551 across the
+    // fifteen sites). The draw is the *formation's* own hash, so the spacing is **constant
+    // within a formation** and changes from one formation to the next — a spacing that varied
+    // *smoothly* would make the planes fold instead of fracture, and the face came out a moiré
+    // of concentric rings.
+    let formation = floor(p / ROCK_FORMATION_M);
+    let formation_hash = hash31(vec3<i32>(
+        i32(formation.x),
+        i32(formation.y),
+        i32(formation.z),
+    ));
+    // The spacing's own distribution is a **Weibull** (Verdian et al. 2021: the Weibull form
+    // "yielded the best fit to the data in most cases", with a geometric standard deviation of
+    // 0.214 to 0.551 across the fifteen sites), so the draw is the Weibull's inverse
+    // transform and not a power of a uniform: a power of a uniform concentrates the values
+    // near zero, and the spacing's spread came out at 2.2:1 where the Weibull's is wider.
+    let spacing_draw = min(
+        pow(-log(max(1.0 - formation_hash, 1e-6)), 1.0 / ROCK_BLOCK_WEIBULL),
+        ROCK_BLOCK_WEIBULL_MAX,
+    );
+    let spacing = mix(
+        ROCK_JOINT2_MIN_M,
+        ROCK_JOINT2_MAX_M,
+        spacing_draw / ROCK_BLOCK_WEIBULL_MAX,
+    );
+    // The second set's coordinate: the distance from the plane, in metres.
+    let cross = dot(p, normalize(ROCK_JOINT2_NORMAL));
+    // The distance to the nearest plane of the second set.
+    let phase = cross / spacing;
+    let to_plane = abs(phase - round(phase)) * spacing;
     // The block's own **colour**: a draw from the rock's palette, so the cliff is a
     // succession of *different rock* and not one grey in many shades
     // (`docs/research/rock-palette.md`).
@@ -1001,7 +1076,47 @@ fn rock_block_scale(p: vec3<f32>, cell_m: f32, footprint_m: f32, jointed: bool) 
     // distance. The width grows with the footprint, so the joint blurs into the rock rather
     // than aliasing along it.
     let soft = max(width, footprint_m / (cell_m * 0.5));
-    let joint = 1.0 - smoothstep(0.0, soft, half);
+    // The **second set's** joint: the plane of the second family, and its own width. A joint
+    // is a feature of the rock's own scale, so the second set's width is a fraction of *its*
+    // spacing and not of the cell's.
+    //
+    // The joint is **not** a straight line: a joint set's planes are *non-persistent* — they
+    // end, and their spacing varies along them, which is the whole difference between a
+    // fracture network and a lattice (Strauhal & Zangerl 2021 on the difficulty of
+    // determining the block size distribution "when non-persistent fractures in a rock mass
+    // should be considered"). A perfectly straight, evenly spaced plane set reads as a **wire
+    // fence** across the face, and it is the second set's *regularity* that gave the face away
+    // and not its spacing.
+    //
+    // So the plane's *position* is displaced by a slow field — the same field the warp uses,
+    // which is a free component of the warp's own `perlin3_d` — and the displacement is a
+    // fraction of the spacing, so the plane wanders within its own cell of the family.
+    let wander = warp_sample.x * spacing * ROCK_JOINT2_WANDER;
+    // The planes are **non-persistent**: they end, and a second, finer wander breaks them
+    // into segments. One smooth wander made the planes *bend* but not *end*, and a bend
+    // across a whole face still reads as a wire fence — the lines ran unbroken from edge to
+    // edge. The finer field is at the *segment's* scale, a few spacings long, so the plane
+    // wanders by a fraction of a spacing over a few metres and then the joint is simply
+    // **absent**.
+    //
+    // The absence is a *threshold* on the finer field, and it is the finest thing the joint
+    // draws, so it is band-limited with the joint's own width: a segment that is shorter
+    // than the pixel's footprint is not drawn at all, and the distance stays calm.
+    let segment = perlin3_d(p / (spacing * ROCK_JOINT2_SEGMENT_M) + seed_offset(137u)).x;
+    let present2 = smoothstep(
+        -ROCK_JOINT2_BREAK,
+        ROCK_JOINT2_BREAK,
+        segment,
+    );
+    let cross_w = cross + wander;
+    let to_plane_w = abs(cross_w / spacing - round(cross_w / spacing)) * spacing;
+    let soft2 = max(spacing * ROCK_JOINT2_WIDTH, footprint_m * 0.5);
+    let joint2 = (1.0 - smoothstep(0.0, soft2, to_plane_w)) * present2;
+    // The two sets' joints together: the block is bounded by both, so the block's *size* is
+    // the smaller of the two — a slab where the second set is close, a block where it is far.
+    // The two sets' joints together: the block is bounded by both, so the block is a slab
+    // where the second set is close and a block where it is far.
+    let joint = max(1.0 - smoothstep(0.0, soft, half), joint2);
     // The block's *facet*: a rock block's face is **flat**, not domed, and the step is at the
     // joint. So the relief is the joint's own gradient — the boundary's direction — and the
     // block's face is level. A dome over each block reads as a pebble pressed into the face
@@ -1010,8 +1125,12 @@ fn rock_block_scale(p: vec3<f32>, cell_m: f32, footprint_m: f32, jointed: bool) 
     // The step's gradient: it rises towards the joint, so the face tilts back at the edge. Its
     // width is the joint's own softened width, so the step and the darkening are the same
     // feature.
+    //
+    // The second set's step is along *its* normal, so the two sets' steps cross and the
+    // block's edge is a *corner* — which is what a block between two joint sets is.
     let step = (1.0 - smoothstep(0.0, soft * 2.0, half)) * ROCK_BLOCK_RELIEF;
-    let grad = -outward * step / cell_m;
+    let step2 = (1.0 - smoothstep(0.0, soft2 * 2.0, to_plane)) * ROCK_BLOCK_RELIEF;
+    let grad = (-outward * step + normalize(ROCK_JOINT2_NORMAL) * step2) / cell_m;
     // A generation that is **not jointed** carries its tone and no crack and no relief: the
     // fine generation is the *chips* lying on a face, and a crack round every chip — and a
     // relief step at every chip — turned the face into a dark speckle. A chip is a patch of a
