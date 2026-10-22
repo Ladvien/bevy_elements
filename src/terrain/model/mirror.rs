@@ -209,6 +209,8 @@ pub(crate) const ROCK_JOINT2_SEGMENT_M: f32 = 1.9;
 pub(crate) const ROCK_JOINT2_BREAK: f32 = 0.30;
 /// The second set's joint's width, as a fraction of its own spacing (`common.wesl`).
 pub(crate) const ROCK_JOINT2_WIDTH: f32 = 0.075;
+/// The **region's** scale, m: the field that biases the bed's selection (`common.wesl`).
+pub(crate) const ROCK_BED_REGION_M: f32 = 260.0;
 /// The warp that breaks the cells' shape, in metres (`common.wesl`): the warp's vector is the
 /// crate's own 3D noise's *gradient*, whose mean magnitude is 0.94, so the amplitude is also
 /// the displacement's scale. At 0.50 m over a 1.5 m cell the mean displacement is 0.31 of a
@@ -360,6 +362,22 @@ pub(crate) fn rock_joint2_spacing(p: Vec3) -> f32 {
         .powf(1.0 / ROCK_BLOCK_WEIBULL)
         .min(ROCK_BLOCK_WEIBULL_MAX);
     ROCK_JOINT2_MIN_M + (ROCK_JOINT2_MAX_M - ROCK_JOINT2_MIN_M) * weibull / ROCK_BLOCK_WEIBULL_MAX
+}
+
+/// The **region's** value at a world point: the slow field that biases the bed's selection, so
+/// a whole massif leans towards one rock.
+///
+/// The field is only *evaluated* where the bed's colour is wanted — the fragments carry the
+/// near field and the beds carry the far one — and the gate skips the **evaluation** and not
+/// the field's *value*. A gate that scaled the value would weaken the bias where the keep is
+/// between zero and one, and the face would change: a performance change must not change the
+/// image (`docs/research/rock-cost.md`).
+pub(crate) fn rock_bed_region(p: Vec3, colour_keep: f32) -> f32 {
+    if colour_keep > 0.0 {
+        crate::gpu::noise_mirror::perlin3_d(p / ROCK_BED_REGION_M).x
+    } else {
+        0.0
+    }
 }
 
 /// The joint's weight at a world point, 0 to 1: how close the point is to a block's boundary.
@@ -710,6 +728,34 @@ mod tests {
              formations ({p10:.2} m to {p90:.2} m)",
             spacings.len()
         );
+    }
+
+    /// A **gate** skips the field's *evaluation* and not its *value*, so a performance change
+    /// does not change the image.
+    ///
+    /// The rule: where the gate is *open* the field is the field's own, unmodified — and where
+    /// it is *closed* the field is not fetched at all. The first attempt scaled the field by
+    /// the keep, and that changed 13 % of the near face, because the keep is between zero and
+    /// one where the two band-limits cross and scaling weakens the bias there.
+    #[test]
+    fn a_gate_skips_the_evaluation_and_not_the_value() {
+        // Where the gate is open, the gated field and the ungated one agree exactly.
+        let mut same = 0;
+        let mut samples = 0;
+        for i in 0..200 {
+            let p = Vec3::new(i as f32 * 0.37, 18.0 + (i as f32) * 0.11, 0.0);
+            let gated = rock_bed_region(p, 1.0);
+            let ungated = crate::gpu::noise_mirror::perlin3_d(p / ROCK_BED_REGION_M).x;
+            if (gated - ungated).abs() < 1e-6 {
+                same += 1;
+            }
+            samples += 1;
+        }
+        assert_eq!(same, samples, "the gate does not change the field's value");
+        // And where the gate is closed, the field is not fetched: the mirror returns the
+        // neutral value, and the shader does not evaluate the noise at all.
+        let closed = rock_bed_region(Vec3::new(1.0, 18.0, 0.0), 0.0);
+        assert_eq!(closed, 0.0, "the closed gate is the neutral value");
     }
 
     /// The rock's **palette** does not move the rock's mean colour.

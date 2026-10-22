@@ -98,6 +98,7 @@ neither gate is a new constant that can drift from the feature it gates.
 | The region's gate | the bed's colour's keep (the fragments' band-limit) | the feature's own band-limit |
 | The segment's gate | twice the second set's joint's width | the smoothstep's tail |
 | The material's total | the whole `rock_material` | the measurement that started it |
+| The value-only noise | the same eight gradients and the same interpolation, without the derivative's terms | the value is bit-identical to `perlin3_d(p).x`, proved by a test |
 
 ## GPU mapping
 
@@ -126,8 +127,35 @@ neither gate is a new constant that can drift from the feature it gates.
 
 ## Deviations from this plan
 
-*(filled in as the implementation settles; every changed default is recorded here with its
-citation.)*
+1. **The plan gated two fields; a third change was needed, and it is the bigger one.** The
+   plan's two gates are worth about 5 %. But the *bigger* waste is inside the noise itself:
+   `perlin3_d` computes the value **and the derivative**, and the derivative is a second large
+   polynomial — eight vector differences, a `du` term and three swizzles. The crate makes
+   **five** evaluations per rock pixel and **four** of them use the value alone: the bed's
+   region, the rock's rind, the second joint set's segment field, the turf's patch field and
+   the scree's grain. So the derivative is computed and thrown away most of the time, on the
+   crate's hottest path.
+   So `perlin3` is now the **value-only** function — the same eight lattice gradients and the
+   same interpolation, with only the derivative's terms left out — and the value is
+   **bit-identical** to `perlin3_d(p).x`, so a call site can switch without changing a pixel.
+   The crate already had a `perlin3` that was *exactly* `perlin3_d(p).x`, so the change is
+   that the wrapper is gone and the function is the value.
+   And the change is **crate-wide**: the hydrology's phase noise, the terrain's generator, the
+   surface cover's field and the noise's own `fbm3` all call `perlin3`, and every one of them
+   was paying for a derivative it never used.
+2. **The gates skip the *evaluation*, and not the field's *value*.** The first attempt at the
+   region's gate multiplied the field by the keep. That changed **13 %** of the near face —
+   because the keep is between zero and one where the two band-limits cross, and scaling the
+   field weakens the bias there. A performance change must not change the image.
+3. **A gate must cover the feature's *whole* extent, tail included.** The second set's joint is
+   `1 − smoothstep(0, soft, d)`, and a smoothstep's tail reaches past `soft`. A gate on
+   `d < soft` cut the tail, and the face changed in **13 %** of its pixels again. The gate
+   covers `d < 2·soft`, and then the change is **0.34 %** — the GPU's own non-determinism, and
+   the same as an ungated build.
+4. **The value-only noise is proved identical by a test, not by an inspection.** The mirror's
+   `perlin3` and `perlin3_d(p).x` are compared over 500 points, and the comparison is an
+   `assert_eq!` on the `f32`s — so a change to either function that broke the identity would
+   fail the test rather than silently change a pixel.
 
 ## Pending index
 

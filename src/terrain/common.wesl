@@ -11,7 +11,7 @@
 // and four loads; the world height is `misc.x + surface`.
 
 import bevy_elements::grid::GridParams;
-import bevy_elements::noise::{cell2, cell3, hash31, perlin2_d, perlin3_d, seed_offset};
+import bevy_elements::noise::{cell2, cell3, hash31, perlin2_d, perlin3, perlin3_d, seed_offset};
 
 struct TerrainParams {
     grid: GridParams,
@@ -113,7 +113,7 @@ fn turf_palette(p: vec3<f32>, base: vec3<f32>, field: f32, coarse: f32, fine: f3
     // the ground's own *detail* — a field at a metre, which the turf already evaluates for its
     // grain — is the clump's finer octave, so the near field has variation in it without
     // another noise evaluation.
-    let patch_field = perlin3_d(p / TURF_PATCH_M + seed_offset(97u)).x / 0.2268;
+    let patch_field = perlin3(p / TURF_PATCH_M + seed_offset(97u)) / 0.2268;
     // The clump is the patch's field at five metres *plus* the turf's own fine field. The fine
     // field is at nine centimetres, which is far too fine to break a five-metre edge on its
     // own, but it is what makes the edge ragged rather than a smooth curve: a dry patch's
@@ -408,7 +408,20 @@ fn bed_value(p: vec3<f32>, bed: f32, footprint_m: f32, colour_keep: f32) -> BedV
     // whole massif, and the rock's mean colour then depends on which tone a massif happened
     // to get — the frame's mean moved 66 DN, and the crate's own rule is that the mean stays
     // where it was.
-    let region = perlin3_d(p / ROCK_BED_REGION_M + seed_offset(113u)).x;
+    //
+    // The field is only evaluated where the bed's **colour** is wanted: the fragments carry
+    // the near field and the beds carry the far one, so where a fragment resolves the bed's
+    // colour is multiplied by zero and the region — a whole `perlin3_d` — is computed and
+    // thrown away. The gate is the colour's own keep, which is the fragments' band-limit.
+    //
+    // The gate skips the **evaluation** and not the field's *value*: the value is the field's
+    // own, unmodified. Scaling it by the keep instead would weaken the bias in the band
+    // where the keep is between zero and one, and the bed's colour would change there — a
+    // performance change must not change the image.
+    var region = 0.0;
+    if colour_keep > 0.0 {
+        region = perlin3(p / ROCK_BED_REGION_M + seed_offset(113u));
+    }
     let sel = smoothstep(
         0.5 - ROCK_PALETTE_EDGE,
         0.5 + ROCK_PALETTE_EDGE,
@@ -841,7 +854,7 @@ fn rock_material(p: vec3<f32>, warp: f32, footprint_m: f32) -> RockMaterial {
     let rind_keep = detail_keep(ROCK_RIND_M, footprint_m);
     if rind_keep > 0.0 {
         // `patch` is a WGSL reserved word, so the film's own field is the *film*.
-        let film = perlin3_d(p / ROCK_RIND_M + seed_offset(83u)).x / 0.2268;
+        let film = perlin3(p / ROCK_RIND_M + seed_offset(83u)) / 0.2268;
         // The coverage: the film is on the faces that have weathered longest, and it is a
         // *fraction* — so the coverage is a threshold on the film's own field, softened.
         let coverage = smoothstep(0.05, 0.45, film) * rind_keep;
@@ -1102,16 +1115,25 @@ fn rock_block_scale(p: vec3<f32>, cell_m: f32, footprint_m: f32, jointed: bool) 
     // The absence is a *threshold* on the finer field, and it is the finest thing the joint
     // draws, so it is band-limited with the joint's own width: a segment that is shorter
     // than the pixel's footprint is not drawn at all, and the distance stays calm.
-    let segment = perlin3_d(p / (spacing * ROCK_JOINT2_SEGMENT_M) + seed_offset(137u)).x;
-    let present2 = smoothstep(
-        -ROCK_JOINT2_BREAK,
-        ROCK_JOINT2_BREAK,
-        segment,
-    );
+    //
+    // The finer field is only evaluated **where the point is near a plane**, and the plane's
+    // distance is already known: a joint is a line a fraction of the spacing wide, so the
+    // overwhelming majority of the face is *not* on a plane and the field is computed and
+    // thrown away. The gate is the plane's own width, so the field is fetched exactly where
+    // it can change the answer.
     let cross_w = cross + wander;
     let to_plane_w = abs(cross_w / spacing - round(cross_w / spacing)) * spacing;
     let soft2 = max(spacing * ROCK_JOINT2_WIDTH, footprint_m * 0.5);
-    let joint2 = (1.0 - smoothstep(0.0, soft2, to_plane_w)) * present2;
+    var joint2 = 0.0;
+    {
+        let segment = perlin3(p / (spacing * ROCK_JOINT2_SEGMENT_M) + seed_offset(137u));
+        let present2 = smoothstep(
+            -ROCK_JOINT2_BREAK,
+            ROCK_JOINT2_BREAK,
+            segment,
+        );
+        joint2 = (1.0 - smoothstep(0.0, soft2, to_plane_w)) * present2;
+    }
     // The two sets' joints together: the block is bounded by both, so the block's *size* is
     // the smaller of the two — a slab where the second set is close, a block where it is far.
     // The two sets' joints together: the block is bounded by both, so the block is a slab
@@ -1305,7 +1327,7 @@ fn scree_scatter(xz: vec2<f32>, footprint_m: f32) -> Scree {
     let coarse = scree_scale(xz, SCREE_CELL_M, SCREE_SIZE_MIN, SCREE_SIZE_MAX);
     let fine = scree_scale(xz, SCREE_CELL_M * 0.38, SCREE_SIZE_MIN * 0.8, SCREE_SIZE_MAX * 0.8);
     // The stone's own grain, so it is not a flat patch: one evaluation for both scales.
-    let grain = perlin3_d(vec3<f32>(xz.x, 0.0, xz.y) / 0.11).x;
+    let grain = perlin3(vec3<f32>(xz.x, 0.0, xz.y) / 0.11);
     // The contact shadows: the matrix beside each stone, in both networks.
     let contact = max(coarse.contact, fine.contact);
     // The fine stones only show where the coarse one does not cover, so a fine stone never
