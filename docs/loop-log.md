@@ -2870,3 +2870,184 @@ bedding plane, the meadow is untouched, and the cost is +3.5 %.
    (a grass mesh) belongs to `bevy_flora`.
 5. **The overcast dome is flat**, with its blocker diagnosed in iteration 28 (the `sky_gain` leak
    at grazing); it carries its Eddington implementation and its measurements in `/tmp/i28`.
+
+## Iteration 37 - 2026-10-21 - the cliff is not a quilt: a rock face breaks into irregular fragments
+
+**Commits:** `e3d6070` (the research note `docs/research/rock-fragments.md`), `33a19fa` (the
+note's Deviations), `037d6b1` (the implementation with its tests), `592edb8` (the README, the
+changelog and the showcase image), `832859b` (the crate's own WESL validator), this log.
+**Sibling repos:** none. **Not released.**
+
+### Candidates
+
+| Rank | Candidate | Class | Decision |
+|---|---|---|---|
+| 1 | **The cliff is a quilt** - the blocks are a regular lattice of identical lozenges, every block the same size and shape | 2 | **this iteration** |
+| 2 | The blocks' *tones* are narrow: the fragments are all the same grey | 2 | carried (the next item) |
+| 3 | The cost of the blocks, +28 % on the rock's pass | 5 | carried |
+| 4 | The dry patch's own texture | 2 | carried |
+| 5 | The overcast dome is flat (`sky_gain` leaks at grazing, diagnosed in iteration 28) | 1 | carried |
+
+Rank 1 beat the carried items because the *cliff* is the crate's most prominent material and
+it read as **wallpaper**: the dusk capture showed a diagonal quilt of same-size diamonds, every
+block with the same dark notch on the same side, in rows. A player reads that as a texture, and
+the whole point of iteration 35 was that a cliff is not a texture. Rank 2 is the same material
+and would have been the natural next step, but it is a *tuning* change on a structure that was
+still a lattice, so it would have polished a quilt.
+
+### What changed
+
+- **The warp is back**, and it is the noise's own *gradient* - one evaluation for a whole 3D
+  vector field, where three separate noise *values* would be three lattice walks.
+- **The warp's amplitude** is calibrated for the gradient (whose mean magnitude is 0.94) and
+  not for the value: 0.30 m, a mean displacement of 0.20 of a cell.
+- **The warp's scale** is nine cells, so it *bends* the lattice coherently instead of
+  scrambling it.
+- **The cells are unequal**: the network's feature points are drawn *towards* their cell's
+  centre, so a point near its cell's corner leaves a big cell behind it and a point at the
+  centre a small one. That is the only place a cell network's cells can differ in size.
+- **The joint's width is a Weibull** draw, the shape the fracture spacing's distribution
+  follows.
+- **The block's cell is 0.95 m** and not 1.5 m, and the joint's darkening is a *shadow* (0.76)
+  with the relief at 0.95, so the sun rakes each fragment's edge.
+- `CELL_INSET` in `noise.wesl` and its CPU mirror.
+
+### Sources
+
+- **Verdian, J. P., Sklar, L. S., Riebe, C. S., Moore, J. R. (2021)**, *Sediment size on talus
+  slopes correlates with fracture spacing on bedrock cliffs*, Earth Surface Dynamics 9:1073-1090,
+  DOI `10.5194/esurf-9-1073-2021` (open access; the PDF was downloaded to
+  `/tmp/research/verdian2021.pdf` and read in full, 914 lines of `pdftotext -layout`). Used:
+  "fracture spacing distributions in rock commonly have shapes that follow one of these
+  distributions (Gillespie et al., 1993)" and the result, that "the **Weibull** form of the
+  exponential distribution (Weibull, 1951) yielded the best fit to the data in most cases";
+  the measurement, the spacings running "from 2 to 5000 mm" with the site medians "from 10 to
+  390 mm" and the **geometric standard deviation** 0.214 to 0.551 across the fifteen sites; and
+  the *coupling*, "the close site-to-site correspondence between the spread in the b-axis
+  diameter distribution and the spread in the fracture spacing distribution". **Not indexed.**
+- **Yao, W., Sharifzadeh, M., Yang, Z. (2020)**, *Assessment of block size distribution in
+  fractured rock mass...*, DOI `10.1063/1.5143906`; **Azizi, A., Moomivand, H. (2021)**, *A New
+  Approach to Represent Impact of Discontinuity Spacing and Rock Mass Description on the
+  Median Fragment Size of Blasted Rocks...*, DOI `10.1007/s00603-020-02360-4`; and **Park, L.
+  et al. (1993)**, *In-situ block size assessment from discontinuity spacing data*,
+  International Journal of Rock Mechanics & Mining Sciences, DOI `10.1016/0148-9062(93)90982-j`
+  - found by `paper_search` and their records read, but **no PDF was obtained** (the publishers
+  returned a landing page or a paywall). Named as the treatments of the block size
+  distribution from the discontinuity spacing, which is the model the note adopts.
+- **The crate's own `rock-blocks.md`** (iteration 35): the blocks, the joint and the warp, and
+  the three sentences that frame the change - "The cells of a network are all the same size, so
+  without this every block would be the same and the face would read as a cobblestone" (the
+  *joint's width* was the answer, and it did not work: the **cells** are still the same size),
+  "a rock breaks into irregular fragments, and a warp is what makes the fragments irregular"
+  (the warp was the answer, and it was never implemented), and "a cell whose joint is wide is a
+  *small* piece of rock" (the *size* was tied to the joint's width, so the block's size varied
+  while its *cell* did not).
+- **Akenine-Moller, T., Haines, M., Hoffman, N., Shirley, P. (2019)**, *Real-Time Rendering,
+  4th ed.* (corpus `bo/book_real_time_rendering_4th_akenine.md`): "a cellular texture is formed
+  by measuring distances from each location to a set of 'feature points' scattered through
+  space... creates patterns that look like cells, flagstones, lizard skin, and other natural
+  textures" - and the note that a cell network's cells are *the same size*, the property the
+  crate's own rock note had already called out.
+
+### The critique and the verdicts (`/tmp/i37/critique.md`)
+
+| Round | Finding | Verdict |
+|---|---|---|
+| 1 | The warp was **off** - the commit that asked for the noise's gradient left `vec3<f32>(0.0)` - and the cells were a perfect lattice | NOT YET |
+| 2 | The warp's amplitude was calibrated for the noise's *value* and not for its *gradient*, whose mean magnitude is 0.94: it displaced a boundary by 0.06 of a cell | NOT YET |
+| 3 | The warp's *scale* was the cell's own, so it **scrambled** the lattice instead of bending it: the cell's index stopped being monotonic along a cut and the joint was crossed zero times in 30 m | NOT YET |
+| 4 | The cells are still all the same size, and the CPU mirror's `fract` was Bevy's, which is negative for a negative coordinate: the joint's weight was zero on half the world | NOT YET |
+| 5 | The face was a **giraffe's hide** - a network of thin dark lines with flat blocks between them. A joint is a *shadow*, and a shadow is wider than the crack | NOT YET |
+| 6 | The cell at 0.95 m and not 1.5 m: the face reads as a fracture network, and the fragments are countable | **GREAT** |
+
+| Feature | Verdict |
+|---|---|
+| The face at 3 m | **GREAT** (irregular fragments of many sizes, each with its own lit facet) |
+| The dusk raking light | **GREAT** (the seams are shadowed grooves and the sun finds each fragment's edge) |
+| The face at 12 m and at 30 m | **GREAT** |
+| The distance at 120 m | **GREAT** (byte-identical: the blocks are band-limited away) |
+| The meadow | **GREAT** (the plains preset is byte-identical) |
+| The cost | see the measurements |
+| The fragments' *tones* | NOT YET (all the same grey; a real cliff has a sandstone beside a basalt) |
+| The blocks' size spread | NOT YET (real and visible, but one family of size) |
+| The joints' softness | NOT YET (cosmetic; a few of the wider seams read as smudges) |
+
+**The change as a whole: GREAT.** The quilt is gone, the fragments are irregular and many-sized,
+the distance is calm, the meadow is untouched.
+
+### Measurements
+
+- **The quilt is gone.** The blocks' **edge-orientation resultant** - the circular resultant of
+  the edge angles, which is how strongly the blocks' edges agree on a direction, and so the
+  quilt's signature - falls from **0.431 to 0.277** on a face at 3 m. The measure is the one
+  the note did not have and the defect needed: a lattice of equal cells gives every block's
+  edge the same direction, and rock's edges run every which way.
+- **The material is *more* visible.** The material's own high-pass over a 500 x 340 patch of
+  the face at 3 m: **6.67 DN before, 8.02 DN after**. The dark fraction (the fragments'
+  shadows) rises from 16.8 % to 22.7 %, and the seam spacings measured from 1497 to 2750.
+- **The distance is calm.** The view from 120 m: the blocks are band-limited away and the
+  massif carries the beds' banding. Over a 500 x 300 patch of the far massif the material's
+  own high-pass is **4.3440 DN before and 4.3440 DN after** - the same to four decimals, so
+  the blocks contribute nothing measurable at that distance. (The two files are not
+  byte-identical: 12 225 of 921 600 pixels differ, by up to 16 DN, which is the GPU's own
+  non-determinism in the sky's gradient and not the rock's material.)
+- **The meadow is untouched.** The `plains` preset at 6 m is **byte-identical**.
+- **Cost.** `bench_elements`, High, 1920 x 1080, `mountains`, the **minimum over the
+  diagnostic history**, the two builds run **back to back in one session**, three rounds each.
+  The mountains' opaque pass, which is the pass the blocks are in:
+
+  | round | the baseline | this one |
+  |---|---|---|
+  | 1 | 0.221 ms | 0.226 ms |
+  | 2 | 0.219 ms | 0.579 ms (the card was busy) |
+  | 3 | 0.219 ms | 0.228 ms |
+
+  The **minimum over the rounds** is **0.219 ms on the baseline and 0.226 ms on this one, a
+  3.2 % regression** — inside the note's 10 %. The baseline's three readings agree to within
+  0.002 ms, so the card was quiet; the 0.579 is contention and the two clean rounds read
+  0.226 and 0.228.
+
+  The cost is the **warp**: one `perlin3_d` per rock pixel, and the cell is smaller (0.95 m and
+  not 1.5 m), so the network's cells are 2.4x denser and the prune visits more of them. The
+  warp is *inside* the band-limit, so the far terrain pays nothing for it, and the view from
+  120 m is byte-identical.
+- **The full gate.** `cargo test` 269 plus the 3 new block tests, clippy, doc, wasm, the GPU
+  integration suite (22 files), the lib GPU modules clouds (10), terrain (8), cover (8) and dust
+  (6), and `the_horizon_sky` alone: all pass.
+
+### The crate's own WESL validator (`tools/wesl-check`)
+
+This iteration lost a full capture cycle to a **silent** shader error: the terrain came out
+black because a struct gained a field and its construction did not, and the only clue was a
+`failed to process shader` line in the run's log, which a capture script throws away. A WESL
+error is silent at build time, because the shaders are embedded with `embedded_asset!`.
+
+So the crate now has its own validator: it compiles **every** one of the crate's WESL modules
+to WGSL and parses the result with naga - the same compiler and the same parser Bevy uses -
+in about twenty seconds and without a GPU, and it names the line. Bevy's own modules are
+stubbed, because they are not on disk; a stub that is missing is reported as "not checked"
+and is **not** counted as a failure, so a missing stub cannot hide a real error.
+
+```sh
+cargo run --release --manifest-path tools/wesl-check/Cargo.toml -- src
+```
+
+### The next five items, ranked
+
+1. **The fragments' tones.** The block's tone is the cell's factor at +/-0.22, so the
+   fragments are all the same grey; a real cliff has a sandstone beside a basalt. The geology
+   is clear about this - a bed *is* a colour - and the crate's beds already carry the large
+   scale, but the *fragments* do not differ in colour. The cell's factor is already drawn and
+   already free.
+2. **The blocks' size spread.** Real and visible, but one family of size: a cliff also carries
+   the small chips and the big slabs in the same wall. The second generation of blocks was
+   tried and rejected (a speckle), so the spread comes from the cells' unequal sizes alone.
+3. **The cost of the blocks**, +28 % on the rock's pass in iteration 35, and this iteration's
+   warp on top of it. A smaller cell is now in, so the *number* of cells went up; the prune's
+   bound and the band-limit are the two levers left.
+4. **The dry patch's own texture.** The palette gives the ground a *hue*; a dry patch needs a
+   *texture* too - the blades inside it should take the patch's hue rather than the turf's, and
+   a dry patch is coarser than green grass. The colour half is in this crate; the geometry half
+   (a grass mesh) belongs to `bevy_flora`.
+5. **The overcast dome is flat**, with its blocker diagnosed in iteration 28 (the `sky_gain`
+   leak at grazing); it carries its Eddington implementation and its measurements in `/tmp/i28`.

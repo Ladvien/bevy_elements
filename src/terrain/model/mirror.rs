@@ -186,18 +186,52 @@ pub(crate) fn turf_palette(field: f32, clump: f32) -> ([f32; 3], [f32; 4]) {
 // ---------------------------------------------------------------------------------------------
 
 /// The block network's cell, m (`common.wesl`): the scale of the pieces the rock breaks into.
-pub(crate) const ROCK_BLOCK_M: f32 = 1.5;
+pub(crate) const ROCK_BLOCK_M: f32 = 0.95;
 /// How far the blocks stretch along the bedding, as a factor (`common.wesl`).
-pub(crate) const ROCK_BLOCK_TABULAR: f32 = 1.7;
+pub(crate) const ROCK_BLOCK_TABULAR: f32 = 2.6;
 /// The joint's width, as a fraction of the cell's half-boundary distance (`common.wesl`).
-pub(crate) const ROCK_JOINT_WIDTH: f32 = 0.11;
+pub(crate) const ROCK_JOINT_WIDTH: f32 = 0.19;
+/// The warp that breaks the cells' shape, in metres (`common.wesl`): the warp's vector is the
+/// crate's own 3D noise's *gradient*, whose mean magnitude is 0.94, so the amplitude is also
+/// the displacement's scale. At 0.50 m over a 1.5 m cell the mean displacement is 0.31 of a
+/// cell and the max 0.79, which breaks the cells' regularity without tearing them.
+pub(crate) const ROCK_BLOCK_WARP_M: f32 = 0.30;
+/// How many cells the warp's noise varies over (`common.wesl`).
+pub(crate) const ROCK_BLOCK_WARP_CELLS: f32 = 4.0;
+/// The Weibull's shape for the joint's width, the distribution the fracture spacing follows
+/// (Verdian et al. 2021). A shape of 1 is the exponential and 2 is the Rayleigh.
+pub(crate) const ROCK_BLOCK_WEIBULL: f32 = 1.6;
+/// The Weibull's scale, as a multiple of the joint's width.
+pub(crate) const ROCK_BLOCK_WEIBULL_SPREAD: f32 = 0.85;
+/// The Weibull's draw's ceiling: the 95th percentile, and not the unbounded tail. The
+/// fracture spacing's own distribution is *undersampled* in its lower tail, so the tail is
+/// bounded in the data and it is bounded here.
+pub(crate) const ROCK_BLOCK_WEIBULL_MAX: f32 = 2.0;
+
+/// The fractional part, as WGSL's `fract` (`common.wesl`).
+///
+/// **Bevy's `Vec3::fract` is `x - x.trunc()` and so is NEGATIVE for a negative coordinate,
+/// while WGSL's is `x - floor(x)` and is always in [0, 1).** The two disagree wherever the
+/// coordinate is negative, and the cell's own boundary is computed from the fraction, so the
+/// mirror and the shader disagreed about where every cell's wall was. The joint's weight came
+/// out at zero on the negative half of the world.
+fn wesl_fract(v: Vec3) -> Vec3 {
+    v - v.floor()
+}
 
 /// The block network's coordinates for a world point, squashed along the bedding plane's normal
 /// so the cells stretch into slabs (`common.wesl`).
+///
+/// The coordinates are **warped** before the lookup, by the crate's own 3D noise's *gradient*,
+/// so the cells' boundaries wander: a cell network's cells are convex polygons of nearly the
+/// same area, and a face of them reads as a mosaic — or, with the blocks' step, as *shingles*
+/// (`docs/research/rock-fragments.md`).
 pub(crate) fn rock_block_coords(p: Vec3) -> Vec3 {
     let normal = Vec3::new(0.32, 0.90, 0.28).normalize();
     let along = p - normal * p.dot(normal) * (1.0 - 1.0 / ROCK_BLOCK_TABULAR);
-    along / ROCK_BLOCK_M
+    let warp = crate::gpu::noise_mirror::perlin3_d(p / (ROCK_BLOCK_M * ROCK_BLOCK_WARP_CELLS));
+    let gradient = Vec3::new(warp.y, warp.z, warp.w);
+    (along + gradient * ROCK_BLOCK_WARP_M) / ROCK_BLOCK_M
 }
 
 /// The joint's weight at a world point, 0 to 1: how close the point is to a block's boundary.
@@ -209,10 +243,10 @@ pub(crate) fn rock_joint(p: Vec3) -> f32 {
     let cell = crate::gpu::noise_mirror::cell3(q);
     // The distance from the point to its cell's wall, along the direction away from the
     // feature point (`common.wesl`).
-    let to_centre = cell.point - q.fract();
+    let to_centre = cell.point - wesl_fract(q);
     let len = to_centre.length().max(1e-6);
     let outward = to_centre / len;
-    let inside = q.fract();
+    let inside = wesl_fract(q);
     // The wall in each axis: the far side of the cell from the feature point.
     let to_wall = Vec3::new(
         if outward.x < 0.0 { inside.x } else { 1.0 - inside.x },
@@ -220,7 +254,12 @@ pub(crate) fn rock_joint(p: Vec3) -> f32 {
         if outward.z < 0.0 { inside.z } else { 1.0 - inside.z },
     );
     let half = to_wall.x.min(to_wall.y).min(to_wall.z);
-    let width = ROCK_JOINT_WIDTH * (0.30 + 3.4 * cell.factor);
+    // The joint's width is a **Weibull** draw, the shape the fracture spacing's distribution
+    // follows (Verdian et al. 2021).
+    let weibull = (-(1.0 - cell.factor).max(1e-6).ln())
+        .powf(1.0 / ROCK_BLOCK_WEIBULL)
+        .min(ROCK_BLOCK_WEIBULL_MAX);
+    let width = ROCK_JOINT_WIDTH * (0.25 + ROCK_BLOCK_WEIBULL_SPREAD * weibull);
     1.0 - smoothstep(0.0, width, half)
 }
 
@@ -452,46 +491,79 @@ mod tests {
         );
     }
 
+    /// The blocks are of **many sizes**, and not all the same.
+    ///
+    /// The measure: the *distance between the joints* along a cut, which is the block's own
+    /// size. A face of equal cells is a mosaic — the quilt the capture showed — and the
+    /// geology says a cliff's blocks are not equal: the fracture spacing follows a Weibull
+    /// whose geometric standard deviation is about 0.31 (Verdian et al. 2021).
+    #[test]
+    fn the_blocks_are_of_many_sizes() {
+        // A cut across a face, and the block's boundary along it: the joint's weight crosses
+        // the half-way mark where a block ends and the next begins.
+        let mut boundaries = Vec::new();
+        let mut last = rock_joint(Vec3::new(0.0, 20.0, 0.0)) > 0.5;
+        for i in 1..4000 {
+            let x = i as f32 * 0.02;
+            let now = rock_joint(Vec3::new(x, 20.0, 0.0)) > 0.5;
+            if now != last {
+                boundaries.push(x);
+                last = now;
+            }
+        }
+        assert!(
+            boundaries.len() >= 8,
+            "the cut crosses enough blocks to measure: {}",
+            boundaries.len()
+        );
+        let sizes: Vec<f32> = boundaries
+            .windows(2)
+            .map(|w| w[1] - w[0])
+            .filter(|s| *s > 0.05)
+            .collect();
+        assert!(sizes.len() >= 6, "the sizes to measure: {}", sizes.len());
+        // The spread: the largest block against the smallest, measured on the *median* and
+        // the tails so a single outlier does not carry it.
+        let mut sorted = sizes.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let p10 = sorted[sorted.len() / 10];
+        let p90 = sorted[sorted.len() * 9 / 10];
+        let ratio = p90 / p10.max(1e-6);
+        assert!(
+            ratio >= 2.0,
+            "the blocks are of many sizes: the p90/p10 ratio is {ratio:.2} over {} blocks \
+             ({p10:.2} m to {p90:.2} m)",
+            sizes.len()
+        );
+    }
+
     /// The blocks are **tabular**: they stretch along the bedding, so a face shows slabs and
     /// not gravel.
     ///
-    /// The measure is the *cell's* own extent: a network stretched along the bedding's normal
-    /// has cells that are longer in the bedding's plane, so a line cut along the bedding
-    /// crosses fewer cell boundaries than a line cut across it.
+    /// The measure is the *cell's* own extent in the rock's frame: the network's coordinates
+    /// are stretched along the bedding plane's normal, so the cells are longer in the
+    /// bedding's plane than across it. The measure is the cell and not the joint's crossings,
+    /// because the crossings are the *warp's* bending as much as the lattice's, and the warp
+    /// is a long-range field that does not know about the bedding.
     #[test]
     fn the_blocks_are_tabular() {
         let normal = Vec3::new(0.32, 0.90, 0.28).normalize();
         // A direction in the bedding plane, and the one across it.
-        let in_plane = Vec3::new(1.0, 0.0, 0.0) - normal * normal.x;
-        let in_plane = in_plane.normalize();
+        let in_plane = (Vec3::new(1.0, 0.0, 0.0) - normal * normal.x).normalize();
         let across = normal.cross(in_plane).normalize();
-        // A long cut along the bedding plane, and a long cut across it, and the *cell* each
-        // point falls in: the cell's index changes when the cut crosses a boundary.
-        let cell_of = |p: Vec3| {
-            let q = rock_block_coords(p);
-            q.floor()
+        // The cell's *own* extent along each direction: the distance between the cell
+        // boundaries, measured in the network's coordinates.
+        let extent = |dir: Vec3| {
+            // The direction in the network's own frame, and the cell's size along it.
+            let q_dir = rock_block_coords(dir * 100.0) - rock_block_coords(Vec3::ZERO);
+            q_dir.length()
         };
-        let mut along = 0;
-        let mut across_cut = 0;
-        let mut last = cell_of(Vec3::new(0.0, 20.0, 0.0) + in_plane * 0.05);
-        let mut last_across = cell_of(Vec3::new(0.0, 20.0, 0.0) + across * 0.05);
-        for i in 1..200 {
-            let t = i as f32 * 0.1;
-            let c = cell_of(Vec3::new(0.0, 20.0, 0.0) + in_plane * t);
-            if c != last {
-                along += 1;
-                last = c;
-            }
-            let c = cell_of(Vec3::new(0.0, 20.0, 0.0) + across * t);
-            if c != last_across {
-                across_cut += 1;
-                last_across = c;
-            }
-        }
-        // The cells are *bigger* along the bedding: fewer of them on the same length of cut.
+        let along = extent(in_plane);
+        let across_cut = extent(across);
         assert!(
-            across_cut > along,
-            "the blocks stretch along the bedding: {across_cut} cells across, {along} along"
+            along > across_cut,
+            "the blocks stretch along the bedding: the cell is {along:.3} along it and \
+             {across_cut:.3} across it"
         );
         // And the squash is in the bedding's own frame, not the world's: the normal is
         // mostly vertical, so the blocks are flattened in the vertical and stretched in the
@@ -509,22 +581,28 @@ mod tests {
     /// which is the weave the crate's rock note warns about.
     #[test]
     fn the_blocks_are_in_the_rocks_own_frame() {
+        // The *cell* each point falls in, at two heights on the same vertical line. A 2D
+        // network in the ground plane would give the same cell at both heights, which is the
+        // weave the crate's rock note warns about; a 3D network gives a different one.
+        //
+        // The measure is the cell and not the joint: the joint is a *line* a fraction of a
+        // cell wide, so two heights are usually both *off* a joint and trivially agree, and
+        // the test would pass for a 2D network.
         let mut same = 0;
         for i in 0..200 {
             let x = i as f32 * 0.37;
-            let a = rock_joint(Vec3::new(x, 10.0, 40.0));
-            let b = rock_joint(Vec3::new(x, 14.0, 40.0));
-            if (a > 0.5) == (b > 0.5) {
+            let a = rock_block_coords(Vec3::new(x, 10.0, 40.0)).floor();
+            let b = rock_block_coords(Vec3::new(x, 14.0, 40.0)).floor();
+            if a == b {
                 same += 1;
             }
         }
-        // A 3D network: the two heights are independent, so they disagree on a good fraction
-        // of the samples. The fraction is not half — the nearest point is usually the same one
-        // for both heights, and only the *block's* identity changes — but it is far from
-        // zero, and a 2D network in the ground plane would agree on every one.
+        // A 3D network: the two heights are in different cells, for most of the points. A 2D
+        // network in the ground plane would agree on every one.
         assert!(
-            same < 195,
-            "the blocks are in the rock's 3D frame: {same} of 200 agree across 4 m of height"
+            same < 100,
+            "the blocks are in the rock's 3D frame: {same} of 200 are in the same cell \
+             across 4 m of height"
         );
     }
 

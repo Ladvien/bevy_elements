@@ -6,6 +6,45 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ### Changed
 
+- **The cliff is not a quilt: a rock face breaks into irregular fragments.** The crate's blocks
+  came out as a **quilt of identical lozenges** — a regular lattice of same-size diamonds,
+  every block the same shape with the same dark notch on the same side, in rows. It read as
+  wallpaper.
+
+  The cause was a one-line regression: the commit that replaced the block network's warp with
+  the noise's own *gradient* left the line as `let warp = vec3<f32>(0.0);`, so **the warp has
+  been off since 0.5.2** and the cells have been a perfect lattice ever since.
+
+  But the warp alone is not the fix, and the measurements say so:
+
+  - The warp's **amplitude** was calibrated for the noise's *value* and not for its
+    *gradient*. The gradient's mean magnitude is 0.94, so 0.09 displaced a cell's boundary by
+    **0.06 of a cell** — a fifth of what it needed. The amplitude is now 0.30 m.
+  - The warp's **scale** was the cell's own, so it *scrambled* the lattice instead of bending
+    it: the cell's index stopped being monotonic along a straight cut, and the joint was
+    crossed **zero times in 30 m**. It now varies over nine cells.
+  - The cells of a network are all the **same size**, so a warped lattice is still a lattice of
+    equal cells. The size spread comes from the network's feature points being drawn *towards*
+    their cell's centre, so the cells are unequal.
+  - The joint's **width** is a **Weibull** draw, the shape the fracture spacing's distribution
+    follows (Verdian et al. 2021), and not a linear one.
+  - A **second generation** of blocks — the scree's own construction — was tried and
+    **rejected**: a seam every few pixels turned the face into a dark speckle.
+
+  Measured on a face at 3 m: the blocks' **edge-orientation resultant** — how strongly the
+  blocks' edges agree on a direction, which is the quilt's signature — falls from **0.431 to
+  0.277**, and the material's own high-pass **rises** from 6.67 to **8.02 DN**. The view from
+  120 m is unchanged to four decimals (the material's own high-pass 4.3440 DN before and
+  after), so the distance is calm, and the `plains` preset is byte-identical, so the meadow is
+  untouched. See `docs/research/rock-fragments.md`.
+
+### Fixed
+
+- **The CPU mirror's `fract` was the wrong one.** Bevy's `Vec3::fract` is `x − trunc(x)` and so
+  is **negative** for a negative coordinate, while WGSL's is `x − floor(x)` and is always in
+  [0, 1). The two disagreed about where every cell's wall was, and the terrain model's joint
+  weight came out at **zero** on the negative half of the world.
+
 - **The massif has a succession of beds, not a flat blue-grey wash.** Over a rock-only
   200 × 200 patch of the mountains from 120 m the rock's spread was a max−min of **1.00 DN**,
   where the crate's own `rock-material.md` asks for 9, and at 300 % the rock was a smooth

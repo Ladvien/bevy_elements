@@ -67,6 +67,19 @@ No system is implemented without its `docs/research/<system>.md`, committed firs
 - **`active` is a reserved word in WGSL**: the shader compiler rejects it as an identifier and the kernel then stays idle (look for the `ERROR bevy_elements::gpu::kernel` line).
 - **`meta` (and other WGSL reserved words) in a WESL struct field** fails the shader at runtime with "use of a reserved word", not at build time: the terrain material is dark until you read the log for `failed to process shader`.
 - **`patch`, `target` and `filter` are WGSL reserved words too**: a local named `patch` in `water.wesl` or a binding named `target` in a kernel fails the shader at runtime (the water or the kernel stays dark/idle until you read the log).
+- **A WESL error is silent at build time and loud only in a capture.** The shaders are embedded
+  with `embedded_asset!`, so a struct constructed with the wrong number of fields, an unimported
+  name, a shadowing local or a `pow(x, p)` with `p` in a `let` all *build*, are embedded, and
+  then fail in the GPU driver: the surface renders as a flat dark grey and the only clue is a
+  `failed to process shader` line in the run's log, which a capture script throws away. **Check
+  the shaders before capturing:**
+  ```sh
+  cargo run --release --manifest-path tools/wesl-check/Cargo.toml -- src
+  ```
+  It compiles every one of the crate's modules to WGSL and parses the result with naga, in about
+  twenty seconds and without a GPU, and it names the line. A module it reports as "not checked"
+  is one whose *Bevy* import could not be stubbed; the crate's own code in it is still checked
+  as far as the compiler got.
 - **A name used from another WESL module must be in the import list.** A call to a function that
   `common.wesl` exports but that `render.wesl` does not import compiles *without an error* — naga
   emits a broken shader, no `failed to process shader` line appears, and the surface renders as a
