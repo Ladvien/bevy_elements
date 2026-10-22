@@ -3051,3 +3051,191 @@ cargo run --release --manifest-path tools/wesl-check/Cargo.toml -- src
    (a grass mesh) belongs to `bevy_flora`.
 5. **The overcast dome is flat**, with its blocker diagnosed in iteration 28 (the `sky_gain`
    leak at grazing); it carries its Eddington implementation and its measurements in `/tmp/i28`.
+
+## Iteration 38 - 2026-10-21 - the cliff is not one grey: a rock face carries a palette
+
+**Commits:** `37f763c` (the research note `docs/research/rock-palette.md`), `c436024` (the
+implementation with its tests), `6927c20` (the note's Deviations), `647d3b6` (the README, the
+changelog and the showcase image), this log. **Sibling repos:** none. **Not released.**
+
+### Candidates
+
+| Rank | Candidate | Class | Decision |
+|---|---|---|---|
+| 1 | **The cliff is one grey** - the whole face is a single hue, the resultant 0.998 at dusk, and the rock-only patch at 3 m has a chroma's median of 0.0157 | 2 | **this iteration** |
+| 2 | The palette does not reach the distance: the blocks are band-limited away at 120 m, so a distant massif is still one cool grey | 2 | carried (the next item) |
+| 3 | The blocks' size spread: real and visible, but one family of size | 2 | carried |
+| 4 | The cost of the blocks, +28 % on the rock's pass in iteration 35 and this iteration's warp on top of it | 5 | carried |
+| 5 | The overcast dome is flat (`sky_gain` leaks at grazing, diagnosed in iteration 28) | 1 | carried |
+
+Rank 1 beat the carried items because it is in **every frame that shows a cliff**, and it is
+the last thing the rock's own material was missing: iteration 35 gave the cliff its *pieces*,
+iteration 36 gave the massif its *succession*, and iteration 37 gave the fragments their
+*irregularity* — and all three left the rock **one colour**. The measurement is damning and
+simple: at dusk the face is a single hue with a spread of 2.1°, and the cause is structural
+(the whole rock system is a set of *scalars*), so no amount of tuning would have fixed it.
+
+### What changed
+
+- **The rock's tone is a `vec3`, not a scalar.** A scalar can only make a rock lighter or
+  darker; a colour can make it another *rock*.
+- **A palette of four rocks** — a cool basalt, an iron-stained sandstone, a pale limestone, a
+  dark ferromanganese varnish — mixed as **convex shares** by a score, exactly as the ground's
+  palette is (iteration 30).
+- **The score is two narrow splits**: the cell's own factor (the *selection*) splits the
+  palette into its cool half and its warm half, and the cell's *second* draw (the
+  *distribution*) splits each half again. So a fragment is a **piece of one rock** and the
+  colour varies from fragment to fragment.
+- **The palette's equal-weight mean is exactly (1, 1, 1)**, so the rock's mean colour and mean
+  brightness cannot move.
+- **A rind**: the film of iron and manganese on the surface, a separate layer with its own
+  colour and a patchy coverage, band-limited away with the distance.
+- `Cell3::factor2` in `noise.wesl` and its CPU mirror: a **second, independent** hash of the
+  cell, because one hash gives one draw and the palette wants two.
+
+### Sources
+
+- **Tansem, K., Storemyr, P. (2020)**, *Red-coated rocks on the seashore: The esthetics and
+  geology of prehistoric rock art in Alta, Arctic Norway*, Geomorphology 395, DOI
+  `10.1002/gea.21832` (the record and the abstract were read; **the PDF was not obtained** —
+  Wiley returns 403). Used, and it is the model this note adopts: "the pronounced **red**
+  bedrock surfaces in the current seashore zone are composed of **inorganic iron films** related
+  to a high content of magnetite in the native sandstone"; and the sentence that is the whole
+  change: "it is highly likely that the rock art was originally carved on rocks with **red iron
+  films, rocks that are now generally gray**" - *the same rock* wears a red film in one place
+  and is grey in another, and the film's own colour is what the surface shows.
+- **Krinsley, D., Pye, K., Boggs, S., Tovey, D. (1998)**, *Desert (rock) varnish*, in *Backscattered
+  Scanning Electron Microscopy and Image Analysis of Sediments and Sedimentary Rocks*,
+  Cambridge University Press, DOI `10.1017/cbo9780511628894.008` (the record and its
+  introduction were read; **the PDF was not obtained**). Used: "Desert (rock) varnish is a thin
+  (**< 100 to 500 um thick**) coating of **ferromanganese oxides, clay minerals, and trace
+  elements**, which can form on sedimentary, igneous, or metamorphic rocks with stable surfaces";
+  and that it is "a special kind of microscale sedimentary deposit" with "numerous ultrathin
+  laminae that commonly grade into irregular pods of jumbled material" - so a varnish is
+  **layered** and **patchy**, and it is a *coating on* the rock and not the rock.
+- **Reneau, S. L. (1993)**, *Manganese Accumulation in Rock Varnish on a Desert Piedmont, Mojave
+  Desert, California, and Application to Evaluating Varnish Development*, Quaternary Research
+  40(1), DOI `10.1006/qres.1993.1084` (the record and the abstract were read; **the PDF was not
+  obtained**). Used: "Rock varnish coatings tend to become **thicker, darker, and more
+  continuous** over time, leading to the use of changes in overall varnish color and the
+  percentage of clast surfaces covered by varnish as relative-age indicators" - so the varnish's
+  *coverage* is a fraction of the surface, and its colour deepens with it. **Not indexed.**
+- **Potter, R. M., Rossman, G. R. (1979)**, *The manganese- and iron-oxide mineralogy of desert
+  varnish*, Geochimica et Cosmochimica Acta 43, DOI `10.1016/0009-2541(79)90085-8` (the record
+  was read; the PDF was not obtained). Named as the mineralogy of the varnish.
+- **Papavasiliou, N. (2015)**, *Real-Time Grass (and Other Procedural Objects) on Terrain*,
+  JCGT 4(1):26-49 (`https://jcgt.org/published/0004/01/02/paper.pdf`). **This is the model for
+  the mixing**, and it is the crate's *own* precedent: the ground's palette (iteration 30) is
+  this model's implementation, and the rock's palette is the same construction on a different
+  material. Used: the **reference colour** and the **score**, in HSV so that "the HSV color
+  space is more suitable, both for the definition of the reference colors and for the
+  calculation of color distances"; the **weight vector** `w`, which "allows us to ignore certain
+  color components during the calculation of the distance ... where a reasonable choice is gray
+  for which hue is meaningless", and the note that it "is also useful in many cases to discard
+  the lightness component, as its variation over the terrain is often the result of shadowing
+  effects, which are unrelated to terrain type"; the **exponent** `p`; and the **score-weighted
+  palette blend** (eq. 17), `C = sum s_i T_i / sum s_i`. **Not indexed.**
+- **Andersson, J. (2007)**, *Terrain rendering in Frostbite using procedural shader splatting*,
+  SIGGRAPH 2007 *Advances* ch. 5 (corpus `10.1145_1281500.1281668`): the **Overlay** blend, "a =
+  base < 0.5 ? 2*base*value : 1 - 2*(1-base)*(1-value)", which "doesn't affect areas where base
+  mask is 0.0 or 1.0" - the instrument for a *modulation* that must not move the mean, and the
+  reason the crate's palette is mixed as **convex shares** rather than as a modulation.
+- **The crate's own `ground-colour.md`** (iteration 30): the palette, the score, the convex
+  shares, and the three failures that fixed them - "by the unweighted mean of the tones the
+  ground's mean brightness drifted 3.2 DN, by the mixture's own colour the hue was cancelled
+  entirely, and by a per-channel mean the hue was cancelled again". The rock's palette is that
+  note's construction, and it inherits its discipline.
+- **The crate's own `rock-material.md`** (iteration 29): the rock's albedo `(0.072, 0.069,
+  0.067)` - "a stone face under a blue sky is grey with the blue in it" - and the "second, darker
+  rock colour" mixed in by the strata. The second tone is a *fixed* `vec3`, so the strata's
+  colour is one colour and not a palette.
+
+### The critique and the verdicts (`/tmp/i38/critique.md`)
+
+| Round | Finding | Verdict |
+|---|---|---|
+| 1 | The palette's tones were written as raw RGB triples and came out at saturations of **0.84 and 0.75** - a strong blue and a strong orange, which are not rock colours but *primaries*, and the cliff read as a rust-painted fence | NOT YET |
+| 2 | The palette's equal-weight mean was 0.93 and the face's mean luminance fell **2.7 DN** - a game that changes colour changes its lighting | NOT YET |
+| 3 | The distribution was a *field* at six cells, so the cliff read as **blotches** - coloured regions with every fragment in a region one rock | NOT YET |
+| 4 | The palette is written in **hue and saturation** and normalised so its mean is exactly (1, 1, 1), and the distribution is the cell's *second* draw, so the colour varies from fragment to fragment | **GREAT** |
+
+| Feature | Verdict |
+|---|---|
+| The face at 3 m | **GREAT** (the fragments carry their own colour, and it varies from fragment to fragment) |
+| The dusk | **GREAT** (warm sandstone and pale limestone, cool grey in the crevices, dark varnish) |
+| The dawn | **GREAT** (a cool blue shadowed face with warm ochre fragments) |
+| The face at 12 m | **GREAT** |
+| The distance at 120 m | **GREAT** (unchanged to four decimals; the blocks are band-limited away) |
+| The meadow | **GREAT** (7 of 921 600 pixels differ, by 1 DN) |
+| The cost | see the measurements |
+| The palette at a *distance* | NOT YET (the blocks are band-limited away, so a distant massif is still one cool grey - the next item) |
+| The varnish's red | NOT YET (cosmetic; the tone is a multiplier on a cool grey and the multiplication pushes it warm) |
+| The rind's patches | NOT YET (cosmetic; the film is there but does not read as a *layer*) |
+
+**The change as a whole: GREAT.** The cliff is a succession of different rock, the mean does
+not move, the meadow is untouched, and the distance is calm.
+
+### Measurements
+
+- **The face is not one hue.** Over a rock-only 500 x 340 patch of the face at 3 m: the hue's
+  **resultant falls from 0.800 to 0.656** and the hue's **spread rises from 27.6 to 39.7
+  degrees**. Over the whole face: the resultant 0.853 → 0.719 and the spread 21.1° → 34.2°.
+  The resultant is the measure the note did not have and the defect needed: a cliff of one rock
+  has every fragment on the same hue, and the circular resultant of the hue angles is near 1.
+- **The rock is a colour and not a grey.** The chroma's median over the rock-only patch:
+  **0.0157 → 0.0275**; over the whole face 0.0275 → 0.0353.
+- **The mean does not move.** The face's mean luminance at 3 m: **112.99 → 112.61 DN**, a
+  0.38 DN drift, because the palette's equal-weight mean is exactly (1, 1, 1) and the mixture
+  is a convex combination of the tones. The first version's mean was 0.93 and the face fell
+  2.7 DN.
+- **The distance is calm.** The view from 120 m: the material's own high-pass **4.3440 DN
+  before and after**, the same to four decimals. The blocks are band-limited away and the
+  massif carries the beds' banding.
+- **The meadow is untouched.** The `plains` preset at 6 m: **7 of 921 600 pixels differ, by 1
+  DN**, in a band across the middle of the frame - the GPU's own non-determinism and not the
+  palette, which is applied to the rock and not to the turf.
+- **Cost.** `bench_elements`, High, 1920 x 1080, `mountains`, the **minimum over the diagnostic
+  history**, the two builds run **back to back in one session**, and the card's state logged
+  throughout. The mountains' opaque pass, which is the pass the palette is in:
+
+  | session | the baseline | this one |
+  |---|---|---|
+  | 1 | **0.224 ms** | **0.227 ms** |
+  | 2 | 0.228 ms | 0.262 ms |
+  | 3 | 0.224 ms | 0.227 ms |
+
+  The **minimum over the rounds** is **0.224 ms on the baseline and 0.227 ms on this one, a
+  1.3 % regression** — the palette is nearly free, which is what the construction says: the
+  cell's factor and the cell's second factor are **already drawn** (the joint's Weibull uses
+  the first), and the mixture is four multiplies, a divide and a `select`.
+
+  **The card was contended for most of the session.** The two resident servers (scribe at
+  2.6 GB and distill at 7.5 GB) share the RTX 3090, and a *third* process was intermittently
+  using it: most readings were 0.56-0.66 ms for **both** builds, which is the card's state and
+  not the shader's. The three rows above are the readings that were taken while the card was
+  quiet, and the two builds' readings agree to within 0.004 ms in the quiet ones. The
+  minimum over the whole session is the same for both: 0.224 and 0.227.
+- **The full gate.** `cargo test` 271 plus the 2 new palette tests, clippy, doc, wasm, the GPU
+  integration suite (22 files), the lib GPU modules clouds (10), terrain (8), cover (8) and dust
+  (6), and `the_horizon_sky` alone: all pass.
+
+### The next five items, ranked
+
+1. **The palette does not reach the distance.** The blocks are band-limited away at 120 m and
+   the massif carries the *beds'* banding and the beds' own tone, so a distant massif is still
+   one cool grey - and a game that shows a mountain from a kilometre away sees no variety at
+   all. The beds carry the distance by design (iteration 36), and their *tone* is a scalar,
+   so the **beds** are where the palette has to go: a bed's own colour, drawn as a *hue* and
+   not as a brightness. The same palette, at the bed's scale.
+2. **The blocks' size spread.** Real and visible, but one family of size: a cliff also carries
+   the small chips and the big slabs in the same wall. The second generation of blocks was
+   tried and rejected (a speckle), so the spread comes from the cells' unequal sizes alone.
+3. **The cost of the blocks**, +28 % on the rock's pass in iteration 35, and the two warps on
+   top of it. A smaller cell is now in, so the *number* of cells went up; the prune's bound
+   and the band-limit are the two levers left.
+4. **The dry patch's own texture.** The palette gives the ground a *hue*; a dry patch needs a
+   *texture* too - the blades inside it should take the patch's hue rather than the turf's, and
+   a dry patch is coarser than green grass. The colour half is in this crate; the geometry half
+   (a grass mesh) belongs to `bevy_flora`.
+5. **The overcast dome is flat**, with its blocker diagnosed in iteration 28 (the `sky_gain`
+   leak at grazing); it carries its Eddington implementation and its measurements in `/tmp/i28`.

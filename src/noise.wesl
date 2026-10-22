@@ -282,6 +282,12 @@ struct Cell3 {
     point: vec3<f32>,
     /// The cell's own random factor, in [0, 1): a per-cell draw, used for the cell's tone.
     factor: f32,
+    /// A **second** per-cell draw, in [0, 1): an independent hash of the cell, for the rock's
+    /// palette. The palette wants two draws — the *rock* a fragment is and the *region* it
+    /// belongs to — and one hash gives one draw, so the second is a second hash of the same
+    /// cell. It is a *separate* hash and not a component of the first, so the two draws are
+    /// independent.
+    factor2: f32,
 }
 
 /// The 3D cellular (Worley) network: the *nearest* feature point, its distance and the cell's
@@ -301,6 +307,7 @@ fn cell3(p: vec3<f32>) -> Cell3 {
     var best = 1e9;
     var best_point = vec3<f32>(0.0);
     var best_factor = 0.0;
+    var best_factor2 = 0.0;
     // The cells are visited in order of increasing distance — the point's own cell first, then
     // the ring around it, then the ring around that — so the prune's bound tightens quickly.
     // In the natural order the bound is loose and about fourteen of the twenty-seven cells
@@ -359,12 +366,13 @@ fn cell3(p: vec3<f32>) -> Cell3 {
                     best = d;
                     best_point = point;
                     best_factor = h.z;
+                    best_factor2 = hash31(c + vec3<i32>(7919, 104729, 1299709));
                 }
             }
         }
       }
     }
-    return Cell3(sqrt(best), best_point, best_factor);
+    return Cell3(sqrt(best), best_point, best_factor, best_factor2);
 }
 
 /// Divergence-free noise (Bridson, Hourihan & Nordenstrm 2007): the curl of three Perlin

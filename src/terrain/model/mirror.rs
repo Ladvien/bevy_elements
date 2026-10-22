@@ -234,6 +234,56 @@ pub(crate) fn rock_block_coords(p: Vec3) -> Vec3 {
     (along + gradient * ROCK_BLOCK_WARP_M) / ROCK_BLOCK_M
 }
 
+/// The rock's **palette**: the colours a cliff is made of (`docs/research/rock-palette.md`).
+///
+/// The tones are multipliers on the rock's own albedo, and their **equal-weight mean is
+/// exactly (1, 1, 1)**, so the rock's mean colour and mean brightness cannot move.
+pub(crate) const ROCK_TONES: [Vec3; 4] = [
+    Vec3::new(0.848, 1.015, 1.309),
+    Vec3::new(1.223, 1.083, 0.832),
+    Vec3::new(1.214, 1.270, 1.256),
+    Vec3::new(0.715, 0.632, 0.603),
+];
+/// The width of a split in the palette, as a fraction of the draw's range (`common.wesl`).
+pub(crate) const ROCK_PALETTE_EDGE: f32 = 0.12;
+/// How far the palette is mixed in, 0 to 1 (`common.wesl`).
+pub(crate) const ROCK_PALETTE_STRENGTH: f32 = 0.90;
+
+/// The rock's own **colour** at a world point: the palette's mixture for the cell the point
+/// falls in, and its own brightness.
+///
+/// The **selection** is the cell's own factor and the **distribution** the cell's second
+/// draw, so a fragment is a *piece of one rock* and the colour varies from fragment to
+/// fragment — a cliff is not a set of coloured regions.
+pub(crate) fn rock_palette(p: Vec3) -> Vec3 {
+    let q = rock_block_coords(p);
+    let cell = crate::gpu::noise_mirror::cell3(q);
+    let sel_w = smoothstep(
+        0.5 - ROCK_PALETTE_EDGE,
+        0.5 + ROCK_PALETTE_EDGE,
+        cell.factor,
+    );
+    let reg_w = smoothstep(
+        0.5 - ROCK_PALETTE_EDGE,
+        0.5 + ROCK_PALETTE_EDGE,
+        cell.factor2,
+    );
+    let shares = [
+        (1.0 - sel_w) * (1.0 - reg_w),
+        (1.0 - sel_w) * reg_w,
+        sel_w * (1.0 - reg_w),
+        sel_w * reg_w,
+    ];
+    let total: f32 = shares.iter().sum();
+    let mut mixed = Vec3::ZERO;
+    for (share, tone) in shares.iter().zip(ROCK_TONES.iter()) {
+        mixed += *tone * (*share / total);
+    }
+    // The palette is mixed in at its own strength (`common.wesl`), so the mirror's colour is
+    // the shader's.
+    Vec3::ONE.lerp(mixed, ROCK_PALETTE_STRENGTH)
+}
+
 /// The joint's weight at a world point, 0 to 1: how close the point is to a block's boundary.
 ///
 /// The boundary is the distance to the second nearest feature point, and the joint's own width
@@ -534,6 +584,79 @@ mod tests {
             "the blocks are of many sizes: the p90/p10 ratio is {ratio:.2} over {} blocks \
              ({p10:.2} m to {p90:.2} m)",
             sizes.len()
+        );
+    }
+
+    /// The rock's **palette** does not move the rock's mean colour.
+    ///
+    /// The rule is the crate's own, from the ground's palette: "the ground is a place and not
+    /// a paint colour, while the *mean* colour and the *mean* brightness stay where they were
+    /// (a ground that changes colour changes the game's lighting)". A convex combination of
+    /// tones that bracket the base cannot drift the mean, and the tones are normalised so
+    /// that their equal-weight mean is exactly (1, 1, 1).
+    #[test]
+    fn the_palette_does_not_move_the_mean() {
+        let mut mean = Vec3::ZERO;
+        for tone in ROCK_TONES.iter() {
+            mean += *tone;
+        }
+        mean /= 4.0;
+        assert!(
+            (mean - Vec3::ONE).length() < 1e-3,
+            "the palette's equal-weight mean is {mean:?}, not (1, 1, 1)"
+        );
+    }
+
+    /// The fragments are of **different rock**, and not one rock in many shades.
+    ///
+    /// The measure: the *hue* of the fragments over a patch of the face. A cliff's fragments
+    /// are different minerals, so the palette's hues must differ; and the difference must be
+    /// at the *fragment's* scale, so a patch of the face sees several of them.
+    #[test]
+    fn the_fragments_are_of_different_rock() {
+        // The palette's own hues: the four tones must not be the same colour.
+        let hues: Vec<f32> = ROCK_TONES
+            .iter()
+            .map(|t| {
+                let max = t.x.max(t.y).max(t.z);
+                let min = t.x.min(t.y).min(t.z);
+                let d = max - min;
+                if d < 1e-6 { return 0.0; }
+                let h = if max == t.x {
+                    ((t.y - t.z) / d).rem_euclid(6.0)
+                } else if max == t.y {
+                    (t.z - t.x) / d + 2.0
+                } else {
+                    (t.x - t.y) / d + 4.0
+                };
+                h * 60.0
+            })
+            .collect();
+        let mut sorted = hues.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let spread = sorted[3] - sorted[0];
+        assert!(
+            spread > 60.0,
+            "the palette's hues are different colours: the spread is {spread:.1} degrees"
+        );
+        // And the fragments *use* them: **neighbouring** fragments must differ, or the cliff
+        // is one rock in many shades. The measure is the difference between the colours of
+        // two points a cell apart — the cell is the fragment, so two points a cell apart are
+        // two fragments.
+        let mut differ = 0;
+        let mut samples = 0;
+        for i in 0..200 {
+            let p = Vec3::new(i as f32 * 0.37, 20.0 + (i as f32) * 0.11, 0.0);
+            let a = rock_palette(p);
+            let b = rock_palette(p + Vec3::new(ROCK_BLOCK_M * 0.9, 0.0, 0.0));
+            if (a - b).length() > 0.10 {
+                differ += 1;
+            }
+            samples += 1;
+        }
+        assert!(
+            differ * 100 / samples > 60,
+            "the fragments are of different rock: {differ} of {samples} neighbours differ"
         );
     }
 

@@ -411,6 +411,73 @@ fn bed_boundary(index: f32) -> f32 {
 /// 1.00 DN, where the crate's own rock note asks for 9. A bed is a *darker* band, and the
 /// value is what carries at a distance.
 const ROCK_SECOND_TONE: vec3<f32> = vec3<f32>(0.80, 0.73, 0.66);
+/// The rock's **palette**: the colours a cliff is made of (`docs/research/rock-palette.md`).
+///
+/// A cliff is not one grey, and the crate's rock system was monochrome by construction: every
+/// tone in it was a *scalar*, and a scalar can only make a rock lighter or darker and never
+/// *another colour*. Measured on the build before this note, the face at dusk was a **single
+/// hue** — the circular resultant of the hue angles 0.998 and the spread 2.1° — and the
+/// rock-only patch at 3 m had a chroma's median of 0.0157, which is nearly grey.
+///
+/// The palette's members are *different minerals*, and each is a whole colour and not a tint
+/// of the rock's grey:
+///
+/// - `ROCK_TONE_BASALT` — a cool grey, a fresh volcanic rock, at 215° and a saturation of
+///   0.10;
+/// - `ROCK_TONE_SANDSTONE` — a warm ochre, an iron-stained sandstone, at 35° and 0.30 (Tansem &
+///   Storemyr 2020: the red bedrock surfaces "are composed of inorganic iron films");
+/// - `ROCK_TONE_LIMESTONE` — a pale warm buff, the lightest rock in the succession, at 45° and
+///   0.10;
+/// - `ROCK_TONE_VARNISH` — the dark brown of a ferromanganese varnish, at 25° and 0.20
+///   (Krinsley et al. 1998: "a thin coating of ferromanganese oxides, clay minerals, and trace
+///   elements").
+///
+/// The saturations are **low** — 0.10 to 0.30 — because rock is a *desaturated* colour. The
+/// first version of the palette was written as raw RGB triples and its tones came out at
+/// saturations of 0.84 and 0.75: a strong blue and a strong orange, which are not rock
+/// colours but *primaries*, and the cliff read as a rust-painted fence. The palette is
+/// therefore written in *hue and saturation* and converted, so the hues are the ones a
+/// geologist would name and the saturations are the ones a rock has.
+///
+/// The tones are **multipliers on the rock's own albedo**, so the crate's albedo
+/// `(0.072, 0.069, 0.067)` — "a stone face under a blue sky is grey with the blue in it" —
+/// still sets the rock's overall value and the palette only moves the *hue*.
+///
+/// The palette's **equal-weight mean is exactly (1, 1, 1)**, so the rock's mean colour and
+/// mean brightness cannot move: the tones are *normalised* so that they do. The first
+/// version of the palette was not, and the face's mean luminance fell 2.7 DN — a game that
+/// changes colour changes its lighting, and the crate's own rule from the ground's palette
+/// is that "the *mean* colour and the *mean* brightness stay where they were". The tones'
+/// own luminances then span 0.59 to 1.26, so a fragment is a *lighter or darker* piece of
+/// rock as well, which is the point.
+const ROCK_TONE_BASALT: vec3<f32> = vec3<f32>(0.848, 1.015, 1.309);
+const ROCK_TONE_SANDSTONE: vec3<f32> = vec3<f32>(1.223, 1.083, 0.832);
+const ROCK_TONE_LIMESTONE: vec3<f32> = vec3<f32>(1.214, 1.270, 1.256);
+const ROCK_TONE_VARNISH: vec3<f32> = vec3<f32>(0.715, 0.632, 0.603);
+/// The width of a split in the palette, as a fraction of the draw's range. A narrow edge
+/// makes a fragment emphatically ONE rock; a wide one blends two and the cliff is at one hue
+/// again. It is Papavasiliou's exponent `p`, written as a `smoothstep`'s width.
+const ROCK_PALETTE_EDGE: f32 = 0.12;
+/// How far the palette is mixed in, 0 to 1. The tones bracket the base, so the mixture is a
+/// convex combination of them and the rock's mean colour cannot drift — the crate's own rule
+/// from the ground's palette (`ground-colour.md`): "the ground is a place and not a paint
+/// colour, while the *mean* colour and the *mean* brightness stay where they were".
+const ROCK_PALETTE_STRENGTH: f32 = 0.90;
+/// The **rind's** own colour: the iron-and-manganese film on the rock's surface. It is a
+/// separate *layer* and not a tint: Tansem & Storemyr's "rocks with red iron films, rocks
+/// that are now generally gray" are the same rock, and the film is what the surface shows.
+const ROCK_RIND_TONE: vec3<f32> = vec3<f32>(1.225, 0.956, 0.770);
+/// The rind's own tone has a luminance of exactly 1, so the film moves the surface's *hue*
+/// and not its *value*: a rind is a colour on the rock and not a darkening of it.
+///
+/// The rind's **coverage**: how much of the surface the film takes, and how it is mixed in.
+/// The varnish's "percentage of clast surfaces covered" is the age indicator (Reneau et al.
+/// 1993), so the coverage is a fraction and not a tint of everything.
+const ROCK_RIND_MIX: f32 = 0.55;
+/// The rind's patch size, m: the scale of the film's own mottling. The film is a *fine*
+/// feature — a coating 100 to 500 um thick — and the patches of it are decimetres across, so
+/// the film is band-limited away long before the rocks' own colours are.
+const ROCK_RIND_M: f32 = 0.55;
 /// How far the beds' tone is mixed in, 0 to 1. The tone's luminance is 0.74, so at 0.55 the
 /// beds span an 14 % albedo drop — enough to read as bands on a lit face and to carry the
 /// massif's colour at a distance.
@@ -629,10 +696,29 @@ fn rock_material(p: vec3<f32>, warp: f32, footprint_m: f32) -> RockMaterial {
     // smooth face into a face made of pieces.
     let blocks = rock_blocks(p, footprint_m);
     if blocks.present > 0.0 {
-        // The block's own tone multiplies the rock's colour, and the joint darkens it.
+        // The block's own **colour** multiplies the rock's colour, and the joint darkens it.
         let joint = mix(1.0, ROCK_JOINT_DARKEN, blocks.joint);
         tint = tint * blocks.tone * joint;
         relief = relief + blocks.grad;
+    }
+    // The rock's **rind**: the film of iron and manganese on the surface. It is a separate
+    // *layer* and not a tint — Tansem & Storemyr's "rocks with red iron films, rocks that are
+    // now generally gray" are the same rock, and the film is what the surface shows
+    // (`docs/research/rock-palette.md`).
+    //
+    // The film's **coverage** is a fraction of the surface and it is patchy: the varnish's
+    // "percentage of clast surfaces covered" is the age indicator (Reneau et al. 1993), so the
+    // film covers *some* of the rock and not all of it. The patchiness is a field at the
+    // film's own scale, and the film is band-limited away with the distance — it is a fine
+    // feature, a coating 100 to 500 um thick, and the rocks' own colours are what survive.
+    let rind_keep = detail_keep(ROCK_RIND_M, footprint_m);
+    if rind_keep > 0.0 {
+        // `patch` is a WGSL reserved word, so the film's own field is the *film*.
+        let film = perlin3_d(p / ROCK_RIND_M + seed_offset(83u)).x / 0.2268;
+        // The coverage: the film is on the faces that have weathered longest, and it is a
+        // *fraction* — so the coverage is a threshold on the film's own field, softened.
+        let coverage = smoothstep(0.05, 0.45, film) * rind_keep;
+        tint = mix(tint, tint * ROCK_RIND_TONE, coverage * ROCK_RIND_MIX);
     }
     return RockMaterial(
         tint * dark * grain_tint,
@@ -659,8 +745,8 @@ fn rock_material(p: vec3<f32>, warp: f32, footprint_m: f32) -> RockMaterial {
 /// rock note is right that a cell network's boundaries read as a giraffe's hide — that is a
 /// statement about drawing the boundaries as *lines*; a block is a volume.
 struct RockBlocks {
-    /// The block's own tone, a multiplier around 1.
-    tone: f32,
+    /// The block's own **colour**: a multiplier on the rock's albedo, one channel each.
+    tone: vec3<f32>,
     /// The joint's darkening, 0 to 1: how close the point is to a block's edge.
     joint: f32,
     /// The block's relief gradient, in the world.
@@ -674,8 +760,9 @@ struct RockBlocks {
 /// One generation of blocks: the cells of the 3D network at `cell_m`, and the block that the
 /// nearest cell owns.
 struct RockBlockScale {
-    /// The block's own tone, a multiplier around 1.
-    tone: f32,
+    /// The block's own **colour**: a multiplier on the rock's albedo, one channel each, so a
+    /// fragment can be another *hue* and not only another brightness.
+    tone: vec3<f32>,
     /// The joint's darkening, 0 to 1: how close the point is to a block's edge.
     joint: f32,
     /// The block's relief gradient, in the world.
@@ -725,9 +812,52 @@ fn rock_block_scale(p: vec3<f32>, cell_m: f32, footprint_m: f32, jointed: bool) 
     let warp = perlin3_d(p / (cell_m * ROCK_BLOCK_WARP_CELLS)).yzw;
     let q = (along + warp * ROCK_BLOCK_WARP_M) / cell_m;
     let cell = cell3(q);
-    // The block's own tone: the cell's random factor, remapped about the middle so the
-    // blocks are lighter and darker pieces of the same rock.
-    let tone = 1.0 + ROCK_BLOCK_TONE * (cell.factor * 2.0 - 1.0);
+    // The block's own **colour**: a draw from the rock's palette, so the cliff is a
+    // succession of *different rock* and not one grey in many shades
+    // (`docs/research/rock-palette.md`).
+    //
+    // The palette's score is the *distribution* (which rocks are around) times the
+    // *selection* (which rock this fragment is). The **selection** is the cell's own factor,
+    // so a fragment is a **piece of one rock** and not a blend of several — which is what a
+    // fracture gives you: a broken piece of a bed, and a bed is one rock.
+    //
+    // The **distribution** is the cell's *second* draw, so it is at the *fragment's* scale and
+    // not at a field's: a cliff's colour must vary from fragment to fragment, or the cliff is
+    // a set of coloured regions and every fragment in a region is one rock. A field at six
+    // cells was tried first and it read as blotches.
+    let draw = cell.factor;
+    let region = cell.factor2;
+    // The four scores: the palette's members. The selection splits the palette in two — the
+    // *cool* half and the *warm* half — and the distribution splits each half again, so the
+    // four members are the four combinations.
+    //
+    // The scores are **squared** — Papavasiliou's exponent `p`, and the crate's own reason
+    // for squaring the turf's: a square is a multiply and not a `pow`, and three `pow` calls
+    // per pixel cost the mountains' opaque pass 0.137 ms → 0.252 ms. The square also makes
+    // the *selection* the dominant term, so a fragment is emphatically ONE rock and not a
+    // blend of two — and the blend is what left the cliff at one hue.
+    // The two splits as weights, so a fragment on the *edge* of a split is a blend of two
+    // rocks and a fragment in the middle of one is emphatically that rock. The width of the
+    // edge is the *score's* own sharpness, Papavasiliou's `p`.
+    let sel_w = smoothstep(0.5 - ROCK_PALETTE_EDGE, 0.5 + ROCK_PALETTE_EDGE, draw);
+    let reg_w = smoothstep(0.5 - ROCK_PALETTE_EDGE, 0.5 + ROCK_PALETTE_EDGE, region);
+    let s_basalt = (1.0 - sel_w) * (1.0 - reg_w);
+    let s_sandstone = (1.0 - sel_w) * reg_w;
+    let s_limestone = sel_w * (1.0 - reg_w);
+    let s_varnish = sel_w * reg_w;
+    let shares = s_basalt + s_sandstone + s_limestone + s_varnish;
+    let inv = 1.0 / max(shares, 1e-5);
+    // The mixture: a convex combination of the palette, so it lies between the tones and the
+    // rock's mean colour cannot drift (the crate's own rule from the ground's palette).
+    let mixed = (s_basalt * ROCK_TONE_BASALT
+        + s_sandstone * ROCK_TONE_SANDSTONE
+        + s_limestone * ROCK_TONE_LIMESTONE
+        + s_varnish * ROCK_TONE_VARNISH) * inv;
+    // The palette's *value* spread: the fragments are lighter and darker pieces of the same
+    // rock as well, the way a bed's own tone is.
+    let value = 1.0 + ROCK_BLOCK_TONE * (draw * 2.0 - 1.0);
+    // The block's own colour, and its brightness.
+    let tone = mix(vec3<f32>(value), mixed * value, ROCK_PALETTE_STRENGTH);
     // The joint: the cell's own **boundary** — the surface where two cells meet, so a point
     // close to it is at a joint and a point deep inside it is in the middle of a block.
     //
@@ -816,7 +946,7 @@ fn rock_blocks(p: vec3<f32>, footprint_m: f32) -> RockBlocks {
     // resolve, they are not looked up at all: the far terrain pays nothing for them, and the
     // mountains' opaque pass does not carry the cost over the whole massif.
     if keep <= 0.0 {
-        return RockBlocks(1.0, 0.0, vec3<f32>(0.0), 0.0, 0.0);
+        return RockBlocks(vec3<f32>(1.0), 0.0, vec3<f32>(0.0), 0.0, 0.0);
     }
     // The coarse generation: the big slabs.
     let coarse = rock_block_scale(p, ROCK_BLOCK_M, footprint_m, true);
@@ -853,7 +983,7 @@ fn rock_blocks(p: vec3<f32>, footprint_m: f32) -> RockBlocks {
         }
     }
     return RockBlocks(
-        mix(1.0, tone, keep),
+        mix(vec3<f32>(1.0), tone, keep),
         joint * keep,
         grad * keep,
         inside * keep,

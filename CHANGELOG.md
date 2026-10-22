@@ -6,6 +6,37 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ### Changed
 
+- **The cliff is not one grey: a rock face carries a palette.** The crate's cliff was a single
+  cool grey, from the near face to the horizon: at dusk and at dawn the face was a **single
+  hue** — the circular resultant of the hue angles 0.998 and the spread 2.1° — and the
+  rock-only patch at 3 m had a chroma's median of 0.0157, which is nearly grey. It read as
+  *concrete*.
+
+  The cause was structural, not a matter of tuning: the crate's rock system was **monochrome by
+  construction**. The bed's tone is a scalar, the block's tone is a scalar, and the second
+  tone is a fixed `vec3` — and a scalar can only make a rock lighter or darker, never *another
+  colour*.
+
+  The geology says the rock's own colour is not the point — the **surface's** colour is.
+  Tansem & Storemyr (2020) on the red-coated rocks of Alta: "it is highly likely that the rock
+  art was originally carved on rocks with **red iron films, rocks that are now generally
+  gray**" — the same rock wears a red film in one place and is grey in another. And Krinsley
+  et al. (1998) on desert varnish: "a thin (< 100 to 500 μm thick) coating of ferromanganese
+  oxides, clay minerals, and trace elements" — a coating *on* the rock, layered and patchy.
+
+  So the model is the crate's own, from the ground's palette: a **palette of tones mixed as
+  convex shares** by a score. The turf has four tones; the rock has four rocks — a cool
+  basalt, an iron-stained sandstone, a pale limestone, a dark ferromanganese varnish — and a
+  **rind**: the film of iron and manganese on the surface, a separate layer with its own
+  colour and its own patchy coverage.
+
+  Measured on the face at 3 m: the hue's resultant falls from **0.800 to 0.656**, the hue's
+  spread rises from **27.6° to 39.7°**, and the chroma's median rises from **0.0157 to
+  0.0275**. The mean luminance moves **0.38 DN** — the palette's equal-weight mean is exactly
+  (1, 1, 1), so a game that changes colour does not change its lighting. The `plains` preset
+  differs in 7 of 921 600 pixels, by 1 DN: the meadow is untouched. See
+  `docs/research/rock-palette.md`.
+
 - **The cliff is not a quilt: a rock face breaks into irregular fragments.** The crate's blocks
   came out as a **quilt of identical lozenges** — a regular lattice of same-size diamonds,
   every block the same shape with the same dark notch on the same side, in rows. It read as
