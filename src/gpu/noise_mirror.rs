@@ -249,6 +249,10 @@ pub(crate) struct Cell3 {
     /// The cell's own random factor, in [0, 1).
     #[allow(dead_code)]
     pub factor: f32,
+    /// A **second** per-cell draw, in [0, 1): an independent hash of the cell, for the rock's
+    /// palette (`noise.wesl`'s `factor2`).
+    #[allow(dead_code)]
+    pub factor2: f32,
 }
 
 /// Mirror of `cell3` in `noise.wesl`: the 3D cellular network's nearest feature point, the
@@ -259,6 +263,7 @@ pub(crate) fn cell3(p: Vec3) -> Cell3 {
     let mut best = 1e9_f32;
     let mut best_point = Vec3::ZERO;
     let mut best_factor = 0.0;
+    let mut best_factor2 = 0.0;
     // The cells are visited in order of increasing distance, so the prune's bound tightens
     // quickly. The bound is exact, so the result is the same as the full search.
     for ring in 0..3 {
@@ -293,6 +298,7 @@ pub(crate) fn cell3(p: Vec3) -> Cell3 {
                         best = d2;
                         best_point = point;
                         best_factor = h.z;
+                        best_factor2 = hash31(c + IVec3::new(7919, 104729, 1299709));
                     }
                 }
             }
@@ -301,6 +307,7 @@ pub(crate) fn cell3(p: Vec3) -> Cell3 {
     Cell3 {
         point: best_point,
         factor: best_factor,
+        factor2: best_factor2,
     }
 }
 
