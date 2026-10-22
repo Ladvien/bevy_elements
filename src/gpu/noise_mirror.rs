@@ -400,7 +400,6 @@ mod tests {
         assert!(worst < 2e-3, "worst derivative error {worst}");
     }
 
-    #[test]
     /// The value-only noise and the derivative-carrying one agree **exactly**.
     ///
     /// The value-only noise omits the derivative's terms, so a call site can switch to it
