@@ -34,8 +34,9 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
   Measured on a face at 3 m: the blocks' **edge-orientation resultant** — how strongly the
   blocks' edges agree on a direction, which is the quilt's signature — falls from **0.431 to
   0.277**, and the material's own high-pass **rises** from 6.67 to **8.02 DN**. The view from
-  120 m is byte-identical, so the distance is calm, and the `plains` preset is byte-identical,
-  so the meadow is untouched. See `docs/research/rock-fragments.md`.
+  120 m is unchanged to four decimals (the material's own high-pass 4.3440 DN before and
+  after), so the distance is calm, and the `plains` preset is byte-identical, so the meadow is
+  untouched. See `docs/research/rock-fragments.md`.
 
 ### Fixed
 

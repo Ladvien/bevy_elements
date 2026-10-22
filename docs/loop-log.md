@@ -2985,8 +2985,12 @@ the distance is calm, the meadow is untouched.
 - **The material is *more* visible.** The material's own high-pass over a 500 x 340 patch of
   the face at 3 m: **6.67 DN before, 8.02 DN after**. The dark fraction (the fragments'
   shadows) rises from 16.8 % to 22.7 %, and the seam spacings measured from 1497 to 2750.
-- **The distance is calm.** The view from 120 m is **byte-identical**: the blocks are
-  band-limited away, and the massif carries the beds' banding.
+- **The distance is calm.** The view from 120 m: the blocks are band-limited away and the
+  massif carries the beds' banding. Over a 500 x 300 patch of the far massif the material's
+  own high-pass is **4.3440 DN before and 4.3440 DN after** - the same to four decimals, so
+  the blocks contribute nothing measurable at that distance. (The two files are not
+  byte-identical: 12 225 of 921 600 pixels differ, by up to 16 DN, which is the GPU's own
+  non-determinism in the sky's gradient and not the rock's material.)
 - **The meadow is untouched.** The `plains` preset at 6 m is **byte-identical**.
 - **Cost.** `bench_elements`, High, 1920 x 1080, `mountains`, the **minimum over the
   diagnostic history**, the two builds run **back to back in one session**, three rounds each.
