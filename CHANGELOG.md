@@ -6,6 +6,37 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ### Changed
 
+- **A cliff carries slabs and chips: a second joint set, and a spacing that varies.** The
+  crate's cliff was a dense field of same-sized angular chips — a shattered safety-glass
+  window, not a rock face. At 3 m the face is a uniform mosaic of pieces a hand's width across,
+  and a real cliff carries a metre-wide slab, a fist-sized block and a chip *in the same wall*.
+
+  The cause was in the crate's own numbers: the block network's **cells** already varied — the
+  p10 0.25 m and the p90 1.31 m, a 5.24:1 spread — so the *rendering* of them was what
+  flattened them. Every cell was drawn with the same joint width and the same relief, so a big
+  cell and a small cell read as the same kind of piece.
+
+  And the geology says why a cliff has more than one *kind* of piece. Verdian et al. (2021): the
+  initial size distribution "should strongly reflect the size distribution of latent blocks …
+  which is set by the **spacing and orientation of fractures, foliations, and bedding
+  planes**" — a block is the intersection of **three** families of planes. And Strauhal &
+  Zangerl (2021) name the simplification the crate made: "the block size distribution is
+  estimated by **assuming that the fractures are fully persistent**". The crate's single,
+  always-persistent cell network is exactly that simplification.
+
+  So the cliff now has **two joint sets**: the cell network's, and a second family of parallel
+  planes across the bedding. A family of planes is a **period**, and a period is a coordinate —
+  so the second set costs a dot product, a division and a `fract`, and *no second lookup*,
+  which is what makes it affordable on the crate's hottest path. The planes **wander** and they
+  **end**, because a joint set's fractures are non-persistent, and a perfectly straight plane
+  set reads as a wire fence across the face.
+
+  Measured: the blocks' edge-orientation resultant at dusk falls from **0.312 to 0.219** and the
+  gradient's direction's resultant from **0.057 to 0.017** — the lattice's regularity is
+  broken. The pieces' areas spread at 8 m (the p75/p25 ratio 2.29 → 3.35). The view from 120 m
+  is unchanged to four decimals, and the `plains` preset differs in **0** of 921 600 pixels. See
+  `docs/research/block-sizes.md`.
+
 - **A distant range is many rocks: the beds carry the colour to the horizon.** The crate's
   palette reached the cliff's *fragments* and stopped there, and the fragments are band-limited
   away at 120 m — so a distant massif was still one cool grey, every massif the same, the
