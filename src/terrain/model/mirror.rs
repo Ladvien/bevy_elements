@@ -1,10 +1,10 @@
 //! CPU transliterations of the terrain kernels that the tests compare against: the procedural
 //! generator of `generate.wesl` and the layer weights of `terrain.wesl`.
 
-use bevy::math::{IVec3, UVec2, Vec2, Vec3};
+use bevy::math::{IVec2, IVec3, Mat2, UVec2, Vec2, Vec3};
 
 use super::{F_HALF, GAIN, LACUNARITY, OCTAVE_ROTATION, R_LOW, R_SPAN, octave_count, seed_mix};
-use crate::gpu::noise_mirror::perlin3_d;
+use crate::gpu::noise_mirror::{hash33, perlin3_d};
 use crate::terrain::ProceduralTerrain;
 
 /// Both noise sums of a sample point: `(f, r)` of the research note.
@@ -528,6 +528,107 @@ pub(crate) fn scree_coverage(xz: Vec2) -> f32 {
         SCREE_SIZE_MAX * 0.8,
     );
     coarse.max(fine * (1.0 - coarse))
+}
+
+/// `textures.wesl`'s hex grid scale (Mikkelsen's `2√3`).
+pub(crate) const HEX_SCALE: f32 = 3.464_101_6;
+/// `textures.wesl`'s sampling gate, height-blend sharpness and its band-limit (m).
+pub(crate) const DETAIL_GATE: f32 = 0.01;
+pub(crate) const HEIGHT_BLEND: f32 = 8.0;
+pub(crate) const HEIGHT_BLEND_RESOLVED_M: f32 = 0.01;
+pub(crate) const HEIGHT_BLEND_LOST_M: f32 = 0.03;
+
+/// `hex_grid`: the three hex-grid vertices around `st` (texture tiles) and their weights.
+pub(crate) fn hex_grid(st: Vec2) -> ([IVec2; 3], Vec3) {
+    let s = st * HEX_SCALE;
+    let skewed = Vec2::new(s.x - 0.577_350_27 * s.y, 1.154_700_5 * s.y);
+    let base = skewed.floor();
+    let f = skewed - base;
+    let base = base.as_ivec2();
+    let z = 1.0 - f.x - f.y;
+    let up = if z <= 0.0 { 1.0 } else { 0.0 };
+    let flip = 2.0 * up - 1.0;
+    let u = up as i32;
+    let w = Vec3::new(-z * flip, up - f.y * flip, up - f.x * flip);
+    let vertices = [
+        base + IVec2::new(u, u),
+        base + IVec2::new(u, 1 - u),
+        base + IVec2::new(1 - u, u),
+    ];
+    (vertices, w)
+}
+
+/// `hex_centre`: a hex vertex's centre in texture tiles.
+pub(crate) fn hex_centre(v: IVec2) -> Vec2 {
+    let p = v.as_vec2();
+    Vec2::new(p.x + 0.5 * p.y, 0.866_025_4 * p.y) / HEX_SCALE
+}
+
+/// `layer_maps`' hex blend: Mikkelsen's contrast on the taps' heights and the fetch cut-off.
+pub(crate) const HEX_CONTRAST: f32 = 0.6;
+pub(crate) const TAP_MIN: f32 = 0.00125;
+
+/// The hexes' `w⁷` shares, normalised.
+fn hex_shares(bary: Vec3) -> Vec3 {
+    let w2 = bary * bary;
+    let b7 = w2 * w2 * w2 * bary;
+    b7 / (b7.x + b7.y + b7.z)
+}
+
+/// `layer_maps`' tap weights for the barycentric weights `bary` and the taps' heights, with
+/// every tap fetched (`all`) or only the live ones.
+pub(crate) fn hex_tap_weights(bary: Vec3, heights: Vec3, all: bool) -> Vec3 {
+    let shares = hex_shares(bary);
+    let live = if all { Vec3::ONE } else { Vec3::select(shares.cmpgt(Vec3::splat(TAP_MIN)), Vec3::ONE, Vec3::ZERO) };
+    let weighted = shares * (Vec3::ONE + (2.0 * heights - Vec3::ONE) * HEX_CONTRAST) * live;
+    weighted / (weighted.x + weighted.y + weighted.z).max(1e-12)
+}
+
+/// `hex_tap`: the hex's coordinate in the texture for ground layer `layer`, and its orientation
+/// (one of the eight: an optional swap of the axes and a sign on each).
+pub(crate) fn hex_tap(v: IVec2, layer: u32, st: Vec2) -> (Vec2, Mat2) {
+    let h = hash33(IVec3::new(v.x, v.y, layer as i32));
+    let k = (h.z * 8.0) as u32;
+    let swap = k & 1 != 0;
+    let signs = Vec2::new(
+        if k & 2 != 0 { -1.0 } else { 1.0 },
+        if k & 4 != 0 { -1.0 } else { 1.0 },
+    );
+    let (c0, c1) = if swap { (Vec2::Y, Vec2::X) } else { (Vec2::X, Vec2::Y) };
+    let rot = Mat2::from_cols(c0 * signs, c1 * signs);
+    let centre = hex_centre(v);
+    (rot * (st - centre) + centre + Vec2::new(h.x, h.y), rot)
+}
+
+/// `tap_slope`'s turn: a slope read in a tap's texture, back in the world.
+pub(crate) fn tap_slope(texture_slope: Vec2, rot: Mat2) -> Vec2 {
+    rot.transpose() * texture_slope
+}
+
+/// `height_sharpness`: the height blend's sharpness at a pixel footprint, m.
+pub(crate) fn height_sharpness(footprint_m: f32) -> f32 {
+    HEIGHT_BLEND * (1.0 - smoothstep(HEIGHT_BLEND_RESOLVED_M, HEIGHT_BLEND_LOST_M, footprint_m))
+}
+
+/// The ground layers' shares after the height blend, as `ground_textured` assembles them from
+/// each layer's `height_lift`: the lifts scaled to the ground's own share (`w`: sand, soil, grass).
+pub(crate) fn height_blend(w: Vec3, h: Vec3, sharpness: f32) -> Vec3 {
+    let total = w.x + w.y + w.z;
+    let lift = |h: f32| (sharpness * (h - 0.5)).exp();
+    let e = (w - Vec3::splat(DETAIL_GATE)).max(Vec3::ZERO) * Vec3::new(lift(h.x), lift(h.y), lift(h.z));
+    let sum = e.x + e.y + e.z;
+    if sum <= 0.0 {
+        return w;
+    }
+    e * (total / sum)
+}
+
+/// `ground_textured`'s grain share: the share of the procedural grain's albedo the ground keeps,
+/// for the ground layers' shares `b`, their tile sizes (zero: untextured) and the set's `grain`.
+pub(crate) fn grain_share(b: Vec3, tile: Vec3, grain: f32) -> f32 {
+    let kept = Vec3::select(tile.cmpgt(Vec3::ZERO), Vec3::splat(grain), Vec3::ONE);
+    let total = b.x + b.y + b.z;
+    if total > 1e-6 { b.dot(kept) / total } else { 1.0 }
 }
 
 #[cfg(test)]
@@ -1379,5 +1480,129 @@ mod tests {
             }
         }
         assert_eq!(slope_deg(&vec![3.0; 128], size, 2.0, 0, 0), 0.0);
+    }
+
+    /// The hex grid's weights are the point's barycentric coordinates in the triangle of the
+    /// three hexes' centres: none is negative, they sum to one, and they rebuild the point. A
+    /// vertex paired with another's weight rebuilds a different point.
+    #[test]
+    fn the_hex_weights_are_the_points_barycentric_coordinates() {
+        for i in 0..2000 {
+            let st = Vec2::new(i as f32 * 0.013_7 - 13.0, (i * 7919 % 2000) as f32 * 0.011_3 - 11.0);
+            let (v, w) = hex_grid(st);
+            assert!(w.min_element() >= -1e-6, "{st}: a negative weight {w}");
+            assert!((w.x + w.y + w.z - 1.0).abs() < 1e-5, "{st}: weights {w}");
+            let rebuilt = w.x * hex_centre(v[0]) + w.y * hex_centre(v[1]) + w.z * hex_centre(v[2]);
+            assert!((rebuilt - st).length() < 1e-4, "{st} rebuilt as {rebuilt}");
+        }
+    }
+
+    /// A hex tap that is not fetched could have carried at most 0.5 % of the blend, whatever
+    /// the taps' heights: the fetch cut-off is safe, and the blend with it differs from the full
+    /// one by no more than that.
+    #[test]
+    fn a_tap_that_is_not_fetched_carries_almost_nothing() {
+        let mut state = 12_345u32;
+        let mut next = || {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (state >> 8) as f32 / 16_777_216.0
+        };
+        let mut skipped = 0;
+        for i in 0..4000 {
+            let st = Vec2::new(i as f32 * 0.009_1 - 18.0, (i * 7919 % 4000) as f32 * 0.008_3 - 16.0);
+            let (_, bary) = hex_grid(st);
+            for _ in 0..4 {
+                let heights = Vec3::new(next(), next(), next());
+                let full = hex_tap_weights(bary, heights, true);
+                let cut = hex_tap_weights(bary, heights, false);
+                let shares = hex_shares(bary);
+                for k in 0..3 {
+                    if shares[k] <= TAP_MIN {
+                        skipped += 1;
+                        assert!(full[k] <= 0.005, "{st} {heights}: a skipped tap weighed {}", full[k]);
+                    }
+                }
+                assert!((full - cut).abs().max_element() <= 0.005, "{st}: {full} against {cut}");
+            }
+        }
+        assert!(skipped > 4000, "the cut-off skips taps: {skipped}");
+    }
+
+    /// A tap's slope turns back into the world by the transpose of its rotation: a texture whose
+    /// height rises along a texture direction rises, in the world, along the direction the tap's
+    /// coordinate maps onto it. With the rotation itself instead, the relief would be lit from
+    /// the wrong side in every hex but the unrotated ones.
+    #[test]
+    fn a_taps_slope_turns_back_into_the_world() {
+        let rise = Vec2::new(0.3, -0.7);
+        let e = 1e-3;
+        for vx in -4..4 {
+            for vy in -4..4 {
+                let v = IVec2::new(vx, vy);
+                let st = hex_centre(v) + Vec2::new(0.01, 0.02);
+                let height = |p: Vec2| rise.dot(hex_tap(v, 2, p).0);
+                let finite = Vec2::new(
+                    height(st + Vec2::X * e) - height(st - Vec2::X * e),
+                    height(st + Vec2::Y * e) - height(st - Vec2::Y * e),
+                ) / (2.0 * e);
+                let (_, rot) = hex_tap(v, 2, st);
+                let slope = tap_slope(rise, rot);
+                assert!((slope - finite).length() < 2e-3, "{v}: {slope} vs {finite}");
+            }
+        }
+    }
+
+    /// The height blend keeps the ground's share whatever the heights, lets the taller layer
+    /// show, and starts where the sampling does: a layer at the gate has no share and one just
+    /// above it a small one, so its tallest texels do not jump in on a contour line.
+    #[test]
+    fn the_height_blend_keeps_the_ground_and_starts_at_the_gate() {
+        let w = Vec3::new(0.0, 0.3, 0.5);
+        for h in [Vec3::new(0.5, 0.2, 0.9), Vec3::new(0.5, 0.9, 0.1), Vec3::splat(0.5)] {
+            let b = height_blend(w, h, HEIGHT_BLEND);
+            assert!((b.x + b.y + b.z - 0.8).abs() < 1e-6, "{h}: {b}");
+        }
+        let b = height_blend(Vec3::new(0.0, 0.5, 0.5), Vec3::new(0.5, 0.9, 0.2), HEIGHT_BLEND);
+        assert!(b.y > 0.95, "the taller soil shows: {b}");
+        let tall = Vec3::new(1.0, 0.5, 0.5);
+        let at_gate = height_blend(Vec3::new(DETAIL_GATE, 0.0, 1.0 - DETAIL_GATE), tall, HEIGHT_BLEND);
+        assert_eq!(at_gate.x, 0.0, "{at_gate}");
+        let above = height_blend(
+            Vec3::new(DETAIL_GATE + 1e-4, 0.0, 1.0 - DETAIL_GATE - 1e-4),
+            tall,
+            HEIGHT_BLEND,
+        );
+        assert!(above.x > 0.0 && above.x < 0.01, "{above}");
+    }
+
+    /// The height blend is band-limited: underfoot it is whole, and where a pixel no longer
+    /// resolves the heights' features it no longer depends on them, so two pixels whose
+    /// filtered heights differ by a hair cannot flip between layers (the mid field's sparkle).
+    #[test]
+    fn the_height_blend_fades_where_the_heights_are_not_resolved() {
+        assert_eq!(height_sharpness(0.002), HEIGHT_BLEND);
+        assert_eq!(height_sharpness(HEIGHT_BLEND_LOST_M), 0.0);
+        let w = Vec3::new(0.0, 0.5, 0.5);
+        let far = height_sharpness(0.05);
+        let a = height_blend(w, Vec3::new(0.5, 0.55, 0.45), far);
+        let b = height_blend(w, Vec3::new(0.5, 0.45, 0.55), far);
+        assert_eq!(a, b, "far: the heights decide nothing");
+        let near = height_sharpness(0.002);
+        let a = height_blend(w, Vec3::new(0.5, 0.55, 0.45), near);
+        let b = height_blend(w, Vec3::new(0.5, 0.45, 0.55), near);
+        assert!(a.y > b.y + 0.3, "near: the taller layer shows ({a} against {b})");
+    }
+
+    /// A layer the set leaves untextured (tile zero) keeps the whole procedural grain, so the
+    /// dunes keep their mottle under a set that textures only the soil and the grass; a textured
+    /// layer keeps the set's share, and a mixed ground keeps the shares' weighted mean.
+    #[test]
+    fn an_untextured_layer_keeps_its_whole_grain() {
+        let set = Vec3::new(0.0, 2.0, 2.0);
+        assert_eq!(grain_share(Vec3::new(0.9, 0.0, 0.0), set, 0.3), 1.0);
+        assert!((grain_share(Vec3::new(0.0, 0.2, 0.7), set, 0.3) - 0.3).abs() < 1e-6);
+        assert!((grain_share(Vec3::new(0.5, 0.0, 0.5), set, 0.3) - 0.65).abs() < 1e-6);
+        assert!((grain_share(Vec3::new(0.5, 0.0, 0.5), Vec3::splat(2.0), 0.3) - 0.3).abs() < 1e-6);
+        assert_eq!(grain_share(Vec3::ZERO, set, 0.3), 1.0, "no ground: no change");
     }
 }
