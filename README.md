@@ -26,6 +26,7 @@ Every system was studied in the home-still paper library first. The note for eac
 | `HydrologyPlugin` | `hydrology` | Flooding, rivers and lakes as one shallow-water field on the terrain grid (Mei et al. 2007 virtual pipes with a depth-dependent pipe area and Manning friction), `WaterSource` and `WaterSink`, rain split into rain and snow per cell, hydraulic erosion with flux-form sediment transport, thermal erosion, `ErodeTerrain` bakes, and `Environment::water_depth` / `water_velocity` |
 | `WaterPlugin` | `hydrology` | Draws the hydrology's water over the terrain (`WaterSettings`): a second CDLOD patch pool displaced to bedrock + sediment + water, a per-channel Beer–Lambert *absorb* pass (`AlphaMode::Multiply`, thickness from the depth prepass with Snell's refraction) and a *surface* pass (`AlphaMode::Add`: Fresnel reflection of the sky and sun, silt body colour, foam), flow-mapped ripples (Vlachos 2010, two phases) from the simulated velocity, and the sun's path through the water to the bed; the pool also draws for `TerrainRender::External` |
 | `GroundCoverPlugin` | `cover` | Snow and wetness maps on the terrain grid: snow accumulates at each cell's own rain–snow split and shelter, densifies, drifts with the wind, smooths and melts into hydrology's water (degree-day, Hock 2003), wetness follows rain and evaporation; the terrain and ground materials shade snow, wet darkening and gloss, and puddles with ripples; `SurfaceWeathering` becomes the map's mean around the camera; `Environment::snow_depth` and `wetness` |
+| `RocksPlugin` | `rocks` | Boulders and stones on the terrain as meshes, with silhouettes and cast shadows: sized by Golombek's exponential rock-abundance law, angular talus blocks below cliffs (in heaps), rounded rocks in patches over the meadow and more on steep hillsides, none on sand or on the cliffs; each seated on the surface the CDLOD patches draw and drawn to a distance in proportion to its size, shrinking away at the end of its range; `WeatheredMaterial` with a stone grain, so the rocks take snow, rain and cloud shadows; `RockSettings`, `ScatteredRock` (for a game's colliders) and `RockStats` |
 | `DustPlugin` | `dust` | Wind-blown sand on the terrain's `sediment` layer: a capacity `k u² (u − u_t)` from the 10 m wind with Venturi speed-up and 15° lee shadow (Paris et al. 2019), a line scan that relaxes the flux over the saturation length and moves the bed by the flux divergence (conserving sand exactly), then hydrology's thermal kernels avalanche it at 34°; runs only while the wind can exceed 8 m/s. `Weather::dust` also fills 40 % of the precipitation particle buffer with tan sprites (`kind = 2`) and tints the ground fog |
 | `TrailsPlugin` | `trails` | Footprints, ruts and tracks: `Imprint` components press a centimetre field that follows the focus to their Bekker–Wong sinkage (CRREL's compaction limit in snow) with a rim of the displaced material, sweeping the path between frames; new snow fills it, wind smooths it, sand and mud slump; on the crate's terrain or a game's own ground (`TrailGround`); the terrain and ground materials and `WeatheredMaterial::with_trails()` draw it per pixel with parallax occlusion mapping and a soft self-shadow; `Environment::trail_depth`; `TrailState` for custom shaders |
 | `WavesPlugin` | `waves` | Ripples and wakes: `WaterContact` ellipsoids press the hydrology's water with the pressure head of their column and their entry's impact; a dispersive capillary-gravity wave field in three camera-following cascades (iWave with a kernel fitted to Airy's dispersion) reflects off the shores, slows in the shallows, follows the current, breaks into foam; drawn by the water's passes; `WaveState` for custom shaders |
@@ -290,6 +291,35 @@ fn deep_wet_snow(mut commands: Commands) {
 `Environment::snow_depth(Vec2)` and `wetness(Vec2)` answer from the last readback like `water_depth`. `SurfaceWeathering` (and so `ElementsGlobals` and `WeatheredMaterial`) follows the mean of the maps within 50 m of the camera once a terrain has been read back; before that, and without a terrain, it is the point model at the reference elevation.
 
 ![Snow a game hour in under a clear sky](docs/ground_cover_snow.png) ![Wet ground with level puddles and ripples after a rain bake](docs/ground_cover_rain.png)
+
+### Rocks
+
+`RocksPlugin` scatters boulders and stones over the `Terrain` as meshes, so the ground has silhouettes and cast shadows and not only a painted texture (`docs/research/rock-scatter.md`). Where rocks lie comes from the terrain readback: a **talus** of angular blocks in the scree's band of slope (16°–40°) below a cliff, in heaps a few blocks across; **rounded rocks** over the meadow, sparse on the flat, more on steep hillsides and in rocky patches a few hundred metres across; nothing on the rock above 40° and nothing on sand. How many and how big follows Golombek's exponential rock-abundance law: rocks of diameter `D` or more cover `k·exp(−(1.79 + 0.152/k)·D)` of the ground, `k` the total cover, so a boulder is rare and a stone common. The shapes are jointed blocks — a few joint planes, the edges sharp on a talus and worn round on a meadow — squashed to the axis ratios measured on talus (the short axis a third to a half of the long one), lying on their largest face, a quarter to a third buried.
+
+Each rock sits on the surface the CDLOD patches actually draw (the readback on the covering patch's lattice, morphed by the camera's distance like the vertex shader does), so a distant rock does not float over a coarse patch. A rock of diameter `D` is drawn to `ElementsQuality::rock_range() · D` metres (100 m per metre at High) and shrinks away over the last fifth of that, so it vanishes at the same size on screen whatever its size and does not pop; a near and a far mesh (1280 and 320 triangles) switch at `22·D`. They are drawn with `WeatheredMaterial` and a stone grain (`WeatheredExtension::with_grain`), so they take snow on their tops, wetness and cloud shadows.
+
+```rust
+# use bevy::prelude::*;
+# use bevy_elements::*;
+fn rockier(mut commands: Commands) {
+    commands.insert_resource(RockSettings {
+        // A boulder field on the meadow's rocky patches instead of the default 5 %.
+        meadow_cover: 0.15,
+        ..default()
+    });
+}
+
+// Rocks are plain entities: give them colliders when they appear (`app.add_observer(on_rock)`).
+fn on_rock(add: On<Add<ScatteredRock>>, rocks: Query<&ScatteredRock>) {
+    if let Ok(rock) = rocks.get(add.entity) {
+        let _ = (rock.diameter_m, rock.height_m);
+    }
+}
+```
+
+`ElementsPlugins` includes it; `ElementsPlugins.build().disable::<RocksPlugin>()` leaves it out, and `RockSettings { range_scale: 0.0, .. }` draws none.
+
+![Before and after: the talus below a cliff, and a rocky patch on the hills](docs/rocks.png)
 
 ### Dust storms
 
@@ -573,6 +603,7 @@ Native (Vulkan, Metal, DX12) and wasm WebGPU. WebGL2 is unsupported: the simulat
 - Oceans and FFT waves.
 - Bit-deterministic GPU simulation. Astronomy, the weather scheduler and lightning are deterministic and seeded; GPU results are not.
 - A Purkinje shift or other low-light colour change: exposure keeps night dark, but colour handling is left to the tonemapper.
+- Twigs, fallen branches, leaf litter and other organic debris on the ground: they are foliage, and `bevy_flora` owns it. This crate scatters the rock.
 
 ## Compatibility
 
@@ -613,7 +644,7 @@ Run with `cargo run --release --example <name>`. Every example takes `ELEMENTS_F
 | Example | Shows |
 |---|---|
 | `quickstart` | The quick start: rolling hills under a sun and a sky |
-| `terrain_tour` | The terrain presets; `ELEMENTS_PRESET=mountains`, `ELEMENTS_HOUR`, `ELEMENTS_EYE` / `ELEMENTS_LOOK` / `ELEMENTS_AGL`, `ELEMENTS_UNDERLAY=1` (a red plane under the terrain shows cracks) |
+| `terrain_tour` | The terrain presets; `ELEMENTS_PRESET=mountains`, `ELEMENTS_HOUR`, `ELEMENTS_EYE` / `ELEMENTS_LOOK` / `ELEMENTS_AGL`, `ELEMENTS_UNDERLAY=1` (a red plane under the terrain shows cracks), `ELEMENTS_FLY=8` (the camera glides forward at 8 m/s, held above the ground, for a moving capture) |
 | `external_ground` | A plain plane of your own shaded by `GroundExtension` over an `external()` terrain |
 | `day_night` | A solstice day at 45° N in two minutes; the camera follows the sun while it is up and the moon after; `ELEMENTS_HOUR=19.5` holds an hour and frames the body, `ELEMENTS_START=19` starts the running day at that hour, `ELEMENTS_DATE=2026-07-14` sets the date (a moon-phase sweep), `ELEMENTS_PRESET` holds a weather preset (default `Clear`) |
 | `weather_tour` | Every preset for 20 s; `ELEMENTS_PRESET=Fog` holds one, `ELEMENTS_HOUR` holds an hour, `ELEMENTS_PITCH` / `ELEMENTS_HEADING` aim the camera (degrees), `ELEMENTS_GROW_HOURS=6` integrates 6 game hours of the held preset before the first frame (accumulated snow, wet ground) |

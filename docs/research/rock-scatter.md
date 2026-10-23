@@ -95,12 +95,20 @@ crate's own weather.
 **1. Where rocks lie: a cover field `k(x)`.** `k` is Golombek's *total fractional area covered
 by rocks*, evaluated per candidate from the terrain readback:
 
-- **Talus**: `k = talus_cover · band(α)`, where `band` is the scree's own band
-  (`smoothstep(16°, 26°, α) · (1 − smoothstep(31°, 40°, α))`), so the meshes lie exactly where
-  the painted scree lies, at the rock's foot.
-- **Meadow**: `k = meadow_floor + (meadow_cover − meadow_floor) · patches(x)`, where `patches`
-  is a slow field (220 m) thresholded so about a quarter of the meadow is a rocky patch:
-  Golombek's plain at 1–2% and rocky ground at 4–5% are one landscape's two states.
+- **Talus**: `k = talus_cover · band(α) · cliff_above · clusters(x)`, where `band` is the scree's
+  own band (`smoothstep(16°, 26°, α) · (1 − smoothstep(31°, 40°, α))`), so the meshes lie where
+  the painted scree lies; `cliff_above` is the steepest of four points 6–36 m up the slope, as
+  rock (`smoothstep(36°, 44°)`), because a talus is the rock a cliff sheds and lies only below
+  one (Galin: "accretion cones of fallen rocks… at the bottom of cliffs"; Verdian measured
+  talus–cliff *pairs*); and `clusters` is a field at 18 m from 0.35 to 1.65 (mean 1), so an
+  apron has heaps and gaps instead of an even sprinkle (Deviation 9).
+- **Meadow**: `k = meadow_floor + (meadow_cover − meadow_floor) · min(1, (patches(x) + 0.6 ·
+  smoothstep(10°, 26°, α)) · clusters(x))`, where `patches` is a slow field (220 m) thresholded so about a
+  quarter of the meadow is a rocky patch: Golombek's plain at 1–2% and rocky ground at 4–5% are
+  one landscape's two states. The slope term is Verdian's: on a soil-mantled hillslope
+  "faster erosion should generally lead to larger initial particle sizes due to shorter
+  residence times", and "bedrock exposures (and thus areas with TR ∼ 0) are patchy" — a steep
+  hillside sheds more rock to its surface than a flat one.
 - **Nothing on the rock** (slope above 40°, the terrain material's rock layer): the talus angle
   is 30–45°, and a rock does not rest on a cliff.
 - **Nothing on sand**: `k · (1 − smoothstep(0.15, 0.5, sediment))`; the material's sand starts
@@ -128,8 +136,9 @@ pattern does not depend on where the camera came from.
 to `R = c·D` (`c` by quality: 60, 80, 100, 140 m per metre), so it vanishes at the same size on
 screen whatever its size, and a pebble is not drawn 600 m away. With the count per area falling
 as `exp(−q·D)/D²` and the area within `R` growing as `D²`, the total count is
-`≈ 4c²·k·exp(−q·D_min)`: **bounded**, and dominated by the size the eye can see. The fade is
-Bevy's `VisibilityRange` crossfade over the last 20 % of `R`, dithered, so no rock pops. Each
+`≈ 4c²·k·exp(−q·D_min)`: **bounded**, and dominated by the size the eye can see. The fade is a
+**shrink**: over the last 20 % of `R` the rock scales to nothing about its buried base, so no
+rock pops (Deviation 7: Bevy's dithered crossfade left black holes under the depth prepass). Each
 class keeps a ring of tiles around the camera; a tile is built when it enters the ring and
 despawned when it leaves (with a margin, so a camera on a tile edge does not thrash).
 
@@ -169,18 +178,21 @@ shape's vertex colour darkens its buried base (the contact) and mottles its face
 | Largest `D_max` | 3.6 m | Verdian: a-axes "as large as 5450 mm"; b-axis 3.6 m is the class's top |
 | `q(k)` | `1.79 + 0.152/k` | Golombek 2021 |
 | Talus cover `talus_cover` | 0.30 | Deviation 1 |
-| Meadow floor / rocky patch | 0.004 / 0.05 | Golombek's 1–2% plains and 4–5% rocky ground; Deviation 2 |
+| Meadow floor / rocky patch | 0.015 / 0.05 | Golombek's 1–2% plains and 4–5% rocky ground; Deviation 2 |
 | Rocky patch field | 220 m, a quarter of the meadow | Deviation 2 |
+| Steep meadow | `0.6 · smoothstep(10°, 26°, α)` of the way to the rocky cover | Verdian 2021; Deviation 2 |
 | Talus band | scree's band, 16°–40° | `scree.md` |
+| Cliff above | the steepest of 6, 14, 24, 36 m upslope, `smoothstep(36°, 44°)` | Galin 2019, Verdian 2021; Deviation 9 |
+| Rock clusters (talus and the meadow's rocky share) | 18 m field, 0.35–1.65 | Deviation 9 |
 | No rocks above | 40° | the material's rock layer; Galin's talus angle 30–45° |
 | Sand cut | `1 − smoothstep(0.15, 0.5, sediment)` | the material's sand at 0.5 m |
 | Visible range `c` | 60 / 80 / 100 / 140 m per m | Deviation 3 |
-| Fade | last 20 % of `R`, dithered | Bevy `VisibilityRange` |
-| Near LOD to | `22·D` | Deviation 4 |
+| Fade | the last 20 % of `R`, by scale | Deviation 7 |
+| Near LOD to | `22·D`, an abrupt switch | Deviation 4 |
 | Axis ratios `b : a`, `c : a` | 0.55–0.85, 0.30–0.55 | Verdian 2021 (0.57–0.64, 0.26–0.36 measured; 0.67, 0.45 theory) |
 | Burial | 22–35 % of the height | Deviation 5 |
 | Tilt to the slope | 70 % of the way, ±8° jitter | Deviation 6 |
-| Stone grain | 0.35 m, three octaves | `rock-material.md`'s grain (`ROCK_GRAIN_COARSE_M` 2.6 m is the cliff's; a rock is smaller) |
+| Stone grain | a 0.30 m mottle and a 3.75 cm speckle, two octaves each | `rock-material.md`'s grain (`ROCK_GRAIN_COARSE_M` 2.6 m is the cliff's; a rock is smaller); Deviation 8 |
 
 ## GPU mapping
 
@@ -189,11 +201,12 @@ shape's vertex colour darkens its buried base (the contact) and mottles its face
   version moves.
 - The rocks are ordinary mesh entities: Bevy batches every rock of one mesh asset into one
   instanced draw per pass (24 meshes: 12 shapes × 2 levels), draws their shadows into the sun's
-  cascades, and fades them with `VisibilityRange`'s dither (`VISIBILITY_RANGE_DITHER`, which
-  `weathered.wesl` already honours).
-- The stone grain is three `perlin3_d` octaves in `weathered.wesl`, band-limited by the pixel's
-  footprint, only for materials that ask for it (`grain_m > 0`), so every existing
-  `WeatheredMaterial` is unchanged.
+  cascades, and culls them with abrupt `VisibilityRange`s (the near mesh to `22·D`, the far
+  mesh to `R`). The fade is the rock's own scale, written by the seat update, which already
+  runs when the camera moves (Deviation 7).
+- The stone grain is four `perlin3_d` evaluations in `weathered.wesl` (a mottle and a speckle,
+  two octaves each), band-limited by the pixel's footprint, only for materials that ask for it
+  (`grain_m > 0`), so every existing `WeatheredMaterial` is unchanged.
 - CPU: the placement is per tile when a tile enters a ring; the seat update is a few lattice
   samples per rock when the camera has moved.
 
@@ -253,21 +266,53 @@ shape's vertex colour darkens its buried base (the contact) and mottles its face
    of it is below the meshes' 25 cm and is the scree's painted stones. With `k = 0.30`,
    `q = 2.30`, rocks above 25 cm cover `0.30·e^(−0.58)` = 17 % of the apron: a boulder field
    with stones between, as a talus looks.
-2. **Meadow floor 0.4 %, rocky patches 5 %.** Golombek's plain is 1–2 %, but on a grass meadow
-   the turf hides the small rocks the 1–2 % counts (they are below `D_min` and under the
-   grass); the floor keeps the occasional erratic and the patch is the rocky ground's 4–5 %.
-   The patches are a quarter of the meadow, an art-directed choice: rocky ground is the
-   exception on a pasture.
+2. **Meadow floor 1.5 %, rocky patches 5 %, more on a steep hillside.** The first draft took a
+   floor of 0.4 %, reasoning that the turf hides the small rocks a plain's 1–2 % counts; but at
+   `k = 0.004` Golombek's `q(k)` is 39.8 and rocks of 25 cm and up cover `0.004·e^(−9.95)`,
+   two parts in ten million: the capture showed an empty meadow, as before (`/tmp/i42/r1`). The
+   floor is the plain's own 1.5 %, the patches the rocky ground's 4–5 %, and the slope term
+   (Verdian) takes a steep meadow 60 % of the way to the patches' cover. The patches are a
+   quarter of the meadow, an art-directed choice: rocky ground is the exception on a pasture.
 3. **Visible range `c`.** A rock disappears at the same angular size: at High 1 m per 100 m is
    0.57°, about 10 pixels tall at 1080p and 60° of view. The count `≈ 4c²·k·exp(−q·D_min)` grows
    as `c²`, so the quality scales it.
-4. **Near LOD to `22·D`.** The far mesh (80 triangles) is used where a rock is under about 25
-   pixels across; the near mesh (1280 triangles) inside, where a silhouette's facets would show.
+4. **Near LOD to `22·D`, switched abruptly.** The far mesh (320 triangles) is used where a rock
+   is under about 25 pixels across; the near mesh (1280 triangles) inside, where a
+   silhouette's facets would show. The switch is abrupt (Deviation 7), so the far mesh is fine
+   enough that its silhouette barely changes: the first draft's 80 triangles would have popped.
 5. **Burial 22–35 % of the height.** No source measures burial; the value keeps the base under
    the surface across the LOD's error and reads as embedded, which a rock resting on a point
    does not.
 6. **Tilt 70 % towards the slope's normal.** A rock on a slope rests on it, but not perfectly
    parallel; a full tilt reads as a decal.
+7. **The fade is a shrink, not Bevy's dithered crossfade.** The plan faded each rock with
+   `VisibilityRange`'s crossfade, which dithers the rock's pixels away over the margin. Under the
+   crate's depth prepass every rock in its fade band rendered as a black checkerboard (the
+   dithered-away pixels kept the clear colour, so the prepass had written the rock's depth
+   there; `/tmp/i42/r2/crop_black.png`). Making the material a mask, so Bevy runs the prepass's
+   own dither, did not change it (`/tmp/i42/r2`); without shadows it was the same
+   (`/tmp/i42/exp/a_crop.png`); with abrupt ranges the holes were gone
+   (`/tmp/i42/exp/b_crop.png`). So the ranges are abrupt and the rock shrinks to nothing about
+   its buried base over the last 20 % of its range — the cull a game's detail meshes commonly
+   use. A rock there is under about 10 pixels, so the shrink reads as the rock receding.
+8. **The grain is a mottle and a speckle, not one fBm.** The plan's grain was three octaves from
+   0.35 m down; with the octaves halving, the finest carried an eighth of the weight, and at five
+   times the planned strength the rock showed only broad smooth bands (`/tmp/i42/exp/grain_crop.png`):
+   at 2–10 m the rocks read as grey clay. A stone face reads at arm's length by its centimetre
+   speckle — its mineral grains and pits — so the grain is two scales of two octaves each, a
+   0.30 m mottle and a 3.75 cm speckle, the speckle carrying the stronger albedo swing and the
+   steeper relief. Four `perlin3_d` evaluations, one more than planned.
+9. **A talus needs a cliff above it, and it clusters.** The plan put the talus's cover on every
+   slope in the scree's band. On the hills, whose steep flanks are grass with nothing above
+   them, that laid a dense ribbon of angular blocks along the contour like a dry-stone wall
+   (`/tmp/i42/cmp/hills_seed7.png`), and on the mountains' aprons the blocks sat at an even
+   spacing like chips in a biscuit (`/tmp/i42/r6/talus_b.png`). The talus's cover is now scaled
+   by the cliff up the slope (a hill's steep flank takes the meadow's cover, rounded and sparse)
+   and by a cluster field at 18 m, a few blocks across, so an apron has dense heaps and sparse
+   stretches. The lattices are sized for the densest cluster (`0.30 × 1.65`). The same field
+   scales the meadow's rocky share: a rocky patch at eye level was an even sprinkle of stones
+   (`/tmp/i42/r7/patch_eye.png`), and on a hillslope the rocks gather round its patchy bedrock
+   exposures (Verdian).
 
 ## Pending index
 
