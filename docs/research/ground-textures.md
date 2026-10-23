@@ -10,6 +10,7 @@ Underfoot, the terrain is a procedural noise: the meadow is a soft green felt (`
 - **Akenine-Möller, T. et al. (2018)**, *Real-Time Rendering* 4th ed., ch. 6 (corpus `book_real_time_rendering_4th_akenine`): bump and normal mapping vary the shading normal per texel; a detail texture's roughness should differ from its neighbour's ("the mortar is supposed to be matte, whereas the bricks are glossy"); GPU trends make procedural texturing cheaper relative to memory.
 - **The crate's own rules**: the ground's mean colour does not move (`ground-colour.md`); a detail is band-limited by the pixel's footprint on the surface (`detail.md`); the meadow's palette and the layer weights (`terrain.md`, `ground-colour.md`).
 - **golem** (`generate_image`, FLUX.2 klein 9B on bmb): a test prompt gave a photographic top-down meadow at 1024² in about 20 s — tufts, bare soil, clover, dry stems, flat light (`~/trellis/output/images/i45_meadow_test.png`) — but with a radial composition (blades pointing out from a bare centre) that a repeated tile would show. golem has no texture or PBR-map tool in this session (`list_image_models`: FLUX.2 klein, dev, schnell, qwen, z-image, ernie, ideogram), so the maps are derived from the generated albedo.
+- **Baldocchi, D. D., Xu, L., Kiang, N. (2004)**, *How plant functional-type, weather, seasonal drought, and soil physical properties alter water and energy fluxes of an oak–grass savanna and an annual grassland*, Agric. For. Meteorol. 123, DOI `10.1016/j.agrformet.2003.11.006` (corpus, read §3.2): as the grass canopy greens and grows it "gradually obscur[es] bare soil and detritus", and only "during the summer the dead grass was 'golden' and highly reflective". A green-season meadow's texture is green blades over a little soil, not straw; the dry look is the season's, which the crate's turf palette already carries (`ground-colour.md`).
 
 ## Model adopted
 
@@ -48,12 +49,13 @@ Underfoot, the terrain is a procedural noise: the meadow is a soft green felt (`
 
 ## What great looks like
 
-- **Underfoot (1.7 m, looking down):** a meadow of blades and tufts with soil between them and a little litter; sand with grains, small ripples and scattered fragments; soil with crumbs and pebbles. Real relief in the light — the sun rakes the grains and blades — and no repetition in the frame.
+- **Underfoot (1.7 m, looking down):** a meadow of green blades and tufts with moss and soil between them and a little dry stem, no leaf litter (no trees stand on these hills); soil with crumbs, cracks and pebbles, no leaves; real relief in the light — the sun rakes the grains and blades — and no repetition in the frame.
 - **At eye level and 12 m:** the meadow's colour field (the crate's palette, the large fields) is unchanged, with texture under it; transitions between grass, soil and sand follow the heights (grass in hollows, sand in cracks), not cross-fades.
 - **From 80 m:** exactly the procedural terrain (the mips average to no change); no tiling pattern, no hex grid, no shimmer at mid distance.
 - **Dawn, dusk, overcast:** the detail normal reads at grazing light and does not turn into noise; overcast keeps the micro-occlusion.
 - **Weather:** wet, puddled and snow-covered ground act on the textured surface as before.
 - **Without a texture set:** byte-identical to the baseline, up to the GPU's noise.
+- **The sand** (second attempt): untouched until it has wind ripples (Deviation 15); the dunes render exactly as the baseline.
 
 ## Validation targets
 
@@ -80,6 +82,8 @@ Underfoot, the terrain is a procedural noise: the meadow is a soft green felt (`
 12. **The grain's relief stays whole.** At a share of 0.3 for both its albedo and its relief, the dusk meadow lost the raking-light mottle across its mid field and the dunes read as smooth paste: the textures' own normals average flat in their far mips, and the turf's 10-50 cm bumps are real micro-topography. The share applies to the procedural albedo only.
 13. **The normal's v runs along the texture's rows** (world +Z), not OpenGL's `+v` up: the shader's coordinate is the world's XZ over the tile, and the tool writes the derived normal in that frame. A standard set's OpenGL normal map needs its green channel flipped.
 14. **The prep tool reads albedos only.** The plan had it take a standard PBR set's own normal, roughness, occlusion and height maps as well; it derives all four from the albedo, so a stylistic variant is three albedos and a manifest, and a captured set's own maps are not used yet.
+15. **Second attempt (iteration 46): the sand is left procedural.** A dune reads as sand by its wind ripples, which a hex-tiled texture cannot carry (`## Outcome`), and the attempt's sand traded the baseline's mottle for smooth paste. A layer whose `GroundTextures::tile_m` is zero is not sampled at all, so a set can texture the soil and the grass alone; the examples' set does, and the sand's turn comes with a ripple field.
+16. **Sources without litter, a green-season meadow.** The attempt's soil source carried dead leaves, which the height blend lifted through the grass as salmon confetti, and its grass carried enough pale straw to frost the meadow at dawn. The second set's prompts exclude leaves and ask for fresh green blades with only a few dry stems (Baldocchi et al. 2004: the green canopy obscures soil and detritus; dead grass is summer's), and each source is inspected before packing.
 
 ## Outcome
 
