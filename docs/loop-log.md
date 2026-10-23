@@ -4048,7 +4048,7 @@ Per angle, round 6: underfoot (`hills_down`, `plains_down`, `plains_seed3`) real
 
 - **Cost** (`bench_elements`, `hills`, `ELEMENTS_EYE=0,0,0 ELEMENTS_LOOK=12,-3,8 ELEMENTS_AGL=1.7`, 3840 × 2160, base and change interleaved, P5 for most samples; the opaque pass's **mean**, since at 4K the minimum reads 0.000 and at 1080p the clocks hop between P2, P3 and P5): the plan's shader 13.2-14.3 ms against the base's 6.8-7.2 (and 8.9-9.1 with no set). Anisotropy 16/4/1, a 512² set, grass alone, no relief and only the dominant tap all left it within noise: the shader's peak register count was the cost. Final: **no set 6.8-7.4 ms against the base's 7.1-7.3; with the set 8.8-9.4 ms, +26 %**, logged as the trade. The early prepass equal across runs (0.15-0.19 ms).
 - Means (ground region, sRGB DN, round 6 against the baseline): `hills_12`, `hills_aerial` within 0.1; rock and dunes 0.0; snow 0.2; the near meadow R +1.5..+5.5, G −0.6..−5.4 (the detail's variance through the tonemap).
-- Mirror: 30 terrain mirror tests (new: the fetch cut-off carries at most 0.5 % of the blend over 48 000 samples; the height blend fades where it is not resolved; an untextured layer keeps its grain). Gates 1-5 pass (23 integration GPU blocks, the four library GPU modules, `the_horizon_sky` alone).
+- Mirror: 29 terrain mirror tests (new: the fetch cut-off carries at most 0.5 % of the blend over 48 000 samples; the height blend fades where it is not resolved; an untextured layer keeps its grain). Gates 1-5 pass (23 integration GPU blocks, the four library GPU modules, `the_horizon_sky` alone).
 - The set: 1024² per layer, 11 levels, zstd: 15.8 MB (`assets/ground/ground.ktx2`, the sand layer neutral).
 
 ### Sources
