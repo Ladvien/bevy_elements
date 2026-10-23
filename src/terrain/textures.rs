@@ -565,7 +565,7 @@ fn read_map(image: &Image, n: usize, srgb: bool) -> Option<[Grid; 4]> {
                 && data.len() >= w * h * 4 =>
         {
             let order = if bgra { [2, 1, 0, 3] } else { [0, 1, 2, 3] };
-            for texel in data[..w * h * 4].chunks_exact(4) {
+            for texel in data[..w * h * 4].as_chunks::<4>().0 {
                 for (c, plane) in planes.iter_mut().enumerate() {
                     let byte = texel[order[c]];
                     plane.push(if c < 3 {
