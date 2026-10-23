@@ -270,10 +270,12 @@ fn setup(
         materials: &mut materials,
     };
 
-    // The ground.
+    // The ground: 40 km, out past the horizon the rain's haze covers. A 600 m slab ended in a
+    // hard line against the sky once wet ground stopped being a mirror of it (the slab's edge
+    // at 300 m is only a third hazed at 3 km visibility).
     let ground = b.material(Color::srgb(0.30, 0.34, 0.22), 0.95, 0.0, 1.0);
     b.commands.spawn((
-        Mesh3d(b.meshes.add(Cuboid::new(600.0, 0.2, 600.0))),
+        Mesh3d(b.meshes.add(Cuboid::new(40_000.0, 0.2, 40_000.0))),
         MeshMaterial3d(ground),
         Transform::from_xyz(0.0, -0.1, 0.0),
     ));

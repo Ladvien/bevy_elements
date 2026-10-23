@@ -41,10 +41,29 @@ struct ElementsGlobals {
 const SNOW_ALBEDO: vec3<f32> = vec3<f32>(0.80, 0.83, 0.88);
 /// Roughness of snow; `bevy_flora` `common.wesl:424` (the plan's 0.6 is Deviation 4 of snow-cover.md).
 const SNOW_ROUGHNESS: f32 = 0.9;
-/// Fraction of albedo a fully wet, fully porous surface loses (plan 4.1).
-const WET_ALBEDO_LOSS: f32 = 0.5;
-/// Roughness a wet surface approaches (plan 4.1).
+/// The water film's diffuse reflectances, external and internal, for water's n = 1.33: a wet
+/// porous surface's albedo is `(1 − r_e)(1 − r_i) ρ / (1 − r_i ρ)` per channel, the film physics
+/// of `wetness.md` Model adopted 2 (Jensen et al. 1999 §2.1). A dark channel loses more than a
+/// bright one, so wet colour is more saturated (`wet-ground.md`, Model adopted 1).
+const WET_FILM_R_E: f32 = 0.0659;
+const WET_FILM_R_I: f32 = 0.4720;
+/// The albedo a porous surface drenched to `DRENCHED_MAX` keeps: Lagarde's empirical 0.2–0.3.
+const DRENCHED_ALBEDO: f32 = 0.3;
+/// Roughness of a water film: a smooth or metal surface holds one as soon as it is wet, a porous
+/// one only when it is drenched past saturation (wet-ground.md, Model adopted 2).
 const WET_ROUGHNESS: f32 = 0.1;
+/// How far a soaked, fully porous surface's gloss moves towards water's: Lagarde 3b's
+/// `lerp(1, factor, 0.5 · WetLevel)` with his `factor` 0.2, i.e. 0.5 × (1 − 0.2), so the roughness
+/// becomes `r · (1 − 0.4 · w · φ)` (wet-ground.md, Model adopted 1).
+const WET_GLOSS_BOOST: f32 = 0.4;
+/// How much a wet leaf's saturation rises at full wetness; `bevy_flora`'s `WET_LEAF_SATURATE`
+/// (`common.wesl:538`), so a meadow matches the wet trees on it.
+const WET_LEAF_SATURATE: f32 = 0.25;
+/// The excess green `2g − r − b` (chromatic coordinates) over which a surface turns from bare
+/// ground to canopy: Woebbecke et al. 1995's index, the ramp from the terrain's own layer colours
+/// (grass 0.834, sand 0.046, rock 0.000, soil −0.101; `wet-ground.md`, Model adopted 3).
+const CANOPY_EXG_LOW: f32 = 0.10;
+const CANOPY_EXG_HIGH: f32 = 0.80;
 /// Roughness of standing water (Lagarde 2013, gloss 1).
 const PUDDLE_ROUGHNESS: f32 = 0.02;
 /// Bevy `reflectance` for water: `F0 = 0.16 · r²` (pbr_functions.wesl:279) equals 0.02, so
@@ -153,8 +172,10 @@ struct WeatheredSurface {
     normal: vec3<f32>,
 }
 
-/// Wet, puddled and snowed-on material inputs, in the order of the note: darken and gloss by the
-/// wetness `max(wetness, puddle)`; standing water is a mirror with water's `F0`, a level normal
+/// Wet, puddled and snowed-on material inputs, in the order of the note: darken by the wetness
+/// `max(wetness, puddle)` and the porosity; gloss a porous surface by Lagarde's limited boost and
+/// lay a water film on a smooth one, or on a porous one drenched past saturation
+/// (`docs/research/wet-ground.md`); standing water is a mirror with water's `F0`, a level normal
 /// plus `ripple` (the horizontal offset of `ripple_offset`); snow covers it all.
 ///
 /// With wetness, puddle and snow all 0 the inputs come back bit-for-bit.
@@ -172,8 +193,15 @@ fn weather_surface(
     var s = WeatheredSurface(base_color, roughness, metallic, reflectance, normal);
     let wet = min(max(wetness, puddle), DRENCHED_MAX);
     if wet > 0.0 {
-        s.base_color = base_color * (1.0 - WET_ALBEDO_LOSS * wet * porosity(roughness, metallic));
-        s.roughness = mix(roughness, min(roughness, WET_ROUGHNESS), saturate(wet));
+        let phi = porosity(roughness, metallic);
+        let soaked = min(wet, 1.0);
+        let drenched = saturate((wet - 1.0) / (DRENCHED_MAX - 1.0));
+        let filmed = (1.0 - WET_FILM_R_E) * (1.0 - WET_FILM_R_I) * base_color
+            / (vec3<f32>(1.0) - WET_FILM_R_I * base_color);
+        s.base_color = mix(mix(base_color, filmed, soaked * phi), base_color * DRENCHED_ALBEDO, drenched * phi);
+        let porous = roughness * (1.0 - WET_GLOSS_BOOST * soaked * phi);
+        let film = (1.0 - phi) * soaked + phi * drenched;
+        s.roughness = mix(porous, min(porous, WET_ROUGHNESS), film);
     }
     if puddle > 0.0 {
         s.roughness = mix(s.roughness, PUDDLE_ROUGHNESS, puddle);
@@ -186,6 +214,32 @@ fn weather_surface(
         s.metallic = metallic * (1.0 - snow);
     }
     return s;
+}
+
+/// A wet canopy's colour, `wetness` 0–1 times the canopy's share of the surface: `bevy_flora`'s wet
+/// leaf (`common.wesl` `wet_on`), the saturation raised by a quarter at full wetness with the
+/// luminance kept. A blade's wax beads the rain, so a canopy takes no film and no gloss; the
+/// caller passes `weather_surface` only the wetness of the ground between the blades
+/// (`docs/research/wet-ground.md`, Model adopted 3). Exactly the input at `wetness` 0.
+fn wet_canopy(colour: vec3<f32>, wetness: f32) -> vec3<f32> {
+    if wetness <= 0.0 {
+        return colour;
+    }
+    let grey = vec3<f32>(dot(colour, vec3<f32>(0.2126, 0.7152, 0.0722)));
+    return max(grey + (colour - grey) * (1.0 + WET_LEAF_SATURATE * wetness), vec3<f32>(0.0));
+}
+
+/// The share of a surface that is green canopy, 0–1, read from its albedo: Woebbecke et al.'s
+/// excess green `2g − r − b` on chromatic coordinates (each channel over their sum), which tells
+/// living plants from soil, residue and stone (`docs/research/wet-ground.md`, Model adopted 3).
+/// Black is not canopy.
+fn canopy_share(colour: vec3<f32>) -> f32 {
+    let sum = colour.r + colour.g + colour.b;
+    if sum <= 1e-6 {
+        return 0.0;
+    }
+    let c = colour / sum;
+    return smoothstep(CANOPY_EXG_LOW, CANOPY_EXG_HIGH, 2.0 * c.g - c.r - c.b);
 }
 
 /// Where the cloud shadow map is sampled for position `p` in metres (world ÷ `g.units.x`): `xy`

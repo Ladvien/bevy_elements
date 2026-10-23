@@ -161,6 +161,37 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ### Fixed
 
+- **Wet ground is no longer a mirror.** Every surface the crate wets went to roughness 0.1 at
+  full wetness, so in rain a meadow became a choppy grey lake, the hills at dusk looked
+  snow-covered, a cliff turned to crumpled chrome and the dunes went white in the middle
+  distance. Against the same rain on dry ground the meadow's 10–60 m band measured 187 against
+  124 (luminance) and a median saturation of 0.032 against 0.308: rain made the ground brighter
+  and greyer, the opposite of what water does. Now a porous surface takes Lagarde's limited wet
+  sheen, roughness × (1 − 0.4 · wetness · porosity) (0.54 for a soaked rough surface), and the
+  water film at 0.1 is kept for smooth and metal surfaces and for a wall drenched by a rain
+  streak. Its albedo darkens by the water-film physics per channel,
+  (1 − r_e)(1 − r_i) ρ / (1 − r_i ρ), instead of a flat half: a dark channel loses more than a
+  bright one, so wet colour is more saturated and wet sand is darker and browner rather than
+  greyer (near sand: saturation 0.258 against 0.245 dry). The terrain's grass is a canopy whose
+  wax beads the rain and takes `bevy_flora`'s wet-leaf rule (saturation × 1.25, brightness kept,
+  no gloss), so a wet meadow is a deeper green (the same band: 123 and 0.384); the canopy is read
+  from the albedo's excess green (Woebbecke et al.'s `2g − r − b`), so the soil between the
+  blades darkens as soil and the shader carries nothing new across the rock's material. A rock's joints
+  and fractures now occlude its sky reflection by the same visibility that darkens them, so a
+  wet cliff keeps its dark joint network under the sheen (dry, it changes by a few levels).
+  `WeatheredMaterial` and `GroundMaterial` take the new porous rule too (a soaked rough wall at
+  0.54); puddles, ripples and snow are unchanged. See `docs/research/wet-ground.md`.
+
+- **Rain no longer rings on dry grass.** Every rain impact within 20 m of the camera drew an
+  expanding white ring, so a storm littered the meadow with 30 cm white circles. A ring is a
+  wave on free water: on a live terrain an impact now rings only where the terrain holds
+  standing water at least `WetnessSettings::puddle_min_m` deep (a puddle, a river, a lake). A
+  blocker's top face and the plane of a scene without a terrain ring as before.
+
+- **The `weathered_town` example's ground reaches the horizon.** Its 600 m slab ended in a hard
+  line against the rain haze once the wet ground stopped mirroring the sky; it is 40 km now,
+  like the other examples' ground.
+
 - **The CPU mirror's `fract` was the wrong one.** Bevy's `Vec3::fract` is `x − trunc(x)` and so
   is **negative** for a negative coordinate, while WGSL's is `x − floor(x)` and is always in
   [0, 1). The two disagreed about where every cell's wall was, and the terrain model's joint

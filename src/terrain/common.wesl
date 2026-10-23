@@ -733,6 +733,10 @@ struct RockMaterial {
     grad: vec3<f32>,
     /// 1 where the rock's own detail survives the pixel's footprint.
     present: f32,
+    /// How much of the sky the point sees, 0 to 1: the joints' and fractures' own darkening
+    /// ("a crack is a shadow: the face beside it sees less sky"), which hides the sky's
+    /// reflection as it hides its light, so a wet joint stays dark (`wet-ground.md`).
+    sky: f32,
 }
 
 /// The rock's material at the world point `p`, for a pixel footprint of `footprint_m` metres.
@@ -825,10 +829,12 @@ fn rock_material(p: vec3<f32>, warp: f32, footprint_m: f32) -> RockMaterial {
     let bed_tone = bed_value.tone
         * mix(vec3<f32>(1.0), ROCK_SECOND_TONE, bed_mask * bed_value.present * ROCK_BED_MIX);
     var tint = bed_tone;
+    var sky = 1.0;
     if blocks_present > 0.0 {
         // The block's own **colour** multiplies the rock's colour, and the joint darkens it.
         let joint = mix(1.0, ROCK_JOINT_DARKEN, blocks.joint);
         tint = tint * blocks.tone * joint;
+        sky = joint;
     }
     let dark = mix(1.0, ROCK_FRACTURE_DARKEN, crack);
     let grain_tint = 1.0 + ROCK_GRAIN_AMP * grain_value;
@@ -864,6 +870,7 @@ fn rock_material(p: vec3<f32>, warp: f32, footprint_m: f32) -> RockMaterial {
         tint * dark * grain_tint,
         relief,
         present,
+        sky * dark,
     );
 }
 

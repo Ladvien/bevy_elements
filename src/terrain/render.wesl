@@ -10,7 +10,7 @@ import bevy_elements::grid::{GridParams, grid_taps};
 import bevy_elements::noise::{perlin3_d, fbm3, seed_offset};
 import bevy_elements::terrain::common::{TerrainParams, ground_detail, rock_material, scree_scatter, terrain_live, turf_palette};
 import bevy_elements::terrain::textures::{LayerMaps, layer_maps, height_lift, height_sharpness, DETAIL_GATE};
-import bevy_elements::surface_cover::{weather_surface, ripple_weights, ripple_offset, overcast_relief};
+import bevy_elements::surface_cover::{weather_surface, wet_canopy, canopy_share, ripple_weights, ripple_offset, overcast_relief};
 import bevy_elements::trails::surface::{TrailHit, trail_fade, trail_march, trail_none};
 import bevy_pbr::render::{
     mesh_functions,
@@ -643,10 +643,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             grad = grad + vec3<f32>(stones.grad.x, 0.0, stones.grad.y) * scree;
         }
     }
+    var rock_sky = 1.0;
     if rockness > 0.01 {
         let rock = rock_material(pv, fields.large, footprint);
         tint = tint * mix(vec3<f32>(1.0), rock.tint, rockness);
         grad = grad + rock.grad * rockness;
+        rock_sky = mix(1.0, rock.sky, rockness);
     }
     // A face sees less of the sky than the ground does, and a steep face sees much less. The
     // crate's `overcast_relief` does the same under a cloud deck; here it is the rock's own
@@ -682,8 +684,16 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             ripple = ripple_offset(pv.xz, material.ripple, ripple_weights(material.cover.y));
         }
     }
+    // The grass is blades over soil, and a blade's wax beads the rain: the canopy takes
+    // `bevy_flora`'s wet leaf (a deeper colour, no gloss), and only the rest of the ground —
+    // soil, sand, rock, a trench, a scree's dirt and stones, the soil between the blades —
+    // darkens and glosses. The canopy is read from the albedo's excess green, which is in
+    // registers here anyway: the layer weights were not, and carrying them across the rock's
+    // material cost 5-20 % of the pass (`docs/research/wet-ground.md`).
+    let canopy = canopy_share(albedo);
+    albedo = wet_canopy(albedo, wet * canopy);
     let surface = weather_surface(
-        albedo, rough, 0.0, pbr_input.material.reflectance, n, wet, puddle, snow_cover, ripple,
+        albedo, rough, 0.0, pbr_input.material.reflectance, n, wet * (1.0 - canopy), puddle, snow_cover, ripple,
     );
     albedo = surface.base_color;
     n = surface.normal;
@@ -701,6 +711,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     pbr_input.N = n;
     pbr_input.world_position = vec4<f32>(pv * material.units, 1.0);
     pbr_input.diffuse_occlusion = pbr_input.diffuse_occlusion * trail.open * maps.ambient;
+    // A joint or fracture sees a strip of the sky, so it reflects only that strip: its sheen is
+    // occluded by the same visibility that darkens its albedo, and a wet joint stays dark
+    // (`docs/research/wet-ground.md`; for a rough surface the specular occlusion of Lagarde &
+    // de Rousiers 2014, which Bevy takes from SSAO, is the visibility itself).
+    pbr_input.specular_occlusion = pbr_input.specular_occlusion * rock_sky;
 
     let ratio = vec3<f32>(cloud_shadow_ratio(p)) * bed_transmittance(water_depth);
     // The trail's self-shadow removes the beam's share of the light inside its trenches.
