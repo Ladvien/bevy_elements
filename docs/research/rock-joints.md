@@ -161,6 +161,29 @@ joints with what the rock-mechanics description says a joint is.
    length; Palmström's planar joints are under 1–2 %. 0.08 m keeps the cells irregular through
    their unequal sizes (`CELL_INSET`) and keeps the joints planar.
 
+Found during iteration 43's attempt, which did not ship (branch `attempt/iter-43-joints`, `## Outcome` below):
+
+5. **The tabular stretch is inverted on `main`.** Deviation 10 of `rock-blocks.md` says the lattice is *stretched* along the bedding normal so the cells are slabs; `0e58b68` changed `p + n(p·n)(T − 1)` to `p − n(p·n)(1 − 1/T)`, which divides the normal component and makes the blocks `T · 0.95 m = 2.5 m` columns across the beds. The test that approved it, `the_blocks_are_tabular`, compared two directions that both lie in the bedding plane (`normal.cross(in_plane)` is perpendicular to the normal) and read a longer lattice vector as a longer cell. Counting blocks along real cuts, the shipped lattice crosses 0.55 blocks per metre across the beds against 1.42 along them; the attempt's rewritten test fails on it and passes on the multiply.
+6. **Open and tight joints.** Most of a rock mass's discontinuities are closed. The attempt grouped the cells whose feature points share a lattice cell 2.6 cells across: a border between groups is an open joint (full trace and bevel), one inside a group a tight hairline (0.35 of the ink). It adds no lookup, since both cells are the search's own.
+7. **The bed is the rock.** The bed's palette (`bed-colour.md`) applies at every distance and the blocks carry value only. This was the attempt's clearest win: at 12 m, at dusk and under overcast the cliff reads as a banded succession of different rock. A palette drawn per piece read as a patio, and drawn per block as camouflage.
+8. **The facet belongs to the open block.** A tight joint creases a block's face (0.08) and does not make a new face. A facet per piece made the cliff a cobbled mosaic.
+
+## Outcome
+
+Iteration 43 stopped after five rounds, NOT YET at every round, and `main` keeps the baseline (`/tmp/i43/critique.md`, `docs/loop-log.md` iteration 43). The hairline traces fixed what was asked: the chicken wire is gone at every distance, and every trace lies where two pieces meet. But each round exposed the network underneath:
+
+| Round | Change | The face read as |
+|---|---|---|
+| 1 | Hairline traces on the Voronoi border, facets, planar second set | crazy paving: convex tiles of one size, each a flat tone |
+| 2 | Tabular stretch restored (Deviation 5) | a dry-stone wall; a patio where the slope parallels the bedding |
+| 3 | Open and tight joints, palette per block (Deviation 6) | camouflage: hue jumping block to block |
+| 4 | Bed colour at every distance (Deviation 7) | a bedded succession, but a cobble mosaic inside each bed |
+| 5 | Facet per open block (Deviation 8) | camouflage blobs: a union of convex cells has a rounded, stair-stepped outline |
+
+**Hypothesis for the next attempt.** A jointed face reads as rock when its *open* joints are persistent **plane sets** — bedding partings and one or two cross sets with Weibull spacing, the cross joints terminating at the partings and staggered between them — so the blocks are parallelepipeds with straight edges. A Voronoi network, whole (paving) or grouped (camouflage), cannot give a block a straight edge; it should carry only the tight hairline fractures. Keep from the attempt: the hairline trace with coverage anti-aliasing, the bed's colour at every distance, the tabular fix and the exact prune bound.
+
+Two defects on `main` remain open and change the image when fixed, so they wait for that attempt: the inverted stretch (Deviation 5), and `cell3`'s prune bound, which in the WESL omits the clamp at zero (so on an axis where the neighbour spans the point the bound is inflated and a cell holding a nearer point can be pruned), while the CPU mirror uses a different, far-corner bound, so the mirror's tests do not check the shader's search.
+
 ## Pending index
 
 - Palmström 2015 (RockMass.net, a non-DOI source): the URL is recorded above.
