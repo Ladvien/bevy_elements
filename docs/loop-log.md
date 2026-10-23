@@ -3945,3 +3945,65 @@ This session's golem tools offer no texture or PBR-map generation: `health_check
 3. **Stylistic variants**: a style knob over the materials, starting with the ground.
 4. **The painted scree's polka dots** beside the mesh rocks.
 5. **The world ends in a white plane** at eye level (`side_sw`) and from the air.
+
+## Iteration 45 - 2026-10-23 - PBR detail textures for the ground: five rounds, NOT YET, not shipped
+
+**Commits:** `344a012` (the research note `docs/research/ground-textures.md`), the note's deviations and outcome with a silent-miscompile trap in `AGENTS.md`, `wesl-check` checking library modules (shipped: a tooling fix), this log. The attempt is preserved on the branch `attempt/iter-45-ground-textures` (`8d7c1fd`), **not merged**: `main`'s code is iteration 42's. The attempt's packed set (25 MB) is not committed; `uv run tools/ground-textures/prep.py tools/ground-textures/golem.json assets/ground/ground.ktx2` regenerates it. **Sibling repos:** none. **Not released.**
+
+The user's focus for this run: better-looking terrain, variety, rocks and debris, a realistic ground, stylistic variants; PBR textures in everything, especially the terrain; golem.
+
+### Candidates (`/tmp/i45/findings.md`)
+
+1. **The meadow underfoot is a green felt** and the sand a beige blotch (`hills_down`, `hills_eye`, `plains_down`, `dunes_down`); from 12 m the hills read as a low-poly game.
+2. The cliff's chicken wire at the talus foot (needs the joint sets and a rock texture).
+3. Stylistic variants (a texture set is one).
+4. The painted scree's dots.
+5. The world's white edge.
+
+The ground beat the rock: it is in every eye-level frame, and a texture could reach GREAT on it alone, where the rock's would sit under the chicken wire.
+
+### What was tried (`/tmp/i45/critique.md`; pairs in `/tmp/i45/{p,q}_*.png`)
+
+`GroundTextures { image, tile_m, grain }`: a 2D array of six layers, for each of sand, soil and grass an albedo **detail** (a multiplier with mean 1, so the landscape's colour does not move and the far mips are no change) with a height, and a normal, roughness detail and occlusion. Hex-tiled (Mikkelsen 2022: three randomly offset and rotated taps on a triangle grid, weights `w⁷` times the tap's height) with explicit gradients; the ground layers blended by their heights (`w · exp(8 (h − ½))`, continuous at the sampling gate); without a set the shader takes the old path bit for bit. The set: three golem FLUX.2 albedos, packed by a new `tools/ground-textures/prep.py` (tileable by a variance-preserving cross-fade, low frequencies divided out, de-lit, height, normal at a chosen mean tilt, roughness and occlusion derived, written as a KTX2 with every mip level).
+
+| Round | Change | Verdict, and what the ground read as |
+|---|---|---|
+| 1 | The plan, the detail stored at `· 128 / 255` | NOT YET: blades and litter at last; salmon-pink confetti everywhere — 21-29 % of the grass's detail clipped at 2× and lost its hue |
+| 2 | Stored at `· 64` (range [0, 4)), de-lit (exponent 0.65) | NOT YET: the confetti subdued; the meadow 26-32 DN darker |
+| 3 | The relief as a mean tilt (4°, 10°, 14°; it was 47° on the grass) | NOT YET: still 24 DN darker on the meadow and 21-27 on the dunes |
+| 4 | A silent shader miscompile renamed away (below) | NOT YET: means within 0.3 DN from 12 m; leaf confetti on the plains, the dunes smooth paste, the dusk mid field flat |
+| 5 | The procedural grain's relief kept whole; a grass source without leaves | NOT YET: real pasture underfoot; the soil's own leaves still confetti on the plains; the dunes plastic, without ripples; the dawn straw white |
+
+Five failed rounds, so the code reverts; the note's `## Outcome` holds the hypothesis: sources without litter (or a prep step rejecting off-hue texels), wind ripples on the sand as their own field driven by `WindState` with the texture's grains on top, and a cap on the brightest straw.
+
+### The miscompile, and the checker that could not see it
+
+Round 3's darkening was not the maths. The textured dunes came out (0.80, 0.74, 0.65) of their untextured selves in linear light, while the texture's means were exactly 1 at every mip and a CPU emulation of the hex blend gave 1.004. Six bisection captures: neutral albedo detail, fine; equal tap weights, fine; `w⁷` alone, fine; the height factor inverted, fine; the original formula with its local `w` renamed `tap_w`, fine; the local kept and the `HexGrid` field `w` renamed instead, fine. A local named `w` beside reads of a struct's field `g.w` renders wrong, silently. The `wesl` output and naga's IR (round-tripped to WGSL) are both correct, and the terrain fragment's own `var w` beside `t.w` renders bit-identically when renamed (a snow scene, three captures, max difference 0), so the fault is downstream of naga's front end or in Bevy's link of an imported module. `AGENTS.md` has the trap.
+
+While dumping the compiled module, `tools/wesl-check` turned out to compile a **library** module to an empty string: stripping keeps only what an entry point reaches, and a library has none, so "the WGSL is ok" checked nothing of a library's functions past the parser — a planted `let bogus: f32 = vec3<f32>(1.0);` in `terrain/common.wesl` passed. With `keep_main` and `visibility: false` (as Bevy compiles the crate) it is named with its line; the crate's 31 checkable modules are clean. Shipped, with the `AGENTS.md` description corrected.
+
+### Sources
+
+- **Andersson (2007)**, *Terrain Rendering in Frostbite Using Procedural Shader Splatting* (corpus `10.1145_1281500.1281668`): colour maps for the low frequencies, tiled detail maps for the high.
+- **Heitz & Neyret (2018)**, DOI `10.1145/3233304` (HAL, read): triangle-grid by-example noise, three fetches, variance-preserving blending.
+- **Mikkelsen (2022)**, *Practical Real-Time Hex-Tiling*, JCGT 11(3) (read from the URL): the triangle grid, rotation, `γ = 7`, `β = 0.6`, gradients rotated per tile.
+- **Akenine-Möller et al. (2018)**, *Real-Time Rendering* 4th ed. (corpus): texture detail, mip-mapping, normal-map filtering.
+
+### Measurements
+
+- Mirror (the attempt, 26 terrain mirror tests pass, three new): the hex weights rebuild the point from the hex centres over 2000 points; a tap's slope turns back by the transpose of its rotation (finite differences, 64 hexes); the height blend keeps the ground's share and is continuous at the gate.
+- Means (ground region, sRGB DN, round 5 against the baseline): `hills_12` and `hills_aerial` within 0.3; `scree_down`, `talus_b`, `mtn_foot` within 0.1; the dunes within 0.8; the near meadow views R +2..+6, G −1..−6 (the detail's variance through the tonemap). Without a set (`ELEMENTS_GROUND_TEXTURES=0`): identical.
+- **Cost** (`bench_elements`, `hills`, eye level `ELEMENTS_EYE=0,0,0 ELEMENTS_LOOK=12,-3,8 ELEMENTS_AGL=1.7`, three interleaved trials, the last per-pass minimum; clocks P5 for 381 of 451 samples): `main_opaque_pass_3d` base 0.878 / 1.260 / 1.304 ms against the attempt's 0.919 / 2.390 (an outlier) / 1.453 ms: about +0.04 ms on the best pair.
+- The packed set: 1024² per layer, 11 levels, zstd: 25 MB (512²: 7 MB, three times magnified underfoot).
+
+### golem, for the user's PBR direction
+
+golem's `generate_image` (FLUX.2 klein 9B, 1024², 4 steps, ~20 s) makes usable top-down ground photographs from a prompt that asks for flat light, no shadows, no vignette and an irregular, isotropic layout; it has no tiling, no PBR maps and no texture tool (`health_check`, `list_image_models`), so the prep tool makes the tiles and derives the maps. Its habits: a radial or grid composition unless the prompt forbids it; sand with ripples (an orientation the hex tiles scatter) unless told "no ripples"; dead leaves added to soil and turf unasked; baked light, ten to one in linear light, which the tool de-lights. A stylistic variant is three albedos and a manifest.
+
+### The next five items, ranked
+
+1. **The ground textures, again**, from `attempt/iter-45-ground-textures`: a soil source without leaves (and the prep tool rejecting texels far from their layer's hue), a cap on the brightest straw, and the dunes kept on their procedural mottle until they have ripples. The meadow is already right.
+2. **Wind ripples on the sand**: 5-15 cm ripples oriented by `WindState`, asymmetric (gentle stoss, steep lee), with defects where they bifurcate; research Bagnold 1941 and Anderson 1987 on ripple wavelength and migration.
+3. **The rock's PBR texture** on the joint-set structure (`attempt/iter-44-joint-sets`), triplanar in the rock's frame.
+4. **Stylistic variants**: a second golem set (painterly) through the same `GroundTextures`.
+5. **The world ends in a white plane** at eye level and from the air; the painted scree's dots.
