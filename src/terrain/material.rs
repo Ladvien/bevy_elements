@@ -4,9 +4,6 @@
 //! handle current.
 
 use bevy::asset::{AssetPath, RenderAssetUsages, uuid_handle};
-use bevy::image::{
-    ImageAddressMode, ImageFilterMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor,
-};
 use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::pbr::{
     ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline,
@@ -19,6 +16,7 @@ use bevy::render::storage::ShaderBuffer;
 use bevy::shader::ShaderRef;
 
 use super::lod::{LodConfig, MAX_LEVELS};
+use super::textures::GroundTexturePack;
 use super::{TerrainParamsGpu, TerrainState};
 use crate::ElementsUnits;
 use crate::clouds::CloudShadows;
@@ -68,10 +66,13 @@ pub struct TerrainMaterialParams {
     /// x: the share of the light on a horizontal surface carried by the sun or moon's beam, which
     /// a trail's self-shadow removes. yz: the window's centre (`TrailState::centre`).
     pub(crate) trail_light: Vec4,
-    /// The ground's detail textures ([`GroundTextures`]): xyz one tile's size (m) for the sand,
-    /// the soil and the grass, zero for a layer left procedural (all zero without a set); w the
-    /// procedural grain's albedo share under a textured layer.
+    /// The ground's detail textures ([`TerrainTextures`](crate::TerrainTextures)): xyz one
+    /// tile's size (m) for the sand, the soil and the grass, zero for a layer left procedural
+    /// (all zero without a set); w the procedural grain's albedo share under a textured layer.
     pub(crate) ground: Vec4,
+    /// Per ground layer (sand, soil, grass): a texture set's mean linear colour (xyz) and how
+    /// far it replaces the layer's own colour (w). Read only with a set bound.
+    pub(crate) colours: [Vec4; 3],
     /// The game's grade of the bare ground ([`TerrainLook`]): xyz the tint, w the saturation.
     pub(crate) look: Vec4,
     /// World units to the metre ([`ElementsUnits`](crate::ElementsUnits)): the vertex and
@@ -94,6 +95,7 @@ impl Default for TerrainMaterialParams {
             trail: Vec4::ZERO,
             trail_light: Vec4::ZERO,
             ground: Vec4::W,
+            colours: [Vec4::ZERO; 3],
             look: Vec4::ONE,
             units: 1.0,
         }
@@ -120,26 +122,35 @@ pub struct TerrainExtension {
     #[texture(105)]
     #[sampler(106)]
     pub(crate) trail: Option<Handle<Image>>,
-    /// The ground's detail textures ([`GroundTextures::image`]), a 2D array of six layers.
+    /// The ground's detail textures, packed from [`TerrainTextures`](crate::TerrainTextures): a
+    /// 2D array of six layers.
     #[texture(107, dimension = "2d_array")]
     #[sampler(108)]
     pub(crate) ground: Option<Handle<Image>>,
 }
 
-/// The pipeline key of [`TerrainExtension`]: whether a [`GroundTextures`] set is bound. The
-/// textured path is compiled only into the pipeline that has one (the `GROUND_TEXTURES` shader
-/// def), so a ground without a set pays nothing for it.
+/// The pipeline key of [`TerrainExtension`]: whether a texture set
+/// ([`TerrainTextures`](crate::TerrainTextures)) is bound, and whether one of its layers takes its
+/// own colour. The textured path is compiled only into the pipeline that has a set (the
+/// `GROUND_TEXTURES` shader def), so a ground without one pays nothing for it, and the colour
+/// lanes only into the pipeline of a set that takes its colour (`GROUND_COLOURS`): read in the
+/// hot path, they cost the meadow's opaque pass 10 %, which a set over the crate's colour (the
+/// default) does not pay. Changing whether a set takes its colour compiles a pipeline once.
 #[repr(C)]
 #[derive(Eq, PartialEq, Hash, Copy, Clone, Debug)]
 pub struct TerrainExtensionKey {
     /// A ground texture set is bound.
     pub ground_textures: bool,
+    /// A layer of the set takes its own colour (`GroundLayerTextures::colour` above 0).
+    pub ground_colours: bool,
 }
 
 impl From<&TerrainExtension> for TerrainExtensionKey {
     fn from(extension: &TerrainExtension) -> Self {
+        let ground_textures = extension.ground.is_some();
         Self {
-            ground_textures: extension.ground.is_some(),
+            ground_textures,
+            ground_colours: ground_textures && extension.params.colours.iter().any(|c| c.w > 0.0),
         }
     }
 }
@@ -178,6 +189,9 @@ impl MaterialExtension for TerrainExtension {
             && let Some(fragment) = descriptor.fragment.as_mut()
         {
             fragment.shader_defs.push("GROUND_TEXTURES".into());
+            if key.bind_group_data.ground_colours {
+                fragment.shader_defs.push("GROUND_COLOURS".into());
+            }
         }
         Ok(())
     }
@@ -185,76 +199,6 @@ impl MaterialExtension for TerrainExtension {
 
 /// The terrain's ground material: a `StandardMaterial` extended with [`TerrainExtension`].
 pub type TerrainMaterial = ExtendedMaterial<StandardMaterial, TerrainExtension>;
-
-/// The terrain's ground **detail textures**: physically based maps of the sand, the soil and the
-/// grass, laid over the procedural layers of the owned render
-/// (`docs/research/ground-textures.md`).
-///
-/// `image` is a 2D array texture of six layers, two per ground layer in the order sand, soil,
-/// grass, in linear `Rgba8Unorm` with its mip chain:
-///
-/// - layer `2k`: RGB the albedo **detail**, a multiplier of the layer's own colour with mean 1,
-///   stored as `value · 64 / 255` (range 0 to 4); A the relief's height, 0–1 with mean ½;
-/// - layer `2k + 1`: RG the tangent normal's u and v, `(c · 127 + 128) / 255`, with u along world
-///   X and v along world Z; B the roughness detail and A the ambient occlusion detail, both
-///   multipliers with mean 1 stored as `value · 128 / 255`.
-///
-/// Because the detail is a multiplier with mean 1, the ground's colour at a distance (where the
-/// mips average it out) is the procedural one, so a set changes the near field and not the
-/// landscape. `tools/ground-textures/prep.py` packs albedos into this format as a KTX2 file with
-/// every mip level; a set made from another style's albedos is a stylistic variant of the
-/// ground. Load one with [`GroundTextures::load`]. The textures are hex-tiled (Mikkelsen 2022),
-/// so a tile never repeats visibly, and where two layers meet the taller texel's layer shows.
-/// A layer whose tile is zero is not sampled and stays procedural, so a set may texture some
-/// layers only. Without an image (the default) the ground is the procedural one alone, exactly.
-#[derive(Resource, Clone, Debug, Reflect)]
-#[reflect(Resource)]
-pub struct GroundTextures {
-    /// The texture set; `None` for the procedural ground alone. Until the image has loaded the
-    /// ground is the procedural one.
-    pub image: Option<Handle<Image>>,
-    /// One tile's size on the ground, m: sand, soil, grass. Zero leaves that layer procedural.
-    pub tile_m: Vec3,
-    /// The share of the crate's procedural grain's albedo mottle kept under a textured layer,
-    /// 0–1: the textures carry the near field's colour (an untextured layer keeps all of it).
-    /// The grain's relief is kept whole, because the turf's bumps are what a low sun shows
-    /// across the mid field, where the textures' normals have averaged flat.
-    pub grain: f32,
-}
-
-impl Default for GroundTextures {
-    fn default() -> Self {
-        Self {
-            image: None,
-            tile_m: Vec3::new(1.5, 2.0, 2.0),
-            grain: 0.3,
-        }
-    }
-}
-
-impl GroundTextures {
-    /// Load a texture set (see the type's documentation for the format) with the settings it
-    /// needs: linear (not sRGB), repeating, trilinear and anisotropic. The image format's loader
-    /// must be enabled (Bevy's `ktx2` and `zstd_rust` features for the prep tool's output).
-    pub fn load<'a>(asset_server: &AssetServer, path: impl Into<AssetPath<'a>>) -> Handle<Image> {
-        asset_server
-            .load_builder()
-            .with_settings(|settings: &mut ImageLoaderSettings| {
-                settings.is_srgb = false;
-                settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
-                    label: Some("elements_ground_textures".into()),
-                    address_mode_u: ImageAddressMode::Repeat,
-                    address_mode_v: ImageAddressMode::Repeat,
-                    mag_filter: ImageFilterMode::Linear,
-                    min_filter: ImageFilterMode::Linear,
-                    mipmap_filter: ImageFilterMode::Linear,
-                    anisotropy_clamp: 16,
-                    ..default()
-                });
-            })
-            .load(path)
-    }
-}
 
 /// A game's colour grade of the owned terrain's bare ground (rock, soil, grass, sand, scree) and
 /// of the scattered rocks lying on it, so a palette can grade the ground the way the game grades
@@ -294,18 +238,15 @@ impl TerrainLook {
     }
 }
 
-/// The ground textures part of the terrain's uniform, and the image to bind: nothing until the
-/// set's image exists, so the material is never left waiting for it.
-fn ground_inputs(textures: &GroundTextures, images: &Assets<Image>) -> (Vec4, Option<Handle<Image>>) {
-    match &textures.image {
-        Some(image) if images.contains(image) => (
-            textures
-                .tile_m
-                .max(Vec3::ZERO)
-                .extend(textures.grain.clamp(0.0, 1.0)),
-            Some(image.clone()),
-        ),
-        _ => (Vec4::W, None),
+/// The ground textures part of the terrain's uniform, and the image to bind: nothing until a set
+/// has been packed and its image exists, so the material is never left waiting for it.
+fn ground_inputs(
+    pack: &GroundTexturePack,
+    images: &Assets<Image>,
+) -> (Vec4, [Vec4; 3], Option<Handle<Image>>) {
+    match &pack.image {
+        Some(image) if images.contains(image) => (pack.ground, pack.colours, Some(image.clone())),
+        _ => (Vec4::W, [Vec4::ZERO; 3], None),
     }
 }
 
@@ -510,7 +451,7 @@ pub(super) fn update_materials(
     mut ground_materials: ResMut<Assets<GroundMaterial>>,
     water: Option<Res<crate::hydrology::WaterSettings>>,
     trails: Option<Res<TrailState>>,
-    textures: Res<GroundTextures>,
+    textures: Res<GroundTexturePack>,
     images: Res<Assets<Image>>,
     look: Res<TerrainLook>,
 ) {
@@ -529,7 +470,7 @@ pub(super) fn update_materials(
         globals.as_deref(),
     );
     let (trail_window, trail_light, field) = trail_inputs(trails.as_deref(), live);
-    let (ground, ground_maps) = ground_inputs(&textures, &images);
+    let (ground, colours, ground_maps) = ground_inputs(&textures, &images);
 
     if let (Some(state), Some(config)) = (state.as_ref(), runtime.lod.as_ref()) {
         let (lod, top) = lod_uniform(config);
@@ -545,6 +486,7 @@ pub(super) fn update_materials(
             trail: trail_window,
             trail_light,
             ground,
+            colours,
             look: look.packed(),
             units: units.per_metre(),
         };

@@ -55,10 +55,13 @@ struct TerrainMaterialParams {
     // x: the beam's share of the light on a horizontal surface. yz: the window's centre,
     // metre-frame XZ.
     trail_light: vec4<f32>,
-    // The ground's detail textures (`GroundTextures`): xyz one tile's size on the ground (m) for
+    // The ground's detail textures (`TerrainTextures`): xyz one tile's size on the ground (m) for
     // the sand, the soil and the grass, all zero without a texture set; w the share of the
     // procedural grain kept under them (1 without a set).
     ground: vec4<f32>,
+    // Per ground layer (sand, soil, grass): a set's mean linear colour (xyz) and how far it
+    // replaces the layer's own (w). Read only under `GROUND_COLOURS`.
+    colours: array<vec4<f32>, 3>,
     // The game's grade of the bare ground (`TerrainLook`): xyz the tint, w the saturation.
     look: vec4<f32>,
     // World units to the metre (`ElementsUnits`): the shader divides the positions Bevy gives it
@@ -178,6 +181,37 @@ const ROCK: vec3<f32> = vec3<f32>(0.076, 0.071, 0.066);
 const SOIL: vec3<f32> = vec3<f32>(0.0732, 0.0397, 0.0196);
 const SAND: vec3<f32> = vec3<f32>(0.5382, 0.3931, 0.1960);
 const GRASS: vec3<f32> = vec3<f32>(0.0397, 0.0835, 0.0134);
+
+// The ground layers' base colours (`docs/research/terrain-textures.md`, Model adopted 7): a
+// texture set's mean colour replaces the layer's own by its share
+// (`GroundLayerTextures::colour`), in the base colour so it holds at every distance, where the
+// detail is fetched and where it has faded out. Only the pipeline of a set that takes its colour
+// reads the lanes (`GROUND_COLOURS`: read here they cost the meadow's opaque pass 10 %); every
+// other pipeline has the constants, and its shader is the one it was.
+@if(GROUND_COLOURS)
+fn sand_colour() -> vec3<f32> {
+    return mix(SAND, material.colours[0].xyz, material.colours[0].w);
+}
+@else
+fn sand_colour() -> vec3<f32> {
+    return SAND;
+}
+@if(GROUND_COLOURS)
+fn soil_colour() -> vec3<f32> {
+    return mix(SOIL, material.colours[1].xyz, material.colours[1].w);
+}
+@else
+fn soil_colour() -> vec3<f32> {
+    return SOIL;
+}
+@if(GROUND_COLOURS)
+fn grass_colour() -> vec3<f32> {
+    return mix(GRASS, material.colours[2].xyz, material.colours[2].w);
+}
+@else
+fn grass_colour() -> vec3<f32> {
+    return GRASS;
+}
 
 // Andersson 2007 §5.2.3, Listing 2: the Overlay blend of a detail value onto a computed mask, at
 // full opacity. It keeps 0 and 1, and 0.5 is the identity, so the detail breaks up a transition
@@ -462,16 +496,16 @@ fn ground_textured(xz: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, footprint_m: f32
     let kept = select(vec3<f32>(1.0), vec3<f32>(material.ground.w), tile > vec3<f32>(0.0));
     let sharpness = height_sharpness(footprint_m);
     var sums = LayerSums(vec3<f32>(0.0), vec3<f32>(0.0), vec2<f32>(0.0), 0.0, 0.0, 0.0);
-    sums = add_layer(sums, 0u, vec3<f32>(1.0, 0.0, 0.0), w.x, tile.x, SAND, kept.x, xz, dx, dy, footprint_m, sharpness);
-    sums = add_layer(sums, 1u, vec3<f32>(0.0, 1.0, 0.0), w.y, tile.y, SOIL, kept.y, xz, dx, dy, footprint_m, sharpness);
-    sums = add_layer(sums, 2u, vec3<f32>(0.0, 0.0, 1.0), w.z, tile.z, GRASS, kept.z, xz, dx, dy, footprint_m, sharpness);
+    sums = add_layer(sums, 0u, vec3<f32>(1.0, 0.0, 0.0), w.x, tile.x, sand_colour(), kept.x, xz, dx, dy, footprint_m, sharpness);
+    sums = add_layer(sums, 1u, vec3<f32>(0.0, 1.0, 0.0), w.y, tile.y, soil_colour(), kept.y, xz, dx, dy, footprint_m, sharpness);
+    sums = add_layer(sums, 2u, vec3<f32>(0.0, 0.0, 1.0), w.z, tile.z, grass_colour(), kept.z, xz, dx, dy, footprint_m, sharpness);
     let total = w.x + w.y + w.z;
     let lifted = sums.lifts.x + sums.lifts.y + sums.lifts.z;
     var out: GroundTextured;
     if lifted <= 0.0 {
         // Every layer under the gate: the plain weights, no detail.
         out.shares = w;
-        out.colour = w.x * SAND + w.y * SOIL + w.z * GRASS;
+        out.colour = w.x * sand_colour() + w.y * soil_colour() + w.z * grass_colour();
         out.relief = vec2<f32>(0.0);
         out.roughness_scale = 1.0;
         out.ambient = 1.0;
@@ -567,8 +601,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // A trench through grass or soil shows the soil (sand stays sand; rock takes no imprint).
     let trench = smoothstep(0.01, 0.05, depth) * (w.z + w.w);
     // The layers' own colours without the textures' detail: the turf's palette reads their chroma.
-    let plain = mix(w.x * ROCK + w.y * SAND + w.z * SOIL + w.w * GRASS, SOIL, trench);
-    var albedo = select(plain, mix(w.x * ROCK + maps.colour, SOIL, trench), maps_on);
+    let soil_base = soil_colour();
+    let plain = mix(w.x * ROCK + w.y * sand_colour() + w.z * soil_base + w.w * grass_colour(), soil_base, trench);
+    var albedo = select(plain, mix(w.x * ROCK + maps.colour, soil_base, trench), maps_on);
     let rough = mix(0.9, 0.95, w.z) * maps.roughness_scale;
 
     // The ground's detail, and the rock's own material (`docs/research/rock-material.md`).

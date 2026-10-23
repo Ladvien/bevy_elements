@@ -14,9 +14,12 @@
 //!   is the same every run, which is what temporal effects (cloud accumulation, rain, lightning,
 //!   wind, water flow, snow melt) are reviewed on. A run with `ELEMENTS_SHOT_DIR` and no
 //!   `ELEMENTS_FRAMES` captures until it is killed.
-//! - `ELEMENTS_GROUND_TEXTURES=0` renders the terrain's procedural ground alone, without the
-//!   detail textures in `assets/ground/` ([`GroundTextures`]). A binary run directly (not through
-//!   `cargo run`) finds the assets with `BEVY_ASSET_ROOT=<the repository>`.
+//! - The terrain wears the golem-generated soil and grass in `assets/ground/golem/`
+//!   ([`TerrainTextures`]); `ELEMENTS_GROUND_TEXTURES=0` renders the procedural ground alone,
+//!   `ELEMENTS_GROUND_SWAP=S` toggles the set every S seconds (re-texturing the terrain at
+//!   runtime) and `ELEMENTS_GROUND_COLOUR=c` sets every layer's colour share
+//!   ([`GroundLayerTextures::colour`]). A binary run directly (not through `cargo run`) finds the
+//!   assets with `BEVY_ASSET_ROOT=<the repository>`.
 //!
 //! Keys: WASD + Q/E move (Shift ×5), hold the right mouse button to look, `[`/`]` halve/double the
 //! time scale, `T` +1 hour, `1`–`0` force a weather preset, `R` release to the scheduler.
@@ -155,6 +158,7 @@ impl Plugin for ExampleHarness {
             pending: std::sync::Arc::default(),
         })
         .add_systems(Startup, (spawn_status, load_ground_textures))
+        .add_systems(Update, texture_terrain)
         .add_systems(
             Update,
             (grow_weather, fly, clock_keys, weather_keys).before(ElementsSystems::Clock),
@@ -169,19 +173,100 @@ impl Plugin for ExampleHarness {
     }
 }
 
-/// The examples' ground texture set, generated with golem and packed by
-/// `tools/ground-textures/prep.py` (`tools/ground-textures/golem.json`).
+/// The examples' ground texture set (`assets/ground/golem/`): golem's generated soil and grass,
+/// handed to [`TerrainTextures`] as photographs. `ELEMENTS_GROUND_TEXTURES=0` leaves it off,
+/// `ELEMENTS_GROUND_SWAP` toggles it.
+#[derive(Resource)]
+struct GroundSet {
+    set: TerrainTextures,
+    /// The set is on the terrain.
+    on: bool,
+    /// Seconds between toggles, and the time since the last one.
+    swap: Option<f32>,
+    since: f32,
+}
+
 fn load_ground_textures(mut commands: Commands, asset_server: Res<AssetServer>) {
-    if std::env::var("ELEMENTS_GROUND_TEXTURES").as_deref() == Ok("0") {
-        return;
-    }
-    // The set textures the soil and the grass; the sand stays procedural (tile 0) until it has a
-    // ripple field (`docs/research/ground-textures.md`, Deviation 15).
-    commands.insert_resource(GroundTextures {
-        image: Some(GroundTextures::load(&asset_server, "ground/ground.ktx2")),
-        tile_m: Vec3::new(0.0, 2.0, 2.0),
+    // The maps are only read by the crate's packer, so they stay off the GPU.
+    let map = |path: &str| -> Handle<Image> {
+        asset_server
+            .load_builder()
+            .with_settings(|settings: &mut bevy::image::ImageLoaderSettings| {
+                settings.asset_usage = bevy::asset::RenderAssetUsages::MAIN_WORLD;
+            })
+            .load(path.to_owned())
+    };
+    // The soil and the grass; the sand stays procedural until it has a ripple field
+    // (`docs/research/ground-textures.md`, Deviation 15).
+    let mut set = TerrainTextures {
+        soil: Some(
+            GroundLayerTextures::new(map("ground/golem/soil.jpg"), 2.0)
+                .photograph()
+                .with_relief_deg(10.0),
+        ),
+        grass: Some(
+            GroundLayerTextures::new(map("ground/golem/grass.jpg"), 2.0)
+                .photograph()
+                .with_relief_deg(14.0),
+        ),
         ..default()
+    };
+    // `ELEMENTS_GROUND_COLOUR=c`: every layer's colour share (`GroundLayerTextures::colour`).
+    if let Some(share) = std::env::var("ELEMENTS_GROUND_COLOUR")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+    {
+        for layer in [&mut set.sand, &mut set.soil, &mut set.grass]
+            .into_iter()
+            .flatten()
+        {
+            layer.colour = share;
+        }
+    }
+    commands.insert_resource(GroundSet {
+        set,
+        on: std::env::var("ELEMENTS_GROUND_TEXTURES").as_deref() != Ok("0"),
+        swap: std::env::var("ELEMENTS_GROUND_SWAP")
+            .ok()
+            .and_then(|s| s.parse::<f32>().ok())
+            .filter(|s| *s > 0.0),
+        since: 0.0,
     });
+}
+
+/// Puts the set on every terrain an example spawns, and toggles it on the `ELEMENTS_GROUND_SWAP`
+/// period.
+fn texture_terrain(
+    mut commands: Commands,
+    ground: Option<ResMut<GroundSet>>,
+    added: Query<Entity, Added<Terrain>>,
+    terrains: Query<Entity, With<Terrain>>,
+    time: Res<Time>,
+) {
+    let Some(mut ground) = ground else {
+        return;
+    };
+    let mut toggled = false;
+    if let Some(period) = ground.swap {
+        ground.since += time.delta_secs();
+        if ground.since >= period {
+            ground.since -= period;
+            ground.on = !ground.on;
+            toggled = true;
+        }
+    }
+    let targets: Vec<Entity> = if toggled {
+        terrains.iter().collect()
+    } else {
+        added.iter().collect()
+    };
+    for entity in targets {
+        if ground.on {
+            commands.entity(entity).insert(ground.set.clone());
+        } else {
+            commands.entity(entity).remove::<TerrainTextures>();
+        }
+    }
 }
 
 /// The standard example camera: an `ElementsCamera` that flies, placed at `position` looking at
