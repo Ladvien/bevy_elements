@@ -4218,3 +4218,48 @@ The temperatures and day counts are plausible. **The amounts are not**: Richards
 3. **Puddle shorelines follow the micro-relief** (the rhombi of the water grid).
 4. **Stylistic variants** (once 2 makes sets settable).
 5. **The rock's close range**; infiltration for long real-time rain.
+
+## Iteration 50 - 2026-10-23 - PBR textures set on the terrain
+
+**Commits:** `adc9a7f`, `20ecaa2`, `71587f4` (the research note `docs/research/terrain-textures.md` and two amendments, each committed alone before the code it covers), `737cde2` and `c807df0` (`TerrainTextures`, `GroundLayerTextures`, the in-crate packer, the `GROUND_COLOURS` pipeline, the examples' cutover, `GroundTextures`/KTX2/`prep.py` removed; a clippy fix), `114a569` (README, changelog, `AGENTS.md`), this log. **Sibling repos:** none. **Not released.** `docs/ground_textures.png` is unchanged: the golem set renders identically through the new path.
+
+### Why this item
+
+No issue was open. The user asked twice for the ground's PBR textures to be settable on the terrain, with golem's help, ahead of the backlog's first item (the weather's precipitation climatology, a defect found in iteration 49), which is the runner-up: it is physically wrong but invisible in a frame, where a game today cannot hand the terrain its own maps at all. Before this iteration the textures were one crate-wide resource holding a KTX2 array that only an offline Python tool could make, and that tool threw a PBR set's normal, roughness, occlusion and height maps away. golem's tools are unchanged in this session (FLUX image generation and img2img; no texture or PBR-map tool, no texture-specific model), so its sets remain albedos whose maps the crate derives.
+
+### What changed
+
+- **`TerrainTextures`** (component on the `Terrain` entity): per ground layer (sand, soil, grass) an `Option<GroundLayerTextures>` — a base colour and, optionally, a normal (+Y up; `flip_normal_map_y` for DirectX), roughness (G), occlusion (R) and height (R) map, read as glTF stores them whatever sRGB flag the images carry; one ARM/ORM image serves as both roughness and occlusion. `tile_m`, `normal_scale`, `relief_deg` (derived normals), `contrast` (de-lighting), `tileable`, `colour`. `GroundLayerTextures::photograph()` de-lights and tiles a photograph or a generated image; `with_colour(share)` takes the set's own mean colour.
+- **The packer is in the crate** (`src/terrain/textures.rs`): an async task on `AsyncComputeTaskPool` reads the maps (a direct path for 8-bit RGBA, `get_color_at` otherwise), resamples them to `resolution` (1024), and packs the six-layer detail array with every mip level the shader already samples: `prep.py`'s derivations ported, its Gaussian blurs as Kovesi's four-box cascade (running sums, no transposes). Given roughness and occlusion become multipliers with mean 1; a given height is band-passed like a derived one. Inserting, changing or removing the component re-textures the ground at runtime; the previous set renders until the new one is packed.
+- **The set's colour is opt-in and has its own pipeline**: `colour` defaults to 0 (the crate's calibrated colour, the set its detail); a share above 0 sets `TerrainExtensionKey::ground_colours`, which compiles the colour lanes (`GROUND_COLOURS`) into that set's pipeline only.
+- `GroundTextures`, `GroundTextures::load`, `assets/ground/ground.ktx2` (16 MB) and `tools/ground-textures/` are removed; the golem sources and their prompts moved to `assets/ground/golem/`. The examples hand them to `TerrainTextures` as photographs (`ELEMENTS_GROUND_TEXTURES=0` off, `ELEMENTS_GROUND_SWAP=S` toggles at runtime, `ELEMENTS_GROUND_COLOUR=c` sets the share); the examples' Bevy enables `jpeg`.
+
+### Rounds (`/tmp/i50/critique.md`)
+
+| Round | State | Finding | Verdict |
+|---|---|---|---|
+| 1 | The plan: PBR sets take their own colour (`colour` 1); lanes read in the textured pipeline | Golem set identical to main; a CC0 set (ambientCG `Grass004` + `Ground037`) bleached the hills to lime and beige at every distance: library base colours 2.1× and 6.5× the crate's | the CC0 look FAIL; the rendering faithful |
+| 2 | `colour` 0 by default; ambientCG and then Poly Haven (`sparse_grass` + `farm_soil`, ARM) captured at 16 angles | Correct (calibrated colour, relief lit from the sun's side, no ring, no seam, seamless swap) but both read as a mown lawn with a red speckle where the soil shows; the colour lanes cost +7.7 % at share 0 | CC0 sets NOT YET as a look; performance gate failed |
+| 3 | Lanes behind `GROUND_COLOURS`; the examples keep the golem set only | Default identical to main, its cost within noise; the opt-in colour pipeline works at +8.6 % | GREAT |
+
+### Measurements
+
+- **Packer = prep.py**: the golem albedos packed by the crate against the KTX2, level 0: mean |d| ≤ 1.16 levels of 255, p99 ≤ 5, every channel mean identical, the neutral sand bit-identical.
+- **Golem set through the new path vs main**, 16 angles (`hills` eye/down/12 m/aerial/dawn/dusk both ways/overcast/rain/snow/seed 7, `plains`, `dunes`, scree, mountain foot): mean |d| ≤ 0.49 DN, p99 ≤ 2 DN, frame means within 0.02 DN; no set: ≤ 1 level on < 0.05 % of pixels.
+- **The normal convention on real maps**: the packed `NormalGL` normals correlate with the normals derived from the same sets' displacement maps at +0.50 (soil) and +0.40 (grass) in u and v; with `flip_normal_map_y` the v correlation turns to −0.50 and −0.40.
+- **Runtime swap** (2 s cycle, 251 frames): golem → CC0 handed over at frames 136 and 494, 14-16 frames after the swap, with no procedural frame in between.
+- **Packing time** (desktop CPU, one background task): two layers of five 1024² maps 0.48 s, the golem photographs 0.62 s; the first version took 1.18-1.39 s (40 ms map reads through `get_color_at`, 88 ms blurs with transposes) — now 10 ms and 20 ms.
+- **Cost** (`bench_elements`, 4K eye-level meadow, opaque pass over the early prepass, interleaved with `main`, P5): the golem set 55.7-59.7 against 55.7-57.8 (raw pass 9.24-9.35 ms vs 9.25-9.52), no set 45.6-46.5 vs 45.0-45.2 — both unchanged; the lanes read in the textured pipeline (round 2) 59.8-63.5 against 55.6-60.3, +7.7 %; a set taking its colour 61.0-61.7 against 56.0-57.1, +8.6 %, opt-in.
+- Tests: the box cascade's σ and sum, every mip level's details averaging to 1, a flat colour packing no detail and its own colour, OpenGL and DirectX normal maps agreeing with the height's slope, given roughness and occlusion as mean-1 details (ORM), a large map packed at the resolution, and a set on the terrain packed, swapped with the old one bound, and removed (headless). Gates 1-4 pass (25 suites; clippy after one fix, `as_chunks`); gate 5: 24 integration binaries ok, `clouds` 10, `terrain` 9, `cover` 8, `dust` 6 and `the_horizon_sky` 1.
+
+### Sources
+
+- Unity, *Terrain Layers* (per-layer diffuse, normal map with normal scale, mask map, tile size); Khronos, *glTF 2.0* §3.9 (sRGB base colour, roughness G, occlusion R, normals +Y up, normal scale); Bevy 0.20 (`flip_normal_map_y`, `Image::get_color_at`); Kovesi 2010, *Fast Almost-Gaussian Filtering* (DICTA, author's copy); Wells 1986 (TPAMI; pending, paywalled); `docs/research/ground-textures.md` (Andersson 2007, Mikkelsen 2022, Heitz & Neyret 2018, the derivations); ambientCG and Poly Haven CC0 sets (trials, not shipped).
+
+### The next five items, ranked
+
+1. **Stylistic variants of the ground** (the user's ask, now that a set is settable and swappable): golem-generated sets in other styles (painterly, cel-shaded, autumn, arid), each judged GREAT and taking its own colour through `with_colour`, with a capture tour; and a calibrated-albedo check for a set's colour (the CC0 finding: library base colours run 2-6.5× the crate's).
+2. **The weather's precipitation climatology** (iteration 49's finding): the temperate preset rains 2-13× an observed wet station's totals.
+3. **Textures on the rock** (the user: PBR into everything, especially terrain): a triplanar PBR detail on the cliffs over the procedural rock material, settable like the ground's.
+4. **A long-bladed meadow from a scanned set**: CC0 scanned grasses are short swards; a set's detail over the crate's rust-brown soil reads as red flecks where the soil shows — a soil-layer contrast limit or a colour share for the soil alone.
+5. **Puddle shorelines follow the micro-relief**; the sand's ripple field.
