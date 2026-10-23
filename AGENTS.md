@@ -98,6 +98,29 @@ No system is implemented without its `docs/research/<system>.md`, committed firs
   Outcome). A surface the wrong *shade* — not dark navy, just off — can be this too: bisect by
   renaming before suspecting the maths, and compare a capture's mean against a CPU emulation of
   the same formula.
+- **The rock's cell networks change with the shader's register schedule, not only its maths.**
+  Any edit to the terrain fragment that changes how the driver schedules it — even a pure no-op
+  that keeps an early value (`w.w`, `trench`) alive to the end — moves the rock's float results in
+  the last bits, and pixels near a cell wall flip to the neighbouring block: 4-22 % of a cliff's
+  pixels by up to ~40 levels, structurally identical, while each build renders the same frame
+  run after run (iteration 47's bisection, `docs/loop-log.md`). Compare rock captures by
+  structure and band means, never bit-wise; a dry-rock "regression" after an unrelated shader
+  edit is this until a no-op of the same shape says otherwise.
+- **A value carried across `rock_material` costs the whole terrain pass.** The terrain
+  fragment's cost is its peak register count, which sits in the rock's material: a canopy share
+  made of the layer weights, the trench and the scree band — all dead before that call on `main` —
+  cost +5 % of the 4K opaque pass on dry ground, and folding the three into one value before the
+  call cost +20 %, while the same share read from the albedo after the call was free (iteration
+  47). Derive a late quantity from what is live there (the albedo, `n`, `rough`, `rockness`,
+  `depth`) rather than carrying an early one. Measure with the opaque pass over the early
+  prepass of the same run: the ratio cancels Xvfb's clock hopping to about ±3 %, where the
+  means alone swing 2×.
+- **`ELEMENTS_GROW_HOURS` grows the cover maps, not the water.** It advances the `WorldClock`,
+  which wetness and snow integrate; the hydrology runs on `HydrologySettings::time_scale` (real
+  time by default), so a 10 s capture of 3 grown hours of rain has soaked ground and about
+  0.01 mm of standing water. Standing water in a capture comes from a bake (`ErodeTerrain`), a
+  `WaterSource` or a long real-time run; anything that looks like water on grown ground is the
+  surface shading (iteration 46 blamed infiltration for what was the wet roughness).
 - **`SpecializedMeshPipelineError` has only `MissingVertexAttribute`**, so a material extension cannot reject a view without a depth prepass; the water shader needs `DEPTH_PREPASS` and fails to compile on a view without it.
 - **`AlphaMode::Multiply` and `Add` need premultiplied output**: Bevy's `premultiply_alpha` runs in `main_pass_post_lighting_processing`; a shader that writes the result itself (the water's absorb pass) must write `(X·a, a)` for Multiply, because the blend is `dst·src.rgb + (1 − src.a)·dst`.
 - **A displaced mesh needs its own `Aabb` and `NoAutoAabb`**, and `MeshTag::new(level)` (the struct has a debug-only private field). The terrain's vertex shader reads the patch origin from the instance matrix's translation, so patches are children of the terrain entity and the terrain `Transform` has no rotation or scale.
