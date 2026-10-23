@@ -119,6 +119,28 @@ fn a_restored_director_continues_the_same_weather() {
     assert!(same < 720, "a fresh director matched the saved run by chance");
 }
 
+/// The record of recent days is part of a save: restored onto the saved clock it continues the
+/// same days as the run it was saved from.
+#[test]
+fn a_restored_history_continues_the_same_days() {
+    let mut original = app();
+    run_for(&mut original, 600);
+    let file = save(&original);
+    let history = serde_json::to_string(original.world().resource::<ClimateHistory>()).unwrap();
+
+    let mut restored = app();
+    load(&mut restored, &file);
+    restored.insert_resource(serde_json::from_str::<ClimateHistory>(&history).unwrap());
+    compare(&mut original, &mut restored, 720);
+    let (a, b) = (
+        original.world().resource::<ClimateHistory>(),
+        restored.world().resource::<ClimateHistory>(),
+    );
+    assert_eq!(a.days().len(), 5, "1 March from 06:00, then 2-5 March");
+    assert_eq!(a.days(), b.days());
+    assert_eq!(a.today(), b.today());
+}
+
 #[test]
 fn a_director_saved_mid_force_restores_forced_at_the_same_blend() {
     let mut original = app();

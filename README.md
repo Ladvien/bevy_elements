@@ -14,7 +14,7 @@ Every system was studied in the home-still paper library first. The note for eac
 
 | Plugin | Module | What it does |
 |---|---|---|
-| `ClimatePlugin` | `climate` | `Climate` presets, seasons, a seeded hourly weather scheduler, `WeatherDirector` to force and release weather, `SurfaceWeathering` (wetness, snow cover) |
+| `ClimatePlugin` | `climate` | `Climate` presets, seasons, a seeded hourly weather scheduler, `WeatherDirector` to force and release weather, `SurfaceWeathering` (wetness, snow cover), `ClimateHistory` (the last days' temperatures, humidity and precipitation) |
 | `CelestialPlugin` | `celestial` | `WorldClock`, `GeoLocation`, Meeus-accuracy sun and moon (`astro`), sun and moon `DirectionalLight`s for Bevy's atmosphere, the bright-star sky, a shaded moon disc, exposure |
 | `WindPlugin` | `wind` | A camera-centred stable-fluids wind field on the GPU, curl-noise turbulence, travelling gusts, a public WGSL import |
 | `FogPlugin` | `fog` | Distance fog from the weather's visibility and a camera-following ground-fog volume written by compute |
@@ -149,6 +149,19 @@ date and hour and advances by `Time<Virtual>` × `time_scale`; `GeoLocation` pla
 ![The weathered town at 15:30 in a cool-temperate November, without a snow season (left) and with one from 14 November (right): on the 9th a cold night's snow lies only without the season, the town is wet with it; from the 14th the two are the same](docs/snow_season.png)
 
 ![Day by day, 2 to 20 November](docs/snow_season.gif)
+
+**The last few days.** `ClimateHistory` records each local calendar day as the clock runs through it, from the `Weather` every system reads: the mean, minimum and maximum temperature (TG, TN, TX), the mean relative humidity, the precipitation total (RR, liquid-water equivalent, snow included), the snowfall, and how many of its hours were observed. `Environment::recent_days(n)` returns the completed days of the last `n` (today excluded; `ClimateHistory::today()` has it so far) and `recent_climate(n)` sums them up with climatology's daily indices: a **wet day** has at least 1 mm of precipitation (`WET_DAY_MM`), a **frost day** a minimum below 0 °C and an **icing day** a maximum below it (`FREEZING_C`; the ETCCDI's definitions), with the hour-weighted means, the extremes and the totals. A window of 0 is empty, a longer window than the record is the record, and a summary of no days is `None`. The record keeps 31 days (insert `ClimateHistory::with_capacity(n)` first for more); a clock step of up to a day is recorded with that frame's weather, a longer jump leaves the days between unrecorded, and a clock moved back forgets the days from its new date on. The weather of a past hour cannot be recomputed, so the record is part of a save (below). `docs/research/climate-history.md`.
+
+```rust
+# use bevy::prelude::*;
+# use bevy_elements::*;
+fn stores(env: Environment) {
+    if let Some(week) = env.recent_climate(7) {
+        let damp = week.wet_days >= 3 && week.mean_relative_humidity > 0.8;
+        let _ = (damp, week.frost_days, week.mean_temperature_c);
+    }
+}
+```
 
 ### Wind
 
@@ -533,7 +546,7 @@ noon and 2.8 lm at midnight, for the same picture. A game that hard-codes a lamp
 wrong by five orders of magnitude between the two; a game that asks the crate is never wrong.
 See `docs/research/game-lights.md`.
 
-**Saving the weather and the snowpack.** The weather's save state is `WorldClock`, `Climate`, `GeoLocation` and `WeatherDirector` (the scheduler's chain position, a forced preset and the blend in progress); `Weather` is recomputed from them each frame. The ground's is `SurfaceWeathering` (the snowpack and the wetness). With the `serde` feature all five serialize; insert the saved copies before the next `ElementsSystems::Weather` run and the weather and the snow continue exactly as saved, where a fresh director would restart the chain at `Clear` and a fresh `SurfaceWeathering` at bare, dry ground. A snowpack loaded onto a clock more than an hour from the one it was saved at neither melts nor grows across the gap. The ground-cover maps on a terrain are not saved: they are re-seeded from the loaded snowpack, times each cell's slope and shelter exposure, so roofs keep the ground under them bare; drifts re-form as it snows. The other GPU layers (water, terrain) are not part of it. `tests/save.rs` shows the round trip; `weathered_town` writes and loads a save with `ELEMENTS_SAVE` and `ELEMENTS_LOAD`.
+**Saving the weather and the snowpack.** The weather's save state is `WorldClock`, `Climate`, `GeoLocation` and `WeatherDirector` (the scheduler's chain position, a forced preset and the blend in progress); `Weather` is recomputed from them each frame. The ground's is `SurfaceWeathering` (the snowpack and the wetness), and the record of recent days is `ClimateHistory`. With the `serde` feature all six serialize; insert the saved copies before the next `ElementsSystems::Weather` run and the weather, the snow and the record continue exactly as saved, where a fresh director would restart the chain at `Clear`, a fresh `SurfaceWeathering` at bare, dry ground and a fresh record with no days. A snowpack or a record loaded onto a clock more than an hour from the one it was saved at neither melts, grows nor records across the gap. The ground-cover maps on a terrain are not saved: they are re-seeded from the loaded snowpack, times each cell's slope and shelter exposure, so roofs keep the ground under them bare; drifts re-form as it snows. The other GPU layers (water, terrain) are not part of it. `tests/save.rs` shows the round trip; `weathered_town` writes and loads a save with `ELEMENTS_SAVE` and `ELEMENTS_LOAD`.
 
 **A forecast.** `WeatherDirector::forecast(&climate, &location, &clock, hours)` returns the preset the scheduler will choose for each of the next `hours` game hours, by running the same seeded chain forward without changing anything: the weather then comes as forecast (with the same climate and location), whatever is forced meanwhile, since the chain keeps stepping underneath a force. A morning board can say that a storm comes this afternoon. `SurfaceWeathering` compares with `==` (its private snowpack state included), so a save that holds it can derive `PartialEq`.
 
@@ -651,6 +664,7 @@ Native (Vulkan, Metal, DX12) and wasm WebGPU. WebGL2 is unsupported: the simulat
 - [A focus and orthographic cameras](docs/research/view-anchor.md) — Marschner & Shirley (orthographic rays), Real-Time Rendering, Puig-Centelles et al. 2009 and 2011 (the rain container around what the observer sees), Losasso & Hoppe 2004, Tatarchuk 2006.
 - [A game keeps its own look and lights](docs/research/integration.md) — Patry 2021 (art direction over a physical sky), Schneider & Vos 2015, Tatarchuk 2006; the camera's dressing flags, `CelestialSettings`, the public globals buffer.
 - [The snowpack in a save, and a snow season](docs/research/snow-season.md) — Jennings et al. 2018 (the rain–snow threshold varies from −0.4 to 2.4 °C), Patry 2021; `SnowSeason`, `Weather::snow_possible`, the restored pack and the seeded cover maps.
+- [A record of recent days](docs/research/climate-history.md) — the ETCCDI's daily indices (frost, icing and wet days; Zhang et al. 2011), Thurner et al. 2017, Richardson 1981 (the daily weather record); `ClimateHistory`, `Environment::recent_days` and `recent_climate`, issue #31.
 - [Sky light and reflections under cloud](docs/research/sky-light.md) — Hillaire 2016 (clouds in every view, the environment map included), Lagarde & de Rousiers 2014 (the distant light probe, refreshed with the weather), Unreal's real-time sky light capture, Bauer 2019 (RDR2), Karis 2013 (split sum), Kittler & Darula 2014 (the graded overcast); the clouds' sky probe.
 - [A game's look for rain and snow](docs/research/precipitation-look.md) — Tatarchuk 2006 (artist-set rain direction and speed, random particle size), Lagarde 2012 (Remember Me: rain stronger than physics where it would vanish), Wang & Wade 2004, Garg & Nayar 2007, Tiira et al. 2016 (snowflake size distributions); `PrecipitationLook`, and the scheduler's forecast.
 - [Trails on a game's own ground](docs/research/trails-game-ground.md) — Barré-Brisebois 2014 (Batman: Arkham Origins: "we don't have terrain", snow surfaces a game marks), Tran 2018 (a world-space trail map projected onto the ground material), Hanák 2021 (RotTR's sliding window, TLOU2's parallax prints on any mesh), Tatarchuk 2006; `TrailGround`, `with_trails()`, `trail_depth`.

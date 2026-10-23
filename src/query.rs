@@ -9,7 +9,7 @@ use crate::celestial::{
     CelestialFrame, CloudLight, ElementsExposure, SunState, WorldClock, beam_transmittance,
     scene_illuminance,
 };
-use crate::climate::Weather;
+use crate::climate::{ClimateHistory, ClimateSummary, DayConditions, Weather};
 use crate::clouds::CloudShadowSnapshot;
 use crate::cover::CoverSnapshot;
 use crate::hydrology::{WaterDepthSnapshot, WaterVelocitySnapshot};
@@ -77,6 +77,8 @@ pub struct Environment<'w> {
     units: Res<'w, ElementsUnits>,
     /// The camera's exposure; absent without the celestial plugin.
     exposure: Option<Res<'w, ElementsExposure>>,
+    /// The record of recent days; absent without the climate plugin (no days then).
+    history: Option<Res<'w, ClimateHistory>>,
 }
 
 impl Environment<'_> {
@@ -93,6 +95,25 @@ impl Environment<'_> {
     /// Air temperature at the climate's reference elevation, °C.
     pub fn temperature_c(&self) -> f32 {
         self.weather.temperature_c
+    }
+
+    /// The completed days of the last `window_days` local calendar days, oldest first
+    /// ([`ClimateHistory::recent`]): what the last few days were like, at the climate's
+    /// reference elevation. Empty for a window of 0, without the climate plugin and before a
+    /// day has been recorded; a window longer than the record is the record.
+    pub fn recent_days(&self, window_days: u32) -> &[DayConditions] {
+        self.history
+            .as_deref()
+            .map_or(&[], |history| history.recent(window_days))
+    }
+
+    /// The [`recent_days`](Self::recent_days) summed up ([`ClimateHistory::summary`]): wet days
+    /// (at least [`WET_DAY_MM`](crate::WET_DAY_MM) = 1 mm of precipitation), frost days (a
+    /// minimum below [`FREEZING_C`](crate::FREEZING_C) = 0 °C), icing days (a maximum below
+    /// it), the mean temperature and relative humidity, the extremes and the totals. `None`
+    /// when the window holds no recorded day.
+    pub fn recent_climate(&self, window_days: u32) -> Option<ClimateSummary> {
+        self.history.as_deref()?.summary(window_days)
     }
 
     /// Sun and moon positions and the moon's phase.
