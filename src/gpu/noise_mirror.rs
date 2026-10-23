@@ -246,9 +246,8 @@ pub(crate) fn cell2(p: Vec2) -> Cell2 {
     }
 }
 
-/// A cell of the 3D cellular network, the mirror of `cell3` in `noise.wesl`: the distance to the
-/// nearest feature point, the distance to the second nearest (the cell's *boundary*), the point
-/// itself, and the cell's two random factors.
+/// A cell of the 3D cellular network, the mirror of `cell3` in `noise.wesl`: the nearest
+/// feature point, the cell's two random factors, and the distance to the cell's border.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Cell3 {
     /// The feature point's position, in lattice units.
@@ -261,19 +260,28 @@ pub(crate) struct Cell3 {
     /// palette (`noise.wesl`'s `factor2`).
     #[allow(dead_code)]
     pub factor2: f32,
+    /// The distance to the cell's border, in lattice units: to the bisector plane of the nearest
+    /// and the second-nearest feature points (`noise.wesl`).
+    #[allow(dead_code)]
+    pub border: f32,
+    /// The second-nearest feature point, in lattice units.
+    #[allow(dead_code)]
+    pub second: Vec3,
 }
 
 /// Mirror of `cell3` in `noise.wesl`: the 3D cellular network's nearest feature point, the
-/// second nearest point's distance and the cell's two random factors.
+/// cell's two random factors and the distance to its border.
 pub(crate) fn cell3(p: Vec3) -> Cell3 {
     let i = p.floor().as_ivec3();
     let f = p - p.floor();
     let mut best = 1e9_f32;
+    let mut second = 1e9_f32;
     let mut best_point = Vec3::ZERO;
+    let mut second_point = Vec3::ZERO;
     let mut best_factor = 0.0;
     let mut best_factor2 = 0.0;
     // The cells are visited in order of increasing distance, so the prune's bound tightens
-    // quickly. The bound is exact, so the result is the same as the full search.
+    // quickly. The bound is the *second* distance so far, exact for both points.
     for ring in 0..3 {
         for z in -1i32..=1 {
             for y in -1i32..=1 {
@@ -283,39 +291,45 @@ pub(crate) fn cell3(p: Vec3) -> Cell3 {
                         continue;
                     }
                     let o = IVec3::new(x, y, z);
-                // The cell is pruned by the distance to its nearest corner: a feature point
-                // lies inside its cell, so a cell whose corner is further than the best
-                // distance so far cannot hold a closer one. The bound is exact, so the result
-                // is the same as the full search.
-                let lo = (o.as_vec3() - f).abs().max((f - o.as_vec3() - 1.0).abs());
-                if lo.dot(lo) >= best {
-                    continue;
-                }
-                let c = (i + o) & IVec3::splat(NOISE_PERIOD - 1);
-                let h = hash33(c);
-                // The point's offset inside its cell is drawn towards the cell's centre, so
-                // the cells are **unequal**: a point near its cell's corner leaves a big cell
-                // behind it and a point at the centre a small one. A cell network's cells are
-                // the same size when the points sit on a lattice, and a face of equal cells is
-                // a mosaic (`noise.wesl`'s `CELL_INSET`).
-                let inset = h.lerp(Vec3::splat(0.5), CELL_INSET);
-                let point = o.as_vec3() + inset;
-                let d = point - f;
-                let d2 = d.dot(d);
+                    // The distance to the cell's box per axis, zero where the cell spans the
+                    // point (`noise.wesl`).
+                    let lo = (o.as_vec3() - f)
+                        .max(f - o.as_vec3() - 1.0)
+                        .max(Vec3::ZERO);
+                    if lo.dot(lo) >= second {
+                        continue;
+                    }
+                    let c = (i + o) & IVec3::splat(NOISE_PERIOD - 1);
+                    let h = hash33(c);
+                    // The point's offset inside its cell is drawn towards the cell's centre, so
+                    // the cells are **unequal** (`noise.wesl`'s `CELL_INSET`).
+                    let inset = h.lerp(Vec3::splat(0.5), CELL_INSET);
+                    let point = o.as_vec3() + inset;
+                    let d = point - f;
+                    let d2 = d.dot(d);
                     if d2 < best {
+                        second = best;
+                        second_point = best_point;
                         best = d2;
                         best_point = point;
                         best_factor = h.z;
                         best_factor2 = hash31(c + IVec3::new(7919, 104729, 1299709));
+                    } else if d2 < second {
+                        second = d2;
+                        second_point = point;
                     }
                 }
             }
         }
     }
+    let span = best_point - second_point;
+    let away = span / span.length().max(1e-6);
     Cell3 {
         point: best_point,
         factor: best_factor,
         factor2: best_factor2,
+        border: (f - 0.5 * (best_point + second_point)).dot(away),
+        second: second_point,
     }
 }
 
@@ -416,6 +430,46 @@ mod tests {
             );
             assert_eq!(perlin3(p), perlin3_d(p).x, "the value differs at {p:?}");
         }
+    }
+
+    /// The cell's **border** is the bisector of its two nearest feature points, Worley's
+    /// `F2 − F1 = 0`: a joint drawn on it lies exactly where one block meets the next
+    /// (`docs/research/rock-joints.md`). The answer is checked against an exhaustive search of
+    /// the 343 cells round the point. The nearest point is always exact, which also proves the
+    /// pruned search's bound is. The second can lie outside the 27 cells searched, but only for
+    /// a point deep inside its cell: within the widest bevel's reach of the border (6 cm of a
+    /// 0.95 m block, 0.063 of a cell), the border is exact.
+    #[test]
+    fn the_cells_border_is_the_bisector_of_its_two_nearest_points() {
+        let mut misses = Vec::new();
+        for p in samples(20_000, 64.0) {
+            let i = p.floor().as_ivec3();
+            let f = p - p.floor();
+            let mut points: Vec<Vec3> = Vec::new();
+            for z in -3i32..=3 {
+                for y in -3i32..=3 {
+                    for x in -3i32..=3 {
+                        let o = IVec3::new(x, y, z);
+                        let h = hash33((i + o) & IVec3::splat(NOISE_PERIOD - 1));
+                        points.push(o.as_vec3() + h.lerp(Vec3::splat(0.5), CELL_INSET));
+                    }
+                }
+            }
+            points.sort_by(|a, b| (*a - f).length_squared().total_cmp(&(*b - f).length_squared()));
+            let (first, second) = (points[0], points[1]);
+            let away = (first - second).normalize();
+            let border = (f - 0.5 * (first + second)).dot(away);
+            let cell = cell3(p);
+            assert_eq!(cell.point, first, "the nearest point at {p:?}");
+            if (cell.border - border).abs() > 1e-4 {
+                misses.push((border, cell.border));
+            }
+        }
+        println!("borders that differ (exact, searched): {misses:?}");
+        assert!(
+            misses.iter().all(|(exact, _)| *exact > 0.063),
+            "the border is exact within a bevel's reach of it: {misses:?}"
+        );
     }
 
     #[test]

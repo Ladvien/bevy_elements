@@ -318,8 +318,8 @@ fn cell2(p: vec2<f32>) -> Cell2 {
     return Cell2(sqrt(best), best_point, best_factor);
 }
 
-/// A cell of the 3D cellular network: where its feature point is, how far the point is, and
-/// the cell's own random factor in [0, 1).
+/// A cell of the 3D cellular network: where its feature point is, how far the point is, the
+/// cell's own random factors in [0, 1), and how far the cell's border is.
 struct Cell3 {
     /// The distance to the feature point, in lattice units.
     distance: f32,
@@ -333,10 +333,18 @@ struct Cell3 {
     /// cell. It is a *separate* hash and not a component of the first, so the two draws are
     /// independent.
     factor2: f32,
+    /// The distance to the cell's **border**, in lattice units: to the bisector plane of the
+    /// nearest and the second-nearest feature points. Zero where the two are equally far, which
+    /// is Worley's Voronoi boundary (`F2 − F1 = 0`), and the true distance to it away from the
+    /// cells' corners (`docs/research/rock-joints.md`).
+    border: f32,
+    /// The second-nearest feature point's position, in lattice units, as `point`: the other
+    /// side of the border, and its cell.
+    second: vec3<f32>,
 }
 
-/// The 3D cellular (Worley) network: the *nearest* feature point, its distance and the cell's
-/// random factor.
+/// The 3D cellular (Worley) network: the *nearest* feature point, its distance, the cell's
+/// random factors, and the distance to the cell's border (from the second-nearest point).
 ///
 /// The rock's own 3D frame, so a block stays put on a slope: a 2D network in the ground plane
 /// would stretch along the slope and weave, exactly as the crate's turf does
@@ -344,12 +352,14 @@ struct Cell3 {
 ///
 /// The lookup is **27 cells**, each a hash, so it is expensive — the crate's rock uses it only
 /// where the rock shows, and the rock's material is the crate's hot path. The cells are pruned
-/// by the distance to their nearest corner, which is an exact bound, so the result is the same
-/// as the full search.
+/// by the distance to their nearest corner against the *second* distance so far, which is an
+/// exact bound for both points, so the result is the same as the full search.
 fn cell3(p: vec3<f32>) -> Cell3 {
     let i = vec3<i32>(floor(p));
     let f = p - floor(p);
     var best = 1e9;
+    var second = 1e9;
+    var second_point = vec3<f32>(0.0);
     var best_point = vec3<f32>(0.0);
     var best_factor = 0.0;
     var best_factor2 = 0.0;
@@ -367,24 +377,24 @@ fn cell3(p: vec3<f32>) -> Cell3 {
                     continue;
                 }
                 let o = vec3<i32>(x, y, z);
-                // The cell is pruned by the distance to its *nearest corner*: a feature point
-                // lies inside its cell, so if the corner is already further than the best
-                // distance so far, the cell cannot hold a closer one and its hash — the
+                // The cell is pruned by the distance from the point to the cell's box: a
+                // feature point lies inside its cell, so a cell whose box is further than the
+                // second distance so far cannot hold a nearer point, and its hash — the
                 // expensive part — is not computed at all. The bound is exact, so the result is
                 // the same as the full search.
-                // The distance from the point to the cell's *far* corner, per axis: the point
-                // is at `f` inside its own cell, and the cell spans `[o, o + 1]`. A feature
-                // point lies inside its cell, so a cell whose far corner is nearer than the
-                // best distance so far cannot hold a closer one, and its hash — the expensive
-                // part — is not computed at all. The bound is exact, so the result is the same
-                // as the full search.
                 //
-                // The two distances are the point's offsets from the cell's two ends, and the
-                // larger of them is the far one.
+                // Per axis the distance to the box is the larger of the point's offsets from
+                // the cell's two ends, or zero where the cell spans the point.
                 let from_start = vec3<f32>(o) - f;
                 let from_end = f - (vec3<f32>(o) + 1.0);
-                let lo = max(from_start, from_end);
-                if dot(lo, lo) >= best {
+                // Clamped at zero: on an axis where the cell spans the point, both offsets are
+                // negative and the point is *inside* the cell's slab, so that axis adds nothing.
+                // Unclamped, their squares inflated the bound and a cell that held a nearer
+                // point could be pruned.
+                let lo = max(max(from_start, from_end), vec3<f32>(0.0));
+                // Pruned against the *second* distance: a cell that cannot hold a point nearer
+                // than the second-nearest so far cannot change either.
+                if dot(lo, lo) >= second {
                     continue;
                 }
                 let c = (i + o) & vec3<i32>(NOISE_PERIOD - 1);
@@ -408,16 +418,26 @@ fn cell3(p: vec3<f32>) -> Cell3 {
                 let point = vec3<f32>(o) + inset;
                 let d = dot(point - f, point - f);
                 if d < best {
+                    second = best;
+                    second_point = best_point;
                     best = d;
                     best_point = point;
                     best_factor = h.z;
                     best_factor2 = hash31(c + vec3<i32>(7919, 104729, 1299709));
+                } else if d < second {
+                    second = d;
+                    second_point = point;
                 }
             }
         }
       }
     }
-    return Cell3(sqrt(best), best_point, best_factor, best_factor2);
+    // The border: the bisector plane of the two nearest points, and the point's distance to it
+    // along the line joining them (Worley's `F2 − F1 = 0` surface, as a distance).
+    let span = best_point - second_point;
+    let away = span / max(length(span), 1e-6);
+    let border = dot(f - 0.5 * (best_point + second_point), away);
+    return Cell3(sqrt(best), best_point, best_factor, best_factor2, border, second_point);
 }
 
 /// Divergence-free noise (Bridson, Hourihan & Nordenstrm 2007): the curl of three Perlin

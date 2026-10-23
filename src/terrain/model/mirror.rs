@@ -189,8 +189,17 @@ pub(crate) fn turf_palette(field: f32, clump: f32) -> ([f32; 3], [f32; 4]) {
 pub(crate) const ROCK_BLOCK_M: f32 = 0.95;
 /// How far the blocks stretch along the bedding, as a factor (`common.wesl`).
 pub(crate) const ROCK_BLOCK_TABULAR: f32 = 2.6;
-/// The joint's width, as a fraction of the cell's half-boundary distance (`common.wesl`).
-pub(crate) const ROCK_JOINT_WIDTH: f32 = 0.19;
+/// The bedding plane's normal, unnormalised (`common.wesl`).
+pub(crate) const ROCK_BED_TILT: Vec3 = Vec3::new(0.32, 0.90, 0.28);
+/// A joint's trace half-width, m (`common.wesl`): the weathered mouth of an aperture "mainly
+/// less than a millimetre" (Palmström 2015), drawn per block between the two.
+pub(crate) const ROCK_TRACE_MIN_M: f32 = 0.012;
+pub(crate) const ROCK_TRACE_MAX_M: f32 = 0.030;
+/// The open blocks' size, in cells (`common.wesl`): the cells whose feature points share a
+/// lattice cell this many cells across are one block.
+pub(crate) const ROCK_BLOCK_GROUP: f32 = 2.6;
+/// A tight joint's trace, as a share of an open one's (`common.wesl`).
+pub(crate) const ROCK_TIGHT_INK: f32 = 0.35;
 /// The **second joint set's** normal: a cross joint, roughly perpendicular to the bedding and
 /// tilted (`common.wesl`).
 pub(crate) const ROCK_JOINT2_NORMAL: Vec3 = Vec3::new(0.71, 0.46, -0.53);
@@ -200,55 +209,35 @@ pub(crate) const ROCK_JOINT2_MAX_M: f32 = 2.60;
 /// The **formation's** cell, m: the scale at which the second set's spacing is constant
 /// (`common.wesl`).
 pub(crate) const ROCK_FORMATION_M: f32 = 46.0;
-/// How far the second set's planes **wander**, as a fraction of their own spacing
-/// (`common.wesl`).
-pub(crate) const ROCK_JOINT2_WANDER: f32 = 0.48;
-/// How long the second set's segments are, in multiples of their own spacing (`common.wesl`).
-pub(crate) const ROCK_JOINT2_SEGMENT_M: f32 = 1.9;
-/// How sharply a segment ends (`common.wesl`).
-pub(crate) const ROCK_JOINT2_BREAK: f32 = 0.30;
-/// The second set's joint's width, as a fraction of its own spacing (`common.wesl`).
-pub(crate) const ROCK_JOINT2_WIDTH: f32 = 0.075;
-/// The **region's** scale, m: the field that biases the bed's selection (`common.wesl`).
-pub(crate) const ROCK_BED_REGION_M: f32 = 260.0;
-/// The warp that breaks the cells' shape, in metres (`common.wesl`): the warp's vector is the
-/// crate's own 3D noise's *gradient*, whose mean magnitude is 0.94, so the amplitude is also
-/// the displacement's scale. At 0.50 m over a 1.5 m cell the mean displacement is 0.31 of a
-/// cell and the max 0.79, which breaks the cells' regularity without tearing them.
-pub(crate) const ROCK_BLOCK_WARP_M: f32 = 0.30;
+/// How far the second set's planes **wander**, as a fraction of their own spacing: planar,
+/// 2 % of a segment (`common.wesl`).
+pub(crate) const ROCK_JOINT2_WANDER: f32 = 0.04;
+/// The share of the blocks the second set splits (`common.wesl`).
+pub(crate) const ROCK_JOINT2_SHARE: f32 = 0.5;
+/// The warp that bends the cells, m (`common.wesl`): the warp's vector is the crate's own 3D
+/// noise's *gradient*, whose mean magnitude is 0.94, so the amplitude is also the
+/// displacement's scale; 0.08 m over the warp's 3.8 m keeps the borders planar (about 2 %).
+pub(crate) const ROCK_BLOCK_WARP_M: f32 = 0.08;
 /// How many cells the warp's noise varies over (`common.wesl`).
 pub(crate) const ROCK_BLOCK_WARP_CELLS: f32 = 4.0;
 /// The Weibull's shape for the joint's width, the distribution the fracture spacing follows
 /// (Verdian et al. 2021). A shape of 1 is the exponential and 2 is the Rayleigh.
 pub(crate) const ROCK_BLOCK_WEIBULL: f32 = 1.6;
-/// The Weibull's scale, as a multiple of the joint's width.
-pub(crate) const ROCK_BLOCK_WEIBULL_SPREAD: f32 = 0.85;
 /// The Weibull's draw's ceiling: the 95th percentile, and not the unbounded tail. The
 /// fracture spacing's own distribution is *undersampled* in its lower tail, so the tail is
 /// bounded in the data and it is bounded here.
 pub(crate) const ROCK_BLOCK_WEIBULL_MAX: f32 = 2.0;
 
-/// The fractional part, as WGSL's `fract` (`common.wesl`).
-///
-/// **Bevy's `Vec3::fract` is `x - x.trunc()` and so is NEGATIVE for a negative coordinate,
-/// while WGSL's is `x - floor(x)` and is always in [0, 1).** The two disagree wherever the
-/// coordinate is negative, and the cell's own boundary is computed from the fraction, so the
-/// mirror and the shader disagreed about where every cell's wall was. The joint's weight came
-/// out at zero on the negative half of the world.
-fn wesl_fract(v: Vec3) -> Vec3 {
-    v - v.floor()
-}
-
-/// The block network's coordinates for a world point, squashed along the bedding plane's normal
-/// so the cells stretch into slabs (`common.wesl`).
+/// The block network's coordinates for a world point, stretched along the bedding plane's
+/// normal so the cells are thin across the beds and long along them: slabs (`common.wesl`).
 ///
 /// The coordinates are **warped** before the lookup, by the crate's own 3D noise's *gradient*,
 /// so the cells' boundaries wander: a cell network's cells are convex polygons of nearly the
 /// same area, and a face of them reads as a mosaic — or, with the blocks' step, as *shingles*
 /// (`docs/research/rock-fragments.md`).
 pub(crate) fn rock_block_coords(p: Vec3) -> Vec3 {
-    let normal = Vec3::new(0.32, 0.90, 0.28).normalize();
-    let along = p - normal * p.dot(normal) * (1.0 - 1.0 / ROCK_BLOCK_TABULAR);
+    let normal = ROCK_BED_TILT.normalize();
+    let along = p + normal * p.dot(normal) * (ROCK_BLOCK_TABULAR - 1.0);
     let warp = crate::gpu::noise_mirror::perlin3_d(p / (ROCK_BLOCK_M * ROCK_BLOCK_WARP_CELLS));
     let gradient = Vec3::new(warp.y, warp.z, warp.w);
     (along + gradient * ROCK_BLOCK_WARP_M) / ROCK_BLOCK_M
@@ -270,41 +259,6 @@ pub(crate) const ROCK_PALETTE_EDGE: f32 = 0.12;
 pub(crate) const BED_REGION_BIAS: f32 = 0.30;
 /// How far the palette is mixed in, 0 to 1 (`common.wesl`).
 pub(crate) const ROCK_PALETTE_STRENGTH: f32 = 0.90;
-
-/// The rock's own **colour** at a world point: the palette's mixture for the cell the point
-/// falls in, and its own brightness.
-///
-/// The **selection** is the cell's own factor and the **distribution** the cell's second
-/// draw, so a fragment is a *piece of one rock* and the colour varies from fragment to
-/// fragment — a cliff is not a set of coloured regions.
-pub(crate) fn rock_palette(p: Vec3) -> Vec3 {
-    let q = rock_block_coords(p);
-    let cell = crate::gpu::noise_mirror::cell3(q);
-    let sel_w = smoothstep(
-        0.5 - ROCK_PALETTE_EDGE,
-        0.5 + ROCK_PALETTE_EDGE,
-        cell.factor,
-    );
-    let reg_w = smoothstep(
-        0.5 - ROCK_PALETTE_EDGE,
-        0.5 + ROCK_PALETTE_EDGE,
-        cell.factor2,
-    );
-    let shares = [
-        (1.0 - sel_w) * (1.0 - reg_w),
-        (1.0 - sel_w) * reg_w,
-        sel_w * (1.0 - reg_w),
-        sel_w * reg_w,
-    ];
-    let total: f32 = shares.iter().sum();
-    let mut mixed = Vec3::ZERO;
-    for (share, tone) in shares.iter().zip(ROCK_TONES.iter()) {
-        mixed += *tone * (*share / total);
-    }
-    // The palette is mixed in at its own strength (`common.wesl`), so the mirror's colour is
-    // the shader's.
-    Vec3::ONE.lerp(mixed, ROCK_PALETTE_STRENGTH)
-}
 
 /// The rock's **palette** at the *bed's* scale (`docs/research/bed-colour.md`).
 ///
@@ -364,65 +318,99 @@ pub(crate) fn rock_joint2_spacing(p: Vec3) -> f32 {
     ROCK_JOINT2_MIN_M + (ROCK_JOINT2_MAX_M - ROCK_JOINT2_MIN_M) * weibull / ROCK_BLOCK_WEIBULL_MAX
 }
 
-/// The **region's** value at a world point: the slow field that biases the bed's selection, so
-/// a whole massif leans towards one rock.
-///
-/// The field is only *evaluated* where the bed's colour is wanted — the fragments carry the
-/// near field and the beds carry the far one — and the gate skips the **evaluation** and not
-/// the field's *value*. A gate that scaled the value would weaken the bias where the keep is
-/// between zero and one, and the face would change: a performance change must not change the
-/// image (`docs/research/rock-cost.md`).
-pub(crate) fn rock_bed_region(p: Vec3, colour_keep: f32) -> f32 {
-    if colour_keep > 0.0 {
-        crate::gpu::noise_mirror::perlin3_d(p / ROCK_BED_REGION_M).x
-    } else {
-        0.0
-    }
+/// A joint's **trace** at `distance_m` from it, anti-aliased by its coverage of a pixel whose
+/// footprint is `footprint_m` (`rock_trace` in `common.wesl`).
+pub(crate) fn rock_trace(distance_m: f32, half_width_m: f32, footprint_m: f32) -> f32 {
+    let pixel = 0.5 * footprint_m;
+    let soft = half_width_m.max(pixel);
+    let coverage = (half_width_m / pixel.max(1e-6)).min(1.0);
+    (1.0 - smoothstep(0.0, soft, distance_m)) * coverage
 }
 
-/// The joint's weight at a world point, 0 to 1: how close the point is to a block's boundary.
-///
-/// The boundary is the distance to the second nearest feature point, and the joint's own width
-/// is the cell's draw, so the joints are of many widths.
-pub(crate) fn rock_joint(p: Vec3) -> f32 {
+/// The joints at a world point (`rock_block_scale` in `common.wesl`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RockJoints {
+    /// The distance to the first set's border, m: the bisector of the two nearest points.
+    pub to_border_m: f32,
+    /// The distance to the second set's nearest plane, m.
+    pub to_plane_m: f32,
+    /// Whether the point's block is split by the second set.
+    pub split: bool,
+    /// The traces' half-width in this block, m.
+    pub half_width_m: f32,
+    /// The lattice cell that owns the piece's feature point: the piece's identity.
+    pub block: IVec3,
+    /// The open block the piece belongs to: the group of cells parted from the next by open
+    /// joints.
+    pub group: IVec3,
+    /// Whether the nearest border is an open joint (between two blocks) or a tight one.
+    pub open: bool,
+    /// The second set's coordinate, in spacings: its integers are the planes.
+    pub phase: f32,
+    /// The second set's spacing here, m.
+    pub spacing_m: f32,
+}
+
+/// The open block of the cell nearest to `q` and whether its border is open (`common.wesl`):
+/// the cells whose feature points share a lattice cell `ROCK_BLOCK_GROUP` cells across.
+fn rock_group(q: Vec3, cell: &crate::gpu::noise_mirror::Cell3) -> (IVec3, IVec3, bool) {
+    let base = q.floor();
+    let own = base + (cell.point - Vec3::splat(0.5)).round();
+    let other = base + (cell.second - Vec3::splat(0.5)).round();
+    let group = (own / ROCK_BLOCK_GROUP).floor();
+    let open = group != (other / ROCK_BLOCK_GROUP).floor();
+    (own.as_ivec3(), group.as_ivec3(), open)
+}
+
+/// The joints at `p` (`common.wesl`).
+pub(crate) fn rock_joints(p: Vec3) -> RockJoints {
     let q = rock_block_coords(p);
     let cell = crate::gpu::noise_mirror::cell3(q);
-    // The distance from the point to its cell's wall, along the direction away from the
-    // feature point (`common.wesl`).
-    let to_centre = cell.point - wesl_fract(q);
-    let len = to_centre.length().max(1e-6);
-    let outward = to_centre / len;
-    let inside = wesl_fract(q);
-    // The wall in each axis: the far side of the cell from the feature point.
-    let to_wall = Vec3::new(
-        if outward.x < 0.0 { inside.x } else { 1.0 - inside.x },
-        if outward.y < 0.0 { inside.y } else { 1.0 - inside.y },
-        if outward.z < 0.0 { inside.z } else { 1.0 - inside.z },
-    );
-    let half = to_wall.x.min(to_wall.y).min(to_wall.z);
-    // The joint's width is a **Weibull** draw, the shape the fracture spacing's distribution
-    // follows (Verdian et al. 2021).
+    let (block, group, open) = rock_group(q, &cell);
+    let normal = ROCK_BED_TILT.normalize();
+    let span = cell.point - cell.second;
+    let away = span / span.length().max(1e-6);
+    let through = away + normal * away.dot(normal) * (ROCK_BLOCK_TABULAR - 1.0);
+    let stretch = through.length();
     let weibull = (-(1.0 - cell.factor).max(1e-6).ln())
         .powf(1.0 / ROCK_BLOCK_WEIBULL)
         .min(ROCK_BLOCK_WEIBULL_MAX);
-    let width = ROCK_JOINT_WIDTH * (0.25 + ROCK_BLOCK_WEIBULL_SPREAD * weibull);
-    let joint = 1.0 - smoothstep(0.0, width, half);
-    // The **second joint set**: a family of parallel planes across the bedding, whose spacing
-    // is a *formation's* own draw (`docs/research/block-sizes.md`).
     let spacing = rock_joint2_spacing(p);
-    let cross = p.dot(ROCK_JOINT2_NORMAL.normalize());
     let wander = crate::gpu::noise_mirror::perlin3_d(p / (ROCK_BLOCK_M * ROCK_BLOCK_WARP_CELLS)).x
         * spacing
         * ROCK_JOINT2_WANDER;
-    let cross_w = cross + wander;
-    let phase = cross_w / spacing;
-    let to_plane = (phase - phase.round()).abs() * spacing;
-    // The planes are **non-persistent**: they end, and a finer field breaks them into
-    // segments (Strauhal & Zangerl 2021).
-    let segment = crate::gpu::noise_mirror::perlin3_d(p / (spacing * ROCK_JOINT2_SEGMENT_M)).x;
-    let present2 = smoothstep(-ROCK_JOINT2_BREAK, ROCK_JOINT2_BREAK, segment);
-    let joint2 = (1.0 - smoothstep(0.0, spacing * ROCK_JOINT2_WIDTH, to_plane)) * present2;
-    joint.max(joint2)
+    let phase = (p.dot(ROCK_JOINT2_NORMAL.normalize()) + wander) / spacing;
+    let split_draw = crate::gpu::noise_mirror::hash31(group + IVec3::new(29, 31, 37));
+    RockJoints {
+        to_border_m: cell.border.max(0.0) * ROCK_BLOCK_M / stretch,
+        to_plane_m: (phase - phase.round()).abs() * spacing,
+        split: split_draw < ROCK_JOINT2_SHARE,
+        half_width_m: ROCK_TRACE_MIN_M
+            + (ROCK_TRACE_MAX_M - ROCK_TRACE_MIN_M) * weibull / ROCK_BLOCK_WEIBULL_MAX,
+        block,
+        group,
+        open,
+        phase,
+        spacing_m: spacing,
+    }
+}
+
+/// The joints' trace at a world point for a pixel footprint, 0 to 1 (`common.wesl`).
+pub(crate) fn rock_joint_at(p: Vec3, footprint_m: f32) -> f32 {
+    let j = rock_joints(p);
+    let ink = if j.open { 1.0 } else { ROCK_TIGHT_INK };
+    let trace1 = rock_trace(j.to_border_m, j.half_width_m, footprint_m) * ink;
+    let trace2 = if j.split {
+        rock_trace(j.to_plane_m, j.half_width_m, footprint_m)
+    } else {
+        0.0
+    };
+    trace1.max(trace2)
+}
+
+/// The joints' trace at a world point, seen up close (a footprint of a millimetre).
+pub(crate) fn rock_joint(p: Vec3) -> f32 {
+    rock_joint_at(p, 0.001)
 }
 
 // The beds (`docs/research/bedding.md`)
@@ -620,82 +608,208 @@ mod tests {
         assert_eq!(increasing, 2000, "the beds stack");
     }
 
-    /// The rock's blocks are **discrete**: a face's joint weight crosses the half-way mark
-    /// many times along a cut, where a smooth wash crosses it once.
+    /// A piece of the rock: its cell, and its slab where the second set splits its block.
+    fn piece(j: &RockJoints) -> (IVec3, i32) {
+        (j.block, if j.split { j.phase.floor() as i32 } else { 0 })
+    }
+
+    /// An open block of the rock: its group, and its slab where the second set splits it.
+    fn open_block(j: &RockJoints) -> (IVec3, i32) {
+        (j.group, if j.split { j.phase.floor() as i32 } else { 0 })
+    }
+
+    /// A cut across a face, 2 mm apart and 30 m long, oblique to the axes and to both sets.
+    fn cut() -> Vec<(f32, RockJoints, f32)> {
+        let dir = Vec3::new(0.83, 0.31, 0.46).normalize();
+        (0..15_000)
+            .map(|i| {
+                let s = i as f32 * 0.002;
+                let p = Vec3::new(3.0, 12.0, 30.0) + dir * s;
+                (s, rock_joints(p), rock_joint(p))
+            })
+            .collect()
+    }
+
+    /// The sample indices along a cut where `key` changes.
+    fn changes<K: PartialEq>(
+        samples: &[(f32, RockJoints, f32)],
+        key: impl Fn(&RockJoints) -> K,
+    ) -> Vec<usize> {
+        (1..samples.len())
+            .filter(|&k| key(&samples[k].1) != key(&samples[k - 1].1))
+            .collect()
+    }
+
+    /// The changes with no trace above `ink` within 1 cm of them, as distances along the cut.
+    fn untraced(samples: &[(f32, RockJoints, f32)], at: &[usize], ink: f32) -> Vec<f32> {
+        at.iter()
+            .filter(|&&k| {
+                let window = &samples[k.saturating_sub(5)..(k + 5).min(samples.len())];
+                !window.iter().any(|s| s.2 > ink)
+            })
+            .map(|&k| samples[k].0)
+            .collect()
+    }
+
+    /// The rock's pieces meet at **thin traces**, and only there (`docs/research/rock-joints.md`).
     ///
-    /// This is the note's second validation target, and it is the difference between a *face
-    /// made of pieces* and a *texture*: the blocks have to be countable.
+    /// A joint's separation is "mainly less than a millimetre" (Palmström 2015), so its trace is
+    /// a hairline at the block's scale; the band a fifth of a block wide it replaced read as
+    /// chicken wire. A trace is where one piece meets the next: the old joint was the lattice
+    /// cell's wall, which drew lines through pieces and left the meeting of two unmarked. And
+    /// the joints are **open** between blocks and **tight** inside one: an open joint is a dark
+    /// crack, a tight one a hairline, so the face is blocks and not a patio of equal tiles.
     #[test]
-    fn the_blocks_are_discrete() {
-        // A cut across a face, 20 cm apart, 6 m long.
-        let mut joint = Vec::new();
-        for i in 0..150 {
-            let p = Vec3::new(i as f32 * 0.2, 12.0, 30.0);
-            joint.push(rock_joint(p));
-        }
-        let mut crossings = 0;
-        for w in joint.windows(2) {
-            if (w[0] > 0.5) != (w[1] > 0.5) {
-                crossings += 1;
+    fn the_pieces_meet_at_thin_traces() {
+        let samples = cut();
+        let dark = samples.iter().filter(|s| s.2 > 0.5).count();
+        let share = dark as f32 / samples.len() as f32;
+        assert!(
+            share < 0.08,
+            "the open traces are lines: {:.1} % of the cut is dark",
+            share * 100.0
+        );
+        let pieces = changes(&samples, piece);
+        let blocks = changes(&samples, open_block);
+        assert!(
+            pieces.len() >= 15 && blocks.len() >= 5 && 2 * pieces.len() > 3 * blocks.len(),
+            "the cut crosses blocks, and more pieces than blocks: {} pieces, {} blocks",
+            pieces.len(),
+            blocks.len()
+        );
+        // Every change of piece is on a hairline at least, and every change of block on a
+        // crack.
+        let unmarked = untraced(&samples, &pieces, ROCK_TIGHT_INK * 0.9);
+        let uncracked = untraced(&samples, &blocks, 0.5);
+        // And every trace holds a change: a run of marked samples is where two pieces meet.
+        let mut runs = Vec::new();
+        let mut start = None;
+        for (k, s) in samples.iter().enumerate() {
+            match (s.2 > ROCK_TIGHT_INK * 0.9, start) {
+                (true, None) => start = Some(k),
+                (false, Some(a)) => {
+                    runs.push((a, k));
+                    start = None;
+                }
+                _ => {}
             }
         }
-        assert!(
-            crossings >= 3,
-            "the blocks are discrete, not a wash: {crossings} crossings in 30 m"
+        let empty = runs
+            .iter()
+            .filter(|(a, b)| !pieces.iter().any(|c| *c >= *a && *c <= *b))
+            .count();
+        println!(
+            "{} pieces and {} blocks, {:.1} % dark, unmarked {unmarked:?}, uncracked \
+             {uncracked:?}, {empty} of {} traces with no change",
+            pieces.len(),
+            blocks.len(),
+            share * 100.0,
+            runs.len()
         );
-        // And the joints are *lines*, not a field: the joint is near zero over most of the cut
-        // (it is a line a fraction of a cell wide) and one over the rest.
-        let low = joint.iter().filter(|j| **j < 0.15).count();
+        assert!(unmarked.is_empty(), "every piece's edge is a trace: {unmarked:?}");
+        assert!(uncracked.is_empty(), "every block's edge is a crack: {uncracked:?}");
         assert!(
-            low * 2 > joint.len(),
-            "the joint is a line, not a field: {low} of {} below 0.15",
-            joint.len()
+            empty * 10 <= runs.len(),
+            "a trace is where two pieces meet: {empty} of {} traces cross none",
+            runs.len()
         );
     }
 
-    /// The blocks are of **many sizes**, and not all the same.
-    ///
-    /// The measure: the *distance between the joints* along a cut, which is the block's own
-    /// size. A face of equal cells is a mosaic — the quilt the capture showed — and the
-    /// geology says a cliff's blocks are not equal: the fracture spacing follows a Weibull
-    /// whose geometric standard deviation is about 0.31 (Verdian et al. 2021).
+    /// The pieces are of **many sizes**, and not all the same: the fracture spacing follows a
+    /// Weibull whose geometric standard deviation is about 0.31 (Verdian et al. 2021), and a face
+    /// of equal cells is a quilt.
     #[test]
     fn the_blocks_are_of_many_sizes() {
-        // A cut across a face, and the block's boundary along it: the joint's weight crosses
-        // the half-way mark where a block ends and the next begins.
-        let mut boundaries = Vec::new();
-        let mut last = rock_joint(Vec3::new(0.0, 20.0, 0.0)) > 0.5;
-        for i in 1..4000 {
-            let x = i as f32 * 0.02;
-            let now = rock_joint(Vec3::new(x, 20.0, 0.0)) > 0.5;
-            if now != last {
-                boundaries.push(x);
-                last = now;
+        let samples = cut();
+        let mut edges = vec![0.0];
+        for k in 1..samples.len() {
+            if piece(&samples[k].1) != piece(&samples[k - 1].1) {
+                edges.push(samples[k].0);
             }
         }
-        assert!(
-            boundaries.len() >= 8,
-            "the cut crosses enough blocks to measure: {}",
-            boundaries.len()
-        );
-        let sizes: Vec<f32> = boundaries
+        let mut sizes: Vec<f32> = edges
             .windows(2)
+            .skip(1)
             .map(|w| w[1] - w[0])
             .filter(|s| *s > 0.05)
             .collect();
-        assert!(sizes.len() >= 6, "the sizes to measure: {}", sizes.len());
-        // The spread: the largest block against the smallest, measured on the *median* and
-        // the tails so a single outlier does not carry it.
-        let mut sorted = sizes.clone();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let p10 = sorted[sorted.len() / 10];
-        let p90 = sorted[sorted.len() * 9 / 10];
+        assert!(sizes.len() >= 12, "the sizes to measure: {}", sizes.len());
+        sizes.sort_by(f32::total_cmp);
+        let p10 = sizes[sizes.len() / 10];
+        let p90 = sizes[sizes.len() * 9 / 10];
         let ratio = p90 / p10.max(1e-6);
         assert!(
             ratio >= 2.0,
-            "the blocks are of many sizes: the p90/p10 ratio is {ratio:.2} over {} blocks \
+            "the blocks are of many sizes: the p90/p10 ratio is {ratio:.2} over {} pieces \
              ({p10:.2} m to {p90:.2} m)",
             sizes.len()
+        );
+    }
+
+    /// A far trace keeps its **ink** and fades: past the line's own width the pixel is wider
+    /// than the line, so the line covers part of it. The integral of the trace across the line
+    /// is the same at every footprint, and its peak falls with the coverage; a trace widened to
+    /// the pixel at full darkness drew a ribbon at every distance.
+    #[test]
+    fn a_far_trace_keeps_its_ink_and_fades() {
+        let half_width = 0.02;
+        let ink = |footprint: f32| {
+            (0..200_000)
+                .map(|i| rock_trace(i as f32 * 1e-5, half_width, footprint) * 1e-5)
+                .sum::<f32>()
+        };
+        let near = ink(0.001);
+        for footprint in [0.01, 0.04, 0.1, 0.5, 1.0] {
+            let far = ink(footprint);
+            assert!(
+                (far / near - 1.0).abs() < 0.02,
+                "the trace's ink at a {footprint} m footprint: {far} against {near}"
+            );
+        }
+        assert_eq!(rock_trace(0.0, half_width, 0.001), 1.0, "a near trace is black");
+        let far_peak = rock_trace(0.0, half_width, 8.0 * half_width);
+        assert!(
+            far_peak <= 0.25 + 1e-6,
+            "a trace a quarter of the pixel is a quarter as dark: {far_peak}"
+        );
+    }
+
+    /// The cross joints are **planar**: along 4 m of a plane its trace leaves the chord by less
+    /// than 2 % of the length, Palmström's planar-to-wavy limit (`docs/research/rock-joints.md`).
+    /// At iteration 40's wander the planes waved by about a tenth and read as scribble.
+    #[test]
+    fn the_cross_joints_are_planar() {
+        let normal = ROCK_JOINT2_NORMAL.normalize();
+        let along = normal.cross(Vec3::Y).normalize();
+        let mut worst: f32 = 0.0;
+        let mut segments = 0;
+        for k in 0..200 {
+            let start = Vec3::new(k as f32 * 7.3, 15.0 + (k % 7) as f32 * 3.1, k as f32 * -4.9);
+            let first = rock_joints(start);
+            let plane = first.phase.round();
+            let offsets: Vec<f32> = (0..=40)
+                .map(|s| rock_joints(start + along * (s as f32 * 0.1)))
+                .take_while(|j| j.spacing_m == first.spacing_m)
+                .map(|j| (plane - j.phase) * j.spacing_m)
+                .collect();
+            if offsets.len() < 41 {
+                continue;
+            }
+            segments += 1;
+            let (a, b) = (offsets[0], offsets[40]);
+            let deviation = offsets
+                .iter()
+                .enumerate()
+                .map(|(i, o)| (o - (a + (b - a) * i as f32 / 40.0)).abs())
+                .fold(0.0, f32::max);
+            worst = worst.max(deviation / 4.0);
+        }
+        println!("{segments} segments, the worst waviness {:.2} %", worst * 100.0);
+        assert!(segments >= 100, "the segments to measure: {segments}");
+        assert!(
+            worst < 0.02,
+            "the cross joints are planar: the worst waviness is {:.2} %",
+            worst * 100.0
         );
     }
 
@@ -730,34 +844,6 @@ mod tests {
         );
     }
 
-    /// A **gate** skips the field's *evaluation* and not its *value*, so a performance change
-    /// does not change the image.
-    ///
-    /// The rule: where the gate is *open* the field is the field's own, unmodified — and where
-    /// it is *closed* the field is not fetched at all. The first attempt scaled the field by
-    /// the keep, and that changed 13 % of the near face, because the keep is between zero and
-    /// one where the two band-limits cross and scaling weakens the bias there.
-    #[test]
-    fn a_gate_skips_the_evaluation_and_not_the_value() {
-        // Where the gate is open, the gated field and the ungated one agree exactly.
-        let mut same = 0;
-        let mut samples = 0;
-        for i in 0..200 {
-            let p = Vec3::new(i as f32 * 0.37, 18.0 + (i as f32) * 0.11, 0.0);
-            let gated = rock_bed_region(p, 1.0);
-            let ungated = crate::gpu::noise_mirror::perlin3_d(p / ROCK_BED_REGION_M).x;
-            if (gated - ungated).abs() < 1e-6 {
-                same += 1;
-            }
-            samples += 1;
-        }
-        assert_eq!(same, samples, "the gate does not change the field's value");
-        // And where the gate is closed, the field is not fetched: the mirror returns the
-        // neutral value, and the shader does not evaluate the noise at all.
-        let closed = rock_bed_region(Vec3::new(1.0, 18.0, 0.0), 0.0);
-        assert_eq!(closed, 0.0, "the closed gate is the neutral value");
-    }
-
     /// The rock's **palette** does not move the rock's mean colour.
     ///
     /// The rule is the crate's own, from the ground's palette: "the ground is a place and not
@@ -778,60 +864,7 @@ mod tests {
         );
     }
 
-    /// The fragments are of **different rock**, and not one rock in many shades.
-    ///
-    /// The measure: the *hue* of the fragments over a patch of the face. A cliff's fragments
-    /// are different minerals, so the palette's hues must differ; and the difference must be
-    /// at the *fragment's* scale, so a patch of the face sees several of them.
-    #[test]
-    fn the_fragments_are_of_different_rock() {
-        // The palette's own hues: the four tones must not be the same colour.
-        let hues: Vec<f32> = ROCK_TONES
-            .iter()
-            .map(|t| {
-                let max = t.x.max(t.y).max(t.z);
-                let min = t.x.min(t.y).min(t.z);
-                let d = max - min;
-                if d < 1e-6 { return 0.0; }
-                let h = if max == t.x {
-                    ((t.y - t.z) / d).rem_euclid(6.0)
-                } else if max == t.y {
-                    (t.z - t.x) / d + 2.0
-                } else {
-                    (t.x - t.y) / d + 4.0
-                };
-                h * 60.0
-            })
-            .collect();
-        let mut sorted = hues.clone();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let spread = sorted[3] - sorted[0];
-        assert!(
-            spread > 60.0,
-            "the palette's hues are different colours: the spread is {spread:.1} degrees"
-        );
-        // And the fragments *use* them: **neighbouring** fragments must differ, or the cliff
-        // is one rock in many shades. The measure is the difference between the colours of
-        // two points a cell apart — the cell is the fragment, so two points a cell apart are
-        // two fragments.
-        let mut differ = 0;
-        let mut samples = 0;
-        for i in 0..200 {
-            let p = Vec3::new(i as f32 * 0.37, 20.0 + (i as f32) * 0.11, 0.0);
-            let a = rock_palette(p);
-            let b = rock_palette(p + Vec3::new(ROCK_BLOCK_M * 0.9, 0.0, 0.0));
-            if (a - b).length() > 0.10 {
-                differ += 1;
-            }
-            samples += 1;
-        }
-        assert!(
-            differ * 100 / samples > 60,
-            "the fragments are of different rock: {differ} of {samples} neighbours differ"
-        );
-    }
-
-    /// The **beds** carry a palette too, and the beds of a succession are of *different rock*.
+    /// The **beds** carry the rock's palette, and the beds of a succession are of *different rock*.
     ///
     /// The measure: the hue of the beds' colours over a run of bed indices. A succession's beds
     /// are a sandstone, a shale, a limestone — different minerals, different colours — and the
@@ -891,40 +924,42 @@ mod tests {
         );
     }
 
-    /// The blocks are **tabular**: they stretch along the bedding, so a face shows slabs and
-    /// not gravel.
+    /// The blocks are **tabular**: thin across the bedding and long along it, so a face shows
+    /// slabs and not columns (`docs/research/rock-blocks.md` Deviation 10).
     ///
-    /// The measure is the *cell's* own extent in the rock's frame: the network's coordinates
-    /// are stretched along the bedding plane's normal, so the cells are longer in the
-    /// bedding's plane than across it. The measure is the cell and not the joint's crossings,
-    /// because the crossings are the *warp's* bending as much as the lattice's, and the warp
-    /// is a long-range field that does not know about the bedding.
+    /// The measure is the blocks crossed per metre along a cut in the bedding's plane and along
+    /// its normal. A slab is crossed more often across the beds. An earlier version of this test
+    /// compared two directions that both lay in the bedding plane, and it passed while the
+    /// lattice made the blocks 2.5 m columns (`docs/research/rock-joints.md` Deviation 5).
     #[test]
     fn the_blocks_are_tabular() {
-        let normal = Vec3::new(0.32, 0.90, 0.28).normalize();
-        // A direction in the bedding plane, and the one across it.
-        let in_plane = (Vec3::new(1.0, 0.0, 0.0) - normal * normal.x).normalize();
-        let across = normal.cross(in_plane).normalize();
-        // The cell's *own* extent along each direction: the distance between the cell
-        // boundaries, measured in the network's coordinates.
-        let extent = |dir: Vec3| {
-            // The direction in the network's own frame, and the cell's size along it.
-            let q_dir = rock_block_coords(dir * 100.0) - rock_block_coords(Vec3::ZERO);
-            q_dir.length()
+        let normal = ROCK_BED_TILT.normalize();
+        let in_plane = (Vec3::X - normal * normal.x).normalize();
+        let starts = [
+            Vec3::new(3.0, 12.0, 30.0),
+            Vec3::new(-40.0, 25.0, 7.0),
+            Vec3::new(18.0, 4.0, -22.0),
+        ];
+        let crossings = |dir: Vec3| {
+            let mut count = 0;
+            for start in starts {
+                let mut last = rock_joints(start).block;
+                for i in 1..10_000 {
+                    let block = rock_joints(start + dir * (i as f32 * 0.002)).block;
+                    if block != last {
+                        count += 1;
+                        last = block;
+                    }
+                }
+            }
+            count as f32 / 60.0
         };
-        let along = extent(in_plane);
-        let across_cut = extent(across);
+        let along = crossings(in_plane);
+        let across = crossings(normal);
         assert!(
-            along > across_cut,
-            "the blocks stretch along the bedding: the cell is {along:.3} along it and \
-             {across_cut:.3} across it"
-        );
-        // And the squash is in the bedding's own frame, not the world's: the normal is
-        // mostly vertical, so the blocks are flattened in the vertical and stretched in the
-        // horizontal.
-        assert!(
-            normal.y > 0.8,
-            "the bedding plane is a near-horizontal one: {normal:?}"
+            across > 1.8 * along,
+            "the blocks are slabs: {across:.2} blocks per metre across the beds against \
+             {along:.2} along them"
         );
     }
 
