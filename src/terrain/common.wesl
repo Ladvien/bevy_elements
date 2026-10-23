@@ -11,7 +11,7 @@
 // and four loads; the world height is `misc.x + surface`.
 
 import bevy_elements::grid::GridParams;
-import bevy_elements::noise::{cell2, cell3, hash31, perlin2_d, perlin3, perlin3_d, seed_offset};
+import bevy_elements::noise::{cell2, hash31, hash33, perlin2_d, perlin3, perlin3_d, seed_offset};
 
 struct TerrainParams {
     grid: GridParams,
@@ -329,6 +329,50 @@ struct BedValue {
     present: f32,
 }
 
+/// The bed holding the coordinate `bed` (in units of the nominal spacing): its index, its
+/// bottom and its top. The beds and the cliff's joints share it, so a bed's boundaries are
+/// partings (`docs/research/joint-sets.md`).
+struct BedSpan {
+    /// The bed's index.
+    index: f32,
+    /// The bed's bottom, in bed units.
+    bottom: f32,
+    /// The bed's top, in bed units.
+    top: f32,
+}
+
+/// The bed holding the coordinate `bed`.
+fn bed_span(bed: f32) -> BedSpan {
+    // The index whose boundary is at or below the coordinate: the fixed point of
+    // `i = (bed - warp(i)) / mean`. The warp is a bounded displacement, so the iteration
+    // converges in a couple of steps.
+    var index = bed;
+    for (var k = 0u; k < 4u; k += 1u) {
+        index = bed - bed_warp(index);
+    }
+    // The candidate bed, and its neighbours: the coordinate is in one of them, and the one
+    // whose bottom is at or below the coordinate and whose top is above it is the bed. The
+    // iteration must be *stable*: taking the floor at the end of it would flip between two
+    // beds at a boundary.
+    var bed_index = floor(index);
+    var bottom = bed_boundary(bed_index);
+    var top = bed_boundary(bed_index + 1.0);
+    if bottom > bed {
+        // The estimate overshot into the bed above: step down.
+        bed_index = bed_index - 1.0;
+        top = bottom;
+        bottom = bed_boundary(bed_index);
+    } else if bed >= top {
+        // The estimate undershot: the coordinate is past the bed's top, in the bed above.
+        // Without this step the bed — its tone and its partings — changed up to a third of a
+        // metre past its own boundary.
+        bed_index = bed_index + 1.0;
+        bottom = top;
+        top = bed_boundary(bed_index + 1.0);
+    }
+    return BedSpan(bed_index, bottom, top);
+}
+
 /// The bed's structure at the coordinate `bed` (in units of the nominal spacing): which bed
 /// this is, how thick it is, and where its edges are.
 ///
@@ -342,26 +386,9 @@ struct BedValue {
 /// A true cumulative sum would need an unbounded prefix sum, and the shader cannot afford
 /// one. The draw is the same rhythm done in a bounded way: each bed's own span is its draw,
 /// and the *sequence* of spans is what the eye reads as a succession.
-fn bed_value(p: vec3<f32>, bed: f32, footprint_m: f32, colour_keep: f32) -> BedValue {
-    // The index whose boundary is at or below the coordinate: the fixed point of
-    // `i = (bed - warp(i)) / mean`. The warp is a bounded displacement, so the iteration
-    // converges in a couple of steps.
-    var index = bed;
-    for (var k = 0u; k < 4u; k += 1u) {
-        index = bed - bed_warp(index);
-    }
-    // The candidate bed, and the one below it: the coordinate is in one of them, and the one
-    // whose bottom is at or below the coordinate and whose top is above it is the bed. The
-    // iteration must be *stable*: taking the floor at the end of it would flip between two
-    // beds at a boundary.
-    var bed_index = floor(index);
-    var bottom = bed_boundary(bed_index);
-    if bottom > bed {
-        // The estimate overshot into the bed above: step down.
-        bed_index = bed_index - 1.0;
-        bottom = bed_boundary(bed_index);
-    }
-    let top = bed_boundary(bed_index + 1.0);
+fn bed_value(p: vec3<f32>, bed: f32, span: BedSpan, footprint_m: f32) -> BedValue {
+    let bottom = span.bottom;
+    let top = span.top;
     // Inside the bed? The bed's own layer, between its bottom and its top.
     let inside = step(bottom, bed) * step(bed, top);
     // The bed's *edge*: the distance to the nearer of its two boundaries, and the edge is
@@ -382,7 +409,7 @@ fn bed_value(p: vec3<f32>, bed: f32, footprint_m: f32, colour_keep: f32) -> BedV
     // The bed's tone: a draw on the index, so the beds differ from one another. The crate's
     // own integer hash, for the same reason the thickness's is: a `sin` of a large argument
     // loses its precision in f32.
-    let h = hash31(vec3<i32>(i32(floor(index)), 7, 0));
+    let h = hash31(vec3<i32>(i32(span.index), 7, 0));
     // The bed's own **colour**, and not only its brightness (`docs/research/bed-colour.md`).
     //
     // A bed's colour is its **iron**: goethite is yellow and hematite is red, and the ratio
@@ -409,19 +436,10 @@ fn bed_value(p: vec3<f32>, bed: f32, footprint_m: f32, colour_keep: f32) -> BedV
     // to get — the frame's mean moved 66 DN, and the crate's own rule is that the mean stays
     // where it was.
     //
-    // The field is only evaluated where the bed's **colour** is wanted: the fragments carry
-    // the near field and the beds carry the far one, so where a fragment resolves the bed's
-    // colour is multiplied by zero and the region — a whole `perlin3_d` — is computed and
-    // thrown away. The gate is the colour's own keep, which is the fragments' band-limit.
-    //
-    // The gate skips the **evaluation** and not the field's *value*: the value is the field's
-    // own, unmodified. Scaling it by the keep instead would weaken the bias in the band
-    // where the keep is between zero and one, and the bed's colour would change there — a
-    // performance change must not change the image.
-    var region = 0.0;
-    if colour_keep > 0.0 {
-        region = perlin3(p / ROCK_BED_REGION_M + seed_offset(113u));
-    }
+    // The bed's colour holds at **every distance**: a bed is one rock, and the cliff's blocks
+    // are pieces of it, so they wear its colour and carry only their own value
+    // (`docs/research/joint-sets.md` Deviation 2).
+    let region = perlin3(p / ROCK_BED_REGION_M + seed_offset(113u));
     let sel = smoothstep(
         0.5 - ROCK_PALETTE_EDGE,
         0.5 + ROCK_PALETTE_EDGE,
@@ -429,7 +447,7 @@ fn bed_value(p: vec3<f32>, bed: f32, footprint_m: f32, colour_keep: f32) -> BedV
     );
     // The bed's second draw: the distribution, which member of the half. A *separate* hash of
     // the same index, so the two are independent.
-    let h2 = hash31(vec3<i32>(i32(floor(index)), 11, 0));
+    let h2 = hash31(vec3<i32>(i32(span.index), 11, 0));
     let reg = smoothstep(
         0.5 - ROCK_PALETTE_EDGE,
         0.5 + ROCK_PALETTE_EDGE,
@@ -449,15 +467,7 @@ fn bed_value(p: vec3<f32>, bed: f32, footprint_m: f32, colour_keep: f32) -> BedV
         + s_varnish * ROCK_TONE_VARNISH) * inv;
     // The bed's *value*: the bed's own brightness spread, as it was before the colour.
     let value = 1.0 + ROCK_BED_TONE * (h * 2.0 - 1.0);
-    // The bed's **colour** is band-limited against the *fragments*: the fragments carry the
-    // near field and the beds carry the far one. Where a fragment is visible it wears its own
-    // rock and the bed's colour is not mixed in at all, so the near face is untouched; where
-    // the fragments are gone the bed's own rock shows through.
-    //
-    // The limit is the *fragments'* own: their band-limit is the joint's width, and the
-    // blocks' `present` is that limit, so the two are band-limited against each other exactly
-    // once and there is no gap and no overlap.
-    let tone = mix(vec3<f32>(value), mixed * value, ROCK_PALETTE_STRENGTH * colour_keep);
+    let tone = mix(vec3<f32>(value), mixed * value, ROCK_PALETTE_STRENGTH);
     return BedValue(tone, inside * edge, keep);
 }
 
@@ -580,115 +590,89 @@ const ROCK_FRACTURE_DARKEN: f32 = 0.26;
 /// The rock's own grain amplitude, as a fraction of the rock's albedo.
 const ROCK_GRAIN_AMP: f32 = 0.60;
 
-// The cliff's blocks (`docs/research/rock-blocks.md`)
+// The cliff's joint sets (`docs/research/joint-sets.md`)
 // ---------------------------------------------------------------------------------------------
 
-/// The block network's cell, m: the scale of the *pieces* the rock breaks into. A block a
-/// player can read is a metre or two across, and the rock face in the capture is 2 m across
-/// the frame at 3 m — so this is the largest feature the crate's rock can carry.
-const ROCK_BLOCK_M: f32 = 0.95;
-/// How far the blocks stretch along the bedding, as a factor: a rock breaks along *joint
-/// sets*, which are families of parallel planes, so its blocks are tabular and aligned rather
-/// than a random heap (La Pointe & Hudson 1985 on joint sets).
-const ROCK_BLOCK_TABULAR: f32 = 2.6;
-/// The **second joint set's** normal: a cross joint, roughly perpendicular to the bedding and
-/// tilted, so the two sets are not parallel and the blocks between them are *slabs* and not
-/// boxes. A rock breaks along *joint sets* — families of parallel planes (La Pointe & Hudson
-/// 1985) — and a cliff has more than one.
-const ROCK_JOINT2_NORMAL: vec3<f32> = vec3<f32>(0.71, 0.46, -0.53);
-/// The second joint set's **spacing range**, m: the blocks between two sets of planes are
-/// slabs of this thickness, and a formation's spacing is a property of the formation.
-const ROCK_JOINT2_MIN_M: f32 = 0.55;
-const ROCK_JOINT2_MAX_M: f32 = 2.60;
-/// The **formation's** cell, m: the scale at which the second set's spacing is constant. The
-/// spacing must be constant *within* a formation — a spacing that varies smoothly makes the
-/// planes *fold* instead of fracture — and it changes from one formation to the next.
-const ROCK_FORMATION_M: f32 = 46.0;
-/// The second joint set's joint's width, as a fraction of its own spacing: a joint is a
-/// feature of the rock's own scale, and a crack is a line a fraction of a cell wide.
-const ROCK_JOINT2_WIDTH: f32 = 0.075;
-/// How far the second set's planes **wander** from their regular positions, as a fraction of
-/// their own spacing. A joint set's planes are non-persistent: they end, and their spacing
-/// varies along them (Strauhal & Zangerl 2021). A perfectly straight, evenly spaced plane
-/// set reads as a wire fence across the face.
-const ROCK_JOINT2_WANDER: f32 = 0.48;
-/// How long the second set's segments are, in multiples of their own spacing: the plane
-/// wanders by a fraction of a spacing over a few metres and then the joint is simply absent
-/// (Strauhal & Zangerl 2021 on the non-persistent fractures).
-const ROCK_JOINT2_SEGMENT_M: f32 = 1.9;
-/// How sharply a segment *ends*: the threshold on the finer field. A plane that bends but
-/// never ends still reads as a wire fence across the face.
-const ROCK_JOINT2_BREAK: f32 = 0.30;
-/// The **power** of the draw that sets the second set's spacing. A block's size is the
-/// *product* of three spacings (Verdian et al. 2021: the latent size distribution is "set by
-/// the spacing and orientation of fractures, foliations, and bedding planes"), and a product
-/// of three heavy-tailed draws has a heavier tail than one - and the heavier tail is what
-/// "slabs and chips in the same wall" is.
-const ROCK_BLOCK_SIZE_POWER: f32 = 2.4;
-/// The warp that breaks the cells' shape, as a fraction of the cell. A cell network's cells
-/// are convex polygons of nearly the same area, and a face of them reads as a mosaic — or,
-/// with the blocks' step, as *shingles*. A rock breaks into irregular fragments, and the warp
-/// is what makes the fragments irregular.
-///
-/// The amplitude is in **metres**, and the warp's vector is the noise's own *gradient*, whose
-/// mean magnitude is 0.94 — so the amplitude is also the displacement's scale, in metres. The
-/// displacement in *cells* is the amplitude over the cell: at 0.50 m over a 1.5 m cell the
-/// mean displacement is 0.31 of a cell and the max 0.79, which breaks the cells' regularity
-/// without tearing them. The note's earlier 0.09 was calibrated for the noise's *value* and
-/// not for its *gradient*, so it displaced a boundary by 0.06 of a cell — a fifth of what it
-/// needed to be, and the face came out a quilt.
-const ROCK_BLOCK_WARP_M: f32 = 0.30;
-/// How many cells the warp's noise varies over. The warp must displace the lattice
-/// *coherently*: a warp that varies over the length of a cell moves different points by
-/// different amounts and scrambles the lattice instead of bending it.
-const ROCK_BLOCK_WARP_CELLS: f32 = 4.0;
-/// The block's own tone, as a multiplier on the rock's albedo: the cell's random factor, so
-/// every block is a slightly different piece of the rock. The spread is narrow — a block is a
-/// piece of *one* bed, so it carries the bed's tone and not a new one.
-const ROCK_BLOCK_TONE: f32 = 0.22;
-/// The joint between two blocks, as a multiplier on the rock's albedo. A broken edge is a
-/// shadow: the joint darkens the rock beside it, and it is the one feature of a cliff a
-/// player reads as "solid" at a distance.
-const ROCK_JOINT_DARKEN: f32 = 0.76;
-/// The joint's width, as a fraction of the cell's half-boundary distance. A joint is a line a
-/// fraction of a cell wide — the crate's own rule for the fractures, and the reason they are
-/// band-limited by their own width and not by the cell.
-const ROCK_JOINT_WIDTH: f32 = 0.19;
-/// The block's relief, as the *slope* of its face: the distance field's gradient domes the
-/// block, so the sun rakes its edge and the light finds the joint.
-const ROCK_BLOCK_RELIEF: f32 = 0.95;
-/// The fine block network's cell, as a fraction of the coarse one, and **zero**: the fine
-/// generation is not used.
-///
-/// A cliff's blocks are not all the same size — the fracture spacing follows a Weibull whose
-/// geometric standard deviation is about 0.31 (Verdian et al. 2021, whose fifteen sites run
-/// 0.214 to 0.551), and the spacings themselves run from 2 mm to 5000 mm against a site
-/// median of 10 to 390 mm — and a second generation of blocks, a third of the size, in the
-/// gaps between the big ones, is the scree's own construction and the obvious way to get the
-/// size spread.
-///
-/// It does not work here, and the measurement says why: a fine generation of 0.45 m cells on
-/// a face at 3 m puts a seam every few pixels, and the face came out a **dark speckle**
-/// (the material's own high-pass fell from 10.0 DN to 6.5 DN, below the baseline's 6.7). A
-/// chip is not a crack, so the fine generation was made to carry its tone and no seam — and
-/// then it was a mottle of patches of a slightly different rock, which is not what a cliff is
-/// either.
-///
-/// The size spread comes from the **cells themselves** instead: the network's feature points
-/// are drawn towards their cell's centre, so the cells are unequal (`CELL_INSET` in
-/// `noise.wesl`), and a face of unequal cells is a scatter of fragments and not a mosaic.
-/// The edge orientations' resultant — how strongly the blocks' edges agree on a direction,
-/// which is the quilt's signature — falls from 0.43 to **0.20**.
-const ROCK_BLOCK_FINE: f32 = 0.0;
-/// The Weibull's shape for the joint's width, the distribution the fracture spacing follows
+/// The blocks' band-limit, m: the footprint past which a block is finer than a pixel and the
+/// beds carry the face alone. It is the band the old block network was limited by, so the far
+/// face is unchanged.
+const ROCK_BLOCK_BAND_M: f32 = 0.334;
+/// A bed's nominal **layer** thickness, m: the spacing of the bedding partings that split it.
+/// Each bed draws its own, log-uniform between the two, so a succession mixes thin flaggy beds
+/// with massive ones (Talling 2001 on log-normal bed thicknesses).
+const ROCK_LAYER_MIN_M: f32 = 0.35;
+const ROCK_LAYER_MAX_M: f32 = 2.2;
+/// How far a parting inside a bed wanders from even spacing, as a fraction of a layer (half of
+/// it either way): the layers of one bed differ in thickness, or a thin bed is a wall of equal
+/// courses. The bed's own boundaries are partings and do not move.
+const ROCK_PARTING_JITTER: f32 = 0.8;
+/// The systematic joints' spacing over the layer's thickness: joints in a layered rock are
+/// spaced "linearly related to the thickness of the fractured layer" (Bai & Pollard 2000).
+/// Each bed draws its own ratio, log-uniform between the two: Bai 2000's measured 0.7–1.1 and
+/// "ratios of S/T > 2 are extremely rare for competent lithologies", Ji et al. 2023's 4.3 in
+/// low-strain beds.
+const ROCK_SPACING_RATIO_MIN: f32 = 0.8;
+const ROCK_SPACING_RATIO_MAX: f32 = 3.0;
+/// How far a joint wanders from even spacing, as a fraction of the spacing (half of it either
+/// way): a set is periodic on average and not exactly, and equal spacing is a brick bond.
+const ROCK_JOINT_JITTER: f32 = 0.8;
+/// The systematic joints' strike: the horizontal direction their planes face. Their normal is
+/// its component in the bedding plane, so the joints stand perpendicular to the beds.
+const ROCK_JOINT_STRIKE: vec3<f32> = vec3<f32>(0.8, 0.0, 0.6);
+/// How far a layer's systematic joints swing from the set's strike, rad (half of it either
+/// way): a set is parallel, not identical, from layer to layer.
+const ROCK_JOINT_SWING: f32 = 0.2;
+/// The cross joints' spacing over the systematic joints': "consistently larger ... by a factor
+/// of 1.5 approximately" (Ji et al. 2023).
+const ROCK_CROSS_RATIO: f32 = 1.5;
+/// The chance an interval between two systematic joints holds cross joints, as its width over
+/// the layer's thickness goes from 1 to 3: cross joints "are most commonly found between
+/// systematic joints with lesser spacing" (Engelder & Gross 1993, after Bai 2000).
+const ROCK_CROSS_NARROW: f32 = 0.85;
+const ROCK_CROSS_WIDE: f32 = 0.3;
+/// A joint's trace half-width, m: the weathered, shadowed mouth of an aperture that is "mainly
+/// less than a millimetre" (Palmström 2015), drawn per block between the two.
+const ROCK_TRACE_MIN_M: f32 = 0.012;
+const ROCK_TRACE_MAX_M: f32 = 0.030;
+/// A parting's trace against a joint's: a bedding surface weathers back further
+/// (`joint-sets.md` Deviation 3).
+const ROCK_PARTING_WIDEN: f32 = 1.5;
+/// A trace, as a multiplier on the rock's albedo at full coverage: a shadowed aperture a few
+/// centimetres wide.
+const ROCK_JOINT_DARKEN: f32 = 0.40;
+/// The bevel into a trace: the face rolls into the crack over two trace widths at this slope.
+const ROCK_BEVEL_SLOPE: f32 = 0.6;
+/// Each block's **facet**: a random tilt, as a slope, constant over the block — a perfectly
+/// flat face "does not look right" (Akenine-Möller et al. 2018 on brick walls;
+/// `joint-sets.md` Deviation 4).
+const ROCK_FACET_TILT: f32 = 0.12;
+/// The face's own **relief** within a block, as a slope per unit of the roughness's gradient:
+/// a broken face is uneven at the decimetre scale, and a flat one reads as concrete.
+const ROCK_FACE_RELIEF: f32 = 0.15;
+/// The block's own value, as a multiplier on the rock's albedo: a lighter or darker piece of
+/// its bed. Narrow: a value that changes at every joint is a brick's signature
+/// (`joint-sets.md` Deviation 5).
+const ROCK_BLOCK_TONE: f32 = 0.05;
+/// The joints' **roughness**: a joint is planar at the block's scale and rough below it, so
+/// its trace wanders by a few centimetres over `ROCK_ROUGH_M` and its aperture opens and
+/// closes along it (Palmström 2015's rough and undulating joints; `joint-sets.md`
+/// Deviation 7). A perfectly straight trace of one width is a mortar line.
+const ROCK_ROUGH_M: f32 = 0.6;
+const ROCK_ROUGH_AMP_M: f32 = 0.03;
+/// The **ledges**: a layer more resistant than the one below it stands out from the face by up
+/// to `ROCK_LEDGE_M`, and the recessed layer under it is shaded in a band `ROCK_LEDGE_BAND`
+/// times the overhang deep, by up to `ROCK_LEDGE_SHADE` — the stepped "cliff-and-bench"
+/// profile, where "the more resistant layers form the cliffs, or stairsteps, while the less
+/// resistant layers form gentle slopes" (Easterbrook, after Wikipedia's *Mesa*;
+/// `joint-sets.md` Deviation 8).
+const ROCK_LEDGE_M: f32 = 0.35;
+const ROCK_LEDGE_BAND: f32 = 1.5;
+const ROCK_LEDGE_SHADE: f32 = 0.6;
+/// The Weibull's shape for the trace's width, the distribution the fracture spacing follows
 /// (Verdian et al. 2021). A shape of 1 is the exponential and 2 is the Rayleigh; 1.6 is
 /// between, with the longer tail a cliff's spacings have.
 const ROCK_BLOCK_WEIBULL: f32 = 1.6;
-/// The Weibull's scale, as a multiple of the joint's width.
-const ROCK_BLOCK_WEIBULL_SPREAD: f32 = 0.85;
-/// The Weibull's draw's ceiling: the 95th percentile, and not the unbounded tail. The
-/// fracture spacing's own distribution is *undersampled* in its lower tail, so the tail is
-/// bounded in the data and it is bounded here.
+/// The Weibull's draw's ceiling: the 95th percentile, and not the unbounded tail.
 const ROCK_BLOCK_WEIBULL_MAX: f32 = 2.0;
 
 // The scree (`docs/research/scree.md`)
@@ -763,15 +747,10 @@ fn rock_material(p: vec3<f32>, warp: f32, footprint_m: f32) -> RockMaterial {
     // edges are, and what tone it wears (`docs/research/bedding.md`). The beds stack, so their
     // thicknesses vary and they are a succession and not a stripe pattern; and the bed's
     // *edge* is band-limited away with the distance while the bed's *tone* is not, so a
-    // distant cliff shows its layers and not its stripes.
-    // The bed's own colour is band-limited against the *fragments*, and the fragments' own
-    // band-limit is a **known** number — the joint's width — so the limit is computed here
-    // and the blocks' lookup below is not needed for it. The two are band-limited against
-    // each other exactly once: where a fragment resolves it wears its own rock, and where it
-    // is gone the bed's own rock shows through.
-    let bed_colour_keep = 1.0
-        - detail_keep(ROCK_BLOCK_M * ROCK_JOINT_WIDTH * 1.85, footprint_m);
-    let bed_value = bed_value(p, bed, footprint_m, bed_colour_keep);
+    // distant cliff shows its layers and not its stripes. The bed's span is shared with the
+    // joints, whose partings split it.
+    let span = bed_span(bed);
+    let bed_value = bed_value(p, bed, span, footprint_m);
     let bed_mask = bed_value.mask;
     // The rock's own field: two octaves, one coarse and one fine, band-limited by their own
     // feature sizes. The fractures are the ridges of the coarse one.
@@ -809,26 +788,20 @@ fn rock_material(p: vec3<f32>, warp: f32, footprint_m: f32) -> RockMaterial {
     // browner and darker rock — shows. The edge is a line a fraction of a bed wide, so it is
     // band-limited away with the distance, and what is left is the succession's tones and not
     // its stripes. That is the whole trick.
-    // The rock's *blocks*: the pieces it breaks into (`docs/research/rock-blocks.md`). Their
-    // own colour, the joint's darkening and their own relief — the three things that turn a
-    // smooth face into a face made of pieces.
-    //
-    // The lookup is here and not lower down because the bed's own colour is band-limited
-    // against it: the fragments carry the near field and the beds carry the far one.
-    let blocks = rock_blocks(p, footprint_m);
+    // The rock's *blocks*: the pieces its joint sets cut it into
+    // (`docs/research/joint-sets.md`). Their own value, the traces where they part and their
+    // own facets — the three things that turn a smooth face into a face made of pieces.
+    let blocks = rock_blocks(p, bed, span, footprint_m);
     let blocks_present = blocks.present;
-    // The bed's own **colour** is mixed in only where the *fragments* do not resolve
-    // (`docs/research/bed-colour.md`). The fragments carry the near field and the beds carry
-    // the far one, and the two are band-limited against each other: where a fragment is
-    // visible it wears its own rock, and where it is gone the bed's own rock shows through.
-    // Without the split the two palettes would compound and the near face would be tinted.
+    // The bed's own **colour**, at every distance (`docs/research/bed-colour.md`): the blocks
+    // are pieces of the bed, so they wear its rock and add their own value.
     let bed_tone = bed_value.tone
         * mix(vec3<f32>(1.0), ROCK_SECOND_TONE, bed_mask * bed_value.present * ROCK_BED_MIX);
     var tint = bed_tone;
     if blocks_present > 0.0 {
-        // The block's own **colour** multiplies the rock's colour, and the joint darkens it.
+        // The block's own **value** multiplies the rock's colour, and the trace darkens it.
         let joint = mix(1.0, ROCK_JOINT_DARKEN, blocks.joint);
-        tint = tint * blocks.tone * joint;
+        tint = tint * blocks.value * joint;
     }
     let dark = mix(1.0, ROCK_FRACTURE_DARKEN, crack);
     let grain_tint = 1.0 + ROCK_GRAIN_AMP * grain_value;
@@ -837,7 +810,8 @@ fn rock_material(p: vec3<f32>, warp: f32, footprint_m: f32) -> RockMaterial {
     // small relief, and the fractures give it the *step* a crack has: the ridge's gradient
     // turns the crack from a drawn line into a groove the sun rakes.
     var relief = world_grad * (ROCK_GRAIN_AMP * 0.20);
-    // The blocks' own relief: the joint's gradient, so the sun rakes each fragment's edge.
+    // The blocks' own relief: each block's facet and the bevels into its traces, so the sun
+    // picks the blocks out and finds the cracks.
     if blocks_present > 0.0 {
         relief = relief + blocks.grad;
     }
@@ -867,362 +841,203 @@ fn rock_material(p: vec3<f32>, warp: f32, footprint_m: f32) -> RockMaterial {
     );
 }
 
-/// The rock's *blocks*: the pieces the rock breaks into, at the world point `p` (metres), for a
-/// pixel footprint of `footprint_m` metres per pixel.
+/// The rock's *blocks* at the world point `p` (metres), in the bed `span` at the bed
+/// coordinate `bed`, for a pixel footprint of `footprint_m` metres per pixel
+/// (`docs/research/joint-sets.md`).
 ///
-/// A rock mass is a set of blocks held in one piece (Zhang et al. 2020: "discontinuous in
-/// geometry while continuous in mechanics"), and a cliff face shows the blocks. They are the
-/// cells of a **3D** cellular network, in the rock's own frame: a 2D network in the ground
-/// plane would stretch along a slope and weave, exactly as the crate's turf does.
-///
-/// The blocks are **tabular**: the network's coordinates are squashed along the bedding
-/// plane's normal, so the cells stretch into slabs along the beds. A rock breaks along *joint
-/// sets* — families of parallel planes — so its pieces are aligned, not a random heap (La
-/// Pointe & Hudson 1985).
-///
-/// A block is *shaded*, not outlined: its own tone, and its own relief from the distance
-/// field's gradient, so the sun rakes its edge and the light finds the joint. The crate's
-/// rock note is right that a cell network's boundaries read as a giraffe's hide — that is a
-/// statement about drawing the boundaries as *lines*; a block is a volume.
+/// A sedimentary rock mass is cut by **joint sets**: bedding partings split each bed into
+/// layers, systematic joints cut each layer and end at its partings, and cross joints cut the
+/// intervals between two systematic joints and end at them. A block is the box between them,
+/// so its edges are straight; a cell network's are not, and a face of cells reads as paving or
+/// camouflage (`docs/research/rock-joints.md`).
 struct RockBlocks {
-    /// The block's own **colour**: a multiplier on the rock's albedo, one channel each.
-    tone: vec3<f32>,
-    /// The joint's darkening, 0 to 1: how close the point is to a block's edge.
+    /// The block's own **value**, a multiplier on the rock's albedo: a lighter or darker piece
+    /// of its bed.
+    value: f32,
+    /// The joints' trace, 0 to 1: its darkening at full coverage, times its coverage of the
+    /// pixel.
     joint: f32,
-    /// The block's relief gradient, in the world.
+    /// The block's relief gradient, in the world: its facet and the bevels into its traces.
     grad: vec3<f32>,
-    /// 1 where the point is inside a block and 0 on a joint.
-    inside: f32,
     /// 1 where the blocks survive the pixel's footprint.
     present: f32,
 }
 
-/// One generation of blocks: the cells of the 3D network at `cell_m`, and the block that the
-/// nearest cell owns.
-struct RockBlockScale {
-    /// The block's own **colour**: a multiplier on the rock's albedo, one channel each, so a
-    /// fragment can be another *hue* and not only another brightness.
-    tone: vec3<f32>,
-    /// The joint's darkening, 0 to 1: how close the point is to a block's edge.
-    joint: f32,
-    /// The block's relief gradient, in the world.
-    grad: vec3<f32>,
-    /// 1 where the point is *inside* a block, 0 on a joint.
-    inside: f32,
+/// A cell of a one-dimensional jittered partition: its index and its two boundaries, in the
+/// partition's own units.
+struct Partition {
+    index: f32,
+    low: f32,
+    high: f32,
 }
 
-/// One generation of the blocks: the 3D network at `cell_m`, the block the nearest cell owns,
-/// its tone, its joint and its facet.
-///
-/// The network's coordinates are **stretched** along the bedding plane's normal so the cells
-/// become *shorter* across the beds and so a face shows slabs and not gravel. The bedding
-/// plane is the same tilted plane the beds run on: a rock breaks along joint sets, families
-/// of parallel planes, so its pieces are aligned.
-///
-/// The component along the normal is *multiplied*, so the lattice is finer across the beds
-/// and the cells are long in the bedding's plane. (Squashing it instead — the other way
-/// round — makes the cells long *across* the beds, and the face reads as gravel.)
-fn rock_block_scale(p: vec3<f32>, cell_m: f32, footprint_m: f32, jointed: bool) -> RockBlockScale {
-    let normal = normalize(ROCK_BED_TILT);
-    let along = p - normal * dot(p, normal) * (1.0 - 1.0 / ROCK_BLOCK_TABULAR);
-    // The coordinates are **warped** before the lookup, so the cells' boundaries wander: a
-    // cell network's cells are convex polygons of nearly the same area, and a face of them
-    // reads as a mosaic — or, with the blocks' step, as *shingles*. A rock breaks into
-    // irregular fragments, and a warp is what makes the fragments irregular.
-    //
-    // The warp is the crate's own 3D noise at the 3D point, so it does not weave on a slope
-    // (the rock's own rule: the material is "the crate's 3D noise at the 3D point, which has
-    // no projection at all"). Its scale is a fraction of the cell, so a block's *shape* is
-    // broken and not its *position*.
-    //
-    // The warp vector is the noise's own **gradient** — one evaluation for a whole 3D vector
-    // field, where three separate noise *values* would be three lattice walks. The gradient is
-    // the better field anyway: it is smooth and it *points* somewhere, so the cells' boundaries
-    // are pushed along a consistent direction rather than at random.
-    //
-    // `perlin3_d` returns (value, ∂x, ∂y, ∂z), so the gradient is **free** with the value.
-    //
-    // The noise's *scale* is many cells, so the warp displaces the lattice **coherently**: a
-    // warp that varies over the length of a cell moves different points by different amounts
-    // and *scrambles* the lattice instead of displacing it — the cell's index stopped being
-    // monotonic along a straight cut, and the joint was crossed zero times in 30 m. A warp
-    // that varies over ten cells bends the lattice, which is what a rock's fracture set does.
-    //
-    // The noise is sampled at the *unwarped* point, so the warp does not chase itself.
-    let warp_sample = perlin3_d(p / (cell_m * ROCK_BLOCK_WARP_CELLS));
-    let warp = warp_sample.yzw;
-    let q = (along + warp * ROCK_BLOCK_WARP_M) / cell_m;
-    let cell = cell3(q);
-    // The **second joint set**: a family of parallel planes across the bedding, and the blocks
-    // between the two sets are *slabs* (`docs/research/block-sizes.md`).
-    //
-    // A family of planes is a *period*, and a period is a coordinate: the second set's planes
-    // are at the multiples of its spacing, so the joint is where the coordinate crosses one.
-    // That is **no lookup at all** — a dot product, a division and a `fract` — and it is the
-    // whole reason a second set is affordable on the crate's hottest path.
-    //
-    // The **spacing** is a draw, and it is the spacing's own distribution: the fracture
-    // spacing's is a Weibull (Verdian et al. 2021: the Weibull "yielded the best fit to the
-    // data in most cases", with a geometric standard deviation of 0.214 to 0.551 across the
-    // fifteen sites). The draw is the *formation's* own hash, so the spacing is **constant
-    // within a formation** and changes from one formation to the next — a spacing that varied
-    // *smoothly* would make the planes fold instead of fracture, and the face came out a moiré
-    // of concentric rings.
-    let formation = floor(p / ROCK_FORMATION_M);
-    let formation_hash = hash31(vec3<i32>(
-        i32(formation.x),
-        i32(formation.y),
-        i32(formation.z),
-    ));
-    // The spacing's own distribution is a **Weibull** (Verdian et al. 2021: the Weibull form
-    // "yielded the best fit to the data in most cases", with a geometric standard deviation of
-    // 0.214 to 0.551 across the fifteen sites), so the draw is the Weibull's inverse
-    // transform and not a power of a uniform: a power of a uniform concentrates the values
-    // near zero, and the spacing's spread came out at 2.2:1 where the Weibull's is wider.
-    let spacing_draw = min(
-        pow(-log(max(1.0 - formation_hash, 1e-6)), 1.0 / ROCK_BLOCK_WEIBULL),
-        ROCK_BLOCK_WEIBULL_MAX,
-    );
-    let spacing = mix(
-        ROCK_JOINT2_MIN_M,
-        ROCK_JOINT2_MAX_M,
-        spacing_draw / ROCK_BLOCK_WEIBULL_MAX,
-    );
-    // The second set's coordinate: the distance from the plane, in metres.
-    let cross = dot(p, normalize(ROCK_JOINT2_NORMAL));
-    // The distance to the nearest plane of the second set.
-    let phase = cross / spacing;
-    let to_plane = abs(phase - round(phase)) * spacing;
-    // The block's own **colour**: a draw from the rock's palette, so the cliff is a
-    // succession of *different rock* and not one grey in many shades
-    // (`docs/research/rock-palette.md`).
-    //
-    // The palette's score is the *distribution* (which rocks are around) times the
-    // *selection* (which rock this fragment is). The **selection** is the cell's own factor,
-    // so a fragment is a **piece of one rock** and not a blend of several — which is what a
-    // fracture gives you: a broken piece of a bed, and a bed is one rock.
-    //
-    // The **distribution** is the cell's *second* draw, so it is at the *fragment's* scale and
-    // not at a field's: a cliff's colour must vary from fragment to fragment, or the cliff is
-    // a set of coloured regions and every fragment in a region is one rock. A field at six
-    // cells was tried first and it read as blotches.
-    let draw = cell.factor;
-    let region = cell.factor2;
-    // The four scores: the palette's members. The selection splits the palette in two — the
-    // *cool* half and the *warm* half — and the distribution splits each half again, so the
-    // four members are the four combinations.
-    //
-    // The scores are **squared** — Papavasiliou's exponent `p`, and the crate's own reason
-    // for squaring the turf's: a square is a multiply and not a `pow`, and three `pow` calls
-    // per pixel cost the mountains' opaque pass 0.137 ms → 0.252 ms. The square also makes
-    // the *selection* the dominant term, so a fragment is emphatically ONE rock and not a
-    // blend of two — and the blend is what left the cliff at one hue.
-    // The two splits as weights, so a fragment on the *edge* of a split is a blend of two
-    // rocks and a fragment in the middle of one is emphatically that rock. The width of the
-    // edge is the *score's* own sharpness, Papavasiliou's `p`.
-    let sel_w = smoothstep(0.5 - ROCK_PALETTE_EDGE, 0.5 + ROCK_PALETTE_EDGE, draw);
-    let reg_w = smoothstep(0.5 - ROCK_PALETTE_EDGE, 0.5 + ROCK_PALETTE_EDGE, region);
-    let s_basalt = (1.0 - sel_w) * (1.0 - reg_w);
-    let s_sandstone = (1.0 - sel_w) * reg_w;
-    let s_limestone = sel_w * (1.0 - reg_w);
-    let s_varnish = sel_w * reg_w;
-    let shares = s_basalt + s_sandstone + s_limestone + s_varnish;
-    let inv = 1.0 / max(shares, 1e-5);
-    // The mixture: a convex combination of the palette, so it lies between the tones and the
-    // rock's mean colour cannot drift (the crate's own rule from the ground's palette).
-    let mixed = (s_basalt * ROCK_TONE_BASALT
-        + s_sandstone * ROCK_TONE_SANDSTONE
-        + s_limestone * ROCK_TONE_LIMESTONE
-        + s_varnish * ROCK_TONE_VARNISH) * inv;
-    // The palette's *value* spread: the fragments are lighter and darker pieces of the same
-    // rock as well, the way a bed's own tone is.
-    let value = 1.0 + ROCK_BLOCK_TONE * (draw * 2.0 - 1.0);
-    // The block's own colour, and its brightness.
-    let tone = mix(vec3<f32>(value), mixed * value, ROCK_PALETTE_STRENGTH);
-    // The joint: the cell's own **boundary** — the surface where two cells meet, so a point
-    // close to it is at a joint and a point deep inside it is in the middle of a block.
-    //
-    // The boundary is the *nearest point's own cell's* far side, measured from the point: the
-    // feature point sits somewhere inside its cell, and the cell's wall is the distance from
-    // the point to the cell's edge *away* from it. That is the standard construction for a
-    // cell's boundary, and it needs only the **nearest** point — the second-nearest point's
-    // distance would give the same answer at twice the cost, and the rock is the crate's
-    // hottest path.
-    let to_centre = cell.point - fract(q);
-    let len = max(length(to_centre), 1e-6);
-    let outward = to_centre / len;
-    // The distance from the point to its cell's wall, along the direction away from the
-    // feature point: the point is at `fract(q)` inside the cell, and the cell's wall is at
-    // the far side of it.
-    let inside = fract(q);
-    let to_wall = select(1.0 - inside, inside, outward < vec3<f32>(0.0));
-    let half = min(min(to_wall.x, to_wall.y), to_wall.z);
-    // The joint's own width is a fraction of the cell, the way a crack is (the crate's own
-    // rule for the fractures: "a crack is a line a fraction of a cell wide").
-    //
-    // The joint's *width* is the cell's own draw, and it is what sets the block's **size**: a
-    // cell whose joint is wide is a *small* piece of rock and one whose joint is narrow is a
-    // big slab. The cells of a network are all the same size, so without this every block
-    // would be the same and the face would read as a cobblestone. The cell's factor is used
-    // for the block's tone *and* for its joint's width, so a cell is consistently one piece —
-    // a small block is a differently coloured one as well.
-    //
-    // The draw is **a Weibull**, the shape the fracture spacing's distribution follows
-    // (Verdian et al. 2021: "the Weibull form of the exponential distribution … yielded the
-    // best fit to the data in most cases"), so the widths have the distribution a real cliff's
-    // spacings have and not the uniform one a linear draw has. The Weibull's inverse
-    // transform is `λ · (−ln(1 − u))^(1/k)`, and the *shape* `k` below is 1.6: a cliff's
-    // spacings have a longer tail than a uniform draw and a shorter one than a pure
-    // exponential.
-    // The draw is **clamped** at the 95th percentile, and the note says why: "the lower
-    // tails of the distributions follow a steeper trend than the rest of the data ...
-    // potentially reflecting an undersampling of the smallest fractures". A Weibull's tail is
-    // unbounded, and an unbounded joint's width eats the block: at the 99th percentile the
-    // width was 47 % of the cell's half-boundary, so a block in one cell was a sliver.
-    let weibull = min(
-        pow(-log(max(1.0 - cell.factor, 1e-6)), 1.0 / ROCK_BLOCK_WEIBULL),
-        ROCK_BLOCK_WEIBULL_MAX,
-    );
-    let width = ROCK_JOINT_WIDTH * (0.25 + ROCK_BLOCK_WEIBULL_SPREAD * weibull);
-    // The joint's edge is *softened* over the pixel's own footprint: a joint is a line a
-    // fraction of a cell wide, and a hard edge on a line that narrow stair-steps at every
-    // distance. The width grows with the footprint, so the joint blurs into the rock rather
-    // than aliasing along it.
-    let soft = max(width, footprint_m / (cell_m * 0.5));
-    // The **second set's** joint: the plane of the second family, and its own width. A joint
-    // is a feature of the rock's own scale, so the second set's width is a fraction of *its*
-    // spacing and not of the cell's.
-    //
-    // The joint is **not** a straight line: a joint set's planes are *non-persistent* — they
-    // end, and their spacing varies along them, which is the whole difference between a
-    // fracture network and a lattice (Strauhal & Zangerl 2021 on the difficulty of
-    // determining the block size distribution "when non-persistent fractures in a rock mass
-    // should be considered"). A perfectly straight, evenly spaced plane set reads as a **wire
-    // fence** across the face, and it is the second set's *regularity* that gave the face away
-    // and not its spacing.
-    //
-    // So the plane's *position* is displaced by a slow field — the same field the warp uses,
-    // which is a free component of the warp's own `perlin3_d` — and the displacement is a
-    // fraction of the spacing, so the plane wanders within its own cell of the family.
-    let wander = warp_sample.x * spacing * ROCK_JOINT2_WANDER;
-    // The planes are **non-persistent**: they end, and a second, finer wander breaks them
-    // into segments. One smooth wander made the planes *bend* but not *end*, and a bend
-    // across a whole face still reads as a wire fence — the lines ran unbroken from edge to
-    // edge. The finer field is at the *segment's* scale, a few spacings long, so the plane
-    // wanders by a fraction of a spacing over a few metres and then the joint is simply
-    // **absent**.
-    //
-    // The absence is a *threshold* on the finer field, and it is the finest thing the joint
-    // draws, so it is band-limited with the joint's own width: a segment that is shorter
-    // than the pixel's footprint is not drawn at all, and the distance stays calm.
-    //
-    // The finer field is only evaluated **where the point is near a plane**, and the plane's
-    // distance is already known: a joint is a line a fraction of the spacing wide, so the
-    // overwhelming majority of the face is *not* on a plane and the field is computed and
-    // thrown away. The gate is the plane's own width, so the field is fetched exactly where
-    // it can change the answer.
-    let cross_w = cross + wander;
-    let to_plane_w = abs(cross_w / spacing - round(cross_w / spacing)) * spacing;
-    let soft2 = max(spacing * ROCK_JOINT2_WIDTH, footprint_m * 0.5);
-    var joint2 = 0.0;
-    {
-        let segment = perlin3(p / (spacing * ROCK_JOINT2_SEGMENT_M) + seed_offset(137u));
-        let present2 = smoothstep(
-            -ROCK_JOINT2_BREAK,
-            ROCK_JOINT2_BREAK,
-            segment,
-        );
-        joint2 = (1.0 - smoothstep(0.0, soft2, to_plane_w)) * present2;
+/// The boundary `k` of a jittered partition: the integer `k`, displaced by up to half of
+/// `jitter` either way by a draw on `k` and the partition's `seed`. The boundaries at or
+/// outside `first` and `last` are the partition's ends and stay where they are.
+fn partition_boundary(k: f32, seed: vec2<i32>, jitter: f32, first: f32, last: f32) -> f32 {
+    if k <= first || k >= last {
+        return k;
     }
-    // The two sets' joints together: the block is bounded by both, so the block's *size* is
-    // the smaller of the two — a slab where the second set is close, a block where it is far.
-    // The two sets' joints together: the block is bounded by both, so the block is a slab
-    // where the second set is close and a block where it is far.
-    let joint = max(1.0 - smoothstep(0.0, soft, half), joint2);
-    // The block's *facet*: a rock block's face is **flat**, not domed, and the step is at the
-    // joint. So the relief is the joint's own gradient — the boundary's direction — and the
-    // block's face is level. A dome over each block reads as a pebble pressed into the face
-    // (which is what the first attempt rendered), and a rock face is not that.
-    //
-    // The step's gradient: it rises towards the joint, so the face tilts back at the edge. Its
-    // width is the joint's own softened width, so the step and the darkening are the same
-    // feature.
-    //
-    // The second set's step is along *its* normal, so the two sets' steps cross and the
-    // block's edge is a *corner* — which is what a block between two joint sets is.
-    let step = (1.0 - smoothstep(0.0, soft * 2.0, half)) * ROCK_BLOCK_RELIEF;
-    let step2 = (1.0 - smoothstep(0.0, soft2 * 2.0, to_plane)) * ROCK_BLOCK_RELIEF;
-    let grad = (-outward * step + normalize(ROCK_JOINT2_NORMAL) * step2) / cell_m;
-    // A generation that is **not jointed** carries its tone and no crack and no relief: the
-    // fine generation is the *chips* lying on a face, and a crack round every chip — and a
-    // relief step at every chip — turned the face into a dark speckle. A chip is a patch of a
-    // slightly different rock, and its edge is a shadow the *coarse* generation's own relief
-    // already draws.
-    if !jointed {
-        return RockBlockScale(tone, 0.0, vec3<f32>(0.0), 1.0);
-    }
-    return RockBlockScale(tone, joint, grad, 1.0 - joint);
+    return k + jitter * (hash31(vec3<i32>(i32(k), seed.x, seed.y)) - 0.5);
 }
 
-fn rock_blocks(p: vec3<f32>, footprint_m: f32) -> RockBlocks {
-    // Band-limited by the **joint's own width**, and not by the cell: the joint is the finest
-    // thing the blocks draw, and it is a line a fraction of a cell across, so it aliases long
-    // before the cell does. The crate's own rule for the fractures, and the reason they are
-    // band-limited by their own width: "a crack is a line a fraction of a cell wide, so it
-    // aliases long before the cell does". Band-limited by the cell, the blocks survive at 90 m
-    // and the massifs read as a scaly, reptilian texture.
-    //
-    // The *widest* joint's width is the band-limit, and not the cell's own: a band-limit that
-    // varies per cell would flicker as the cell's draw changes from pixel to pixel.
-    let keep = detail_keep(ROCK_BLOCK_M * ROCK_JOINT_WIDTH * 1.85, footprint_m);
-    // The band-limit is *known before the network is looked up*, and the lookup is the
-    // expensive part — 27 cells, each a hash and a distance. So where the blocks cannot
-    // resolve, they are not looked up at all: the far terrain pays nothing for them, and the
-    // mountains' opaque pass does not carry the cost over the whole massif.
+/// The cell of a jittered partition that holds `x`. The boundaries are the integers, each
+/// displaced by less than half a cell (`jitter` < 1), so a boundary never passes its
+/// neighbour and the cell is found from at most three of them: the cells' widths run between
+/// `1 − jitter` and `1 + jitter`, periodic on average and not exactly — a joint set's spacing.
+fn jittered_partition(x: f32, seed: vec2<i32>, jitter: f32, first: f32, last: f32) -> Partition {
+    let i = floor(x);
+    let b0 = partition_boundary(i, seed, jitter, first, last);
+    if x < b0 {
+        return Partition(i - 1.0, partition_boundary(i - 1.0, seed, jitter, first, last), b0);
+    }
+    let b1 = partition_boundary(i + 1.0, seed, jitter, first, last);
+    if x >= b1 {
+        return Partition(i + 1.0, b1, partition_boundary(i + 2.0, seed, jitter, first, last));
+    }
+    return Partition(i, b0, b1);
+}
+
+/// A joint's **trace** at `distance_m` from it: a dark line of half-width `half_width_m`,
+/// anti-aliased by its **coverage**. Where the pixel's footprint is wider than the line, the
+/// line is spread over two pixels' width at the darkness that keeps its ink, so a far trace
+/// fades instead of widening at full darkness (the ribbons the old joints were), and a line
+/// sloping across the pixel rows is not sampled as dashes.
+fn rock_trace(distance_m: f32, half_width_m: f32, footprint_m: f32) -> f32 {
+    let soft = max(half_width_m, 2.0 * footprint_m);
+    let coverage = half_width_m / max(soft, 1e-6);
+    return (1.0 - smoothstep(0.0, soft, distance_m)) * coverage;
+}
+
+/// The bevel into a trace, as a slope: the face rolls into the crack over two trace widths.
+/// The groove's floor is **round** — the slope rises from zero at the crack to its peak on
+/// the wall and falls back to zero on the face — so the shading normal is continuous across
+/// the crack; a slope that was steepest at the crack and flipped its sign there drew a lit and
+/// a dark pixel side by side, and a sloping crack became a row of dashes. Anti-aliased by
+/// coverage like the trace.
+fn rock_bevel(distance_m: f32, half_width_m: f32, footprint_m: f32) -> f32 {
+    let width = 2.0 * half_width_m;
+    let soft = max(width, footprint_m);
+    let coverage = min(1.0, width / max(footprint_m, 1e-6));
+    let hat = smoothstep(0.0, 0.5 * soft, distance_m) * (1.0 - smoothstep(0.5 * soft, soft, distance_m));
+    return hat * ROCK_BEVEL_SLOPE * coverage;
+}
+
+fn rock_blocks(p: vec3<f32>, bed: f32, span: BedSpan, footprint_m: f32) -> RockBlocks {
+    // Band-limited by the blocks' own band: past it a block is finer than the pixel and the
+    // beds carry the face. The band-limit is known before anything is drawn, so where the
+    // blocks cannot resolve they cost nothing.
+    let keep = detail_keep(ROCK_BLOCK_BAND_M, footprint_m);
     if keep <= 0.0 {
-        return RockBlocks(vec3<f32>(1.0), 0.0, vec3<f32>(0.0), 0.0, 0.0);
+        return RockBlocks(1.0, 0.0, vec3<f32>(0.0), 0.0);
     }
-    // The coarse generation: the big slabs.
-    let coarse = rock_block_scale(p, ROCK_BLOCK_M, footprint_m, true);
-    // The fine generation: the small fragments in the gaps between the big ones. A cliff's
-    // blocks are not all the same size — the fracture spacing follows a Weibull whose
-    // geometric standard deviation is about 0.31 (Verdian et al. 2021, whose fifteen sites run
-    // 0.214 to 0.551), and the spacings run from 2 mm to 5000 mm against a site median of 10 to
-    // 390 mm — so a face of equal cells is a *quilt*, and the quilt is what the capture
-    // showed.
-    //
-    // The fine network is only looked up where the coarse one *resolves*: it is a third of
-    // the cell, so it is gone long before the coarse one is, and the far terrain pays
-    // nothing for it.
-    var tone = coarse.tone;
-    var joint = coarse.joint;
-    var grad = coarse.grad;
-    var inside = coarse.inside;
-    let fine_keep = detail_keep(ROCK_BLOCK_M * ROCK_BLOCK_FINE * ROCK_JOINT_WIDTH * 1.85, footprint_m);
-    if fine_keep > 0.0 {
-        let fine = rock_block_scale(p, ROCK_BLOCK_M * ROCK_BLOCK_FINE, footprint_m, false);
-        // The fine fragment only shows where the coarse block does *not* cover, so a small
-        // fragment never grows out of the side of a big one. This is the scree's own
-        // construction (`docs/research/scree.md`), and the reason one network at one size
-        // reads as a grid of pebbles and two nested read as a scatter.
-        let fine_inside = fine.inside * (1.0 - coarse.inside);
-        if fine_inside > 0.0 {
-            // A fine fragment carries its **tone** and not a joint: a chip lying on a face is
-            // a patch of a slightly different rock, and a *crack* round every chip turned the
-            // face into a dark speckle. The darkening is a crack, and a chip is not a crack —
-            // the joint belongs to the big blocks, which are the ones that parted.
-            tone = select(fine.tone, coarse.tone, coarse.inside > fine_inside);
-            grad = select(fine.grad, coarse.grad, coarse.inside > fine_inside);
-            inside = max(coarse.inside, fine_inside);
-        }
+    let normal = normalize(ROCK_BED_TILT);
+    // The roughness: one evaluation, its value and its three gradient components four
+    // independent fields — the aperture, and the three sets' displacements.
+    let rough = perlin3_d(p / ROCK_ROUGH_M + seed_offset(139u));
+    let bed_id = i32(span.index);
+    // The **layers**: bedding partings split the bed, and the bed's own boundaries are
+    // partings. The bed draws its style — its nominal layer thickness — so a succession mixes
+    // thin flaggy beds and massive ones.
+    let bed_m = (span.top - span.bottom) * ROCK_BED_M;
+    let style = hash31(vec3<i32>(bed_id, 17, 0));
+    let nominal = exp(mix(log(ROCK_LAYER_MIN_M), log(ROCK_LAYER_MAX_M), style));
+    let layers = max(1.0, round(bed_m / nominal));
+    let layer_m = bed_m / layers;
+    // The internal partings wander with the roughness; the bed's own boundaries do not, so
+    // the bed's tone changes exactly at its parting.
+    let u_flat = clamp((bed - span.bottom) / (span.top - span.bottom), 0.0, 0.99999) * layers;
+    let inner = clamp(min(u_flat, layers - u_flat), 0.0, 1.0);
+    let u = u_flat + rough.w * ROCK_ROUGH_AMP_M / layer_m * inner;
+    let layer = jittered_partition(u, vec2<i32>(bed_id, 19), ROCK_PARTING_JITTER, 0.0, layers);
+    let thickness = (layer.high - layer.low) * layer_m;
+    let below = (u - layer.low) * layer_m;
+    let above = (layer.high - u) * layer_m;
+    let to_parting = min(below, above);
+    let parting_side = select(-1.0, 1.0, below < above);
+    let layer_id = i32(layer.index);
+    let layer_seed = bed_id * 64 + layer_id;
+    // The **ledge** over this layer: the layer above (the next bed's first, at the bed's top)
+    // stands out by its resistance's excess over this one's, and shades this layer's top.
+    let resist = hash31(vec3<i32>(layer_seed, 67, 0));
+    let above_seed = select(bed_id * 64 + layer_id + 1, (bed_id + 1) * 64, layer.index + 1.0 >= layers);
+    let overhang = max(hash31(vec3<i32>(above_seed, 67, 0)) - resist, 0.0) * ROCK_LEDGE_M;
+    let ledge = rock_trace(above, overhang * ROCK_LEDGE_BAND, footprint_m)
+        * ROCK_LEDGE_SHADE * overhang / ROCK_LEDGE_M;
+    // The **systematic joints**: planes perpendicular to the beds, spaced in proportion to the
+    // layer's thickness at the bed's own ratio, and confined to the layer — each layer has its
+    // own offset and its own small swing, so the joints end at the partings and are staggered
+    // from layer to layer.
+    let ratio = exp(mix(
+        log(ROCK_SPACING_RATIO_MIN),
+        log(ROCK_SPACING_RATIO_MAX),
+        hash31(vec3<i32>(bed_id, 23, 0)),
+    ));
+    let spacing_a = ratio * thickness;
+    let strike = normalize(ROCK_JOINT_STRIKE - normal * dot(ROCK_JOINT_STRIKE, normal));
+    let swing = (hash31(vec3<i32>(layer_seed, 29, 0)) - 0.5) * ROCK_JOINT_SWING;
+    let normal_a = normalize(strike + cross(normal, strike) * swing);
+    let normal_b = cross(normal, normal_a);
+    let a = (dot(p, normal_a) + rough.y * ROCK_ROUGH_AMP_M) / spacing_a
+        + 17.0 * hash31(vec3<i32>(layer_seed, 31, 0));
+    let cell_a = jittered_partition(a, vec2<i32>(layer_seed, 37), ROCK_JOINT_JITTER, -1e9, 1e9);
+    let before_a = (a - cell_a.low) * spacing_a;
+    let after_a = (cell_a.high - a) * spacing_a;
+    let to_a = min(before_a, after_a);
+    let side_a = select(-1.0, 1.0, before_a < after_a);
+    let index_a = i32(cell_a.index);
+    // The **cross joints**: perpendicular to the beds and to the systematic joints, and only
+    // between two of them. Each interval has its own offset, so they never line up across a
+    // systematic joint — the ladder (Bai 2000) — and a narrow interval is likelier to hold
+    // them than a wide one.
+    let width_a = (cell_a.high - cell_a.low) * spacing_a;
+    let chance = mix(ROCK_CROSS_NARROW, ROCK_CROSS_WIDE, smoothstep(1.0, 3.0, width_a / thickness));
+    var to_b = 1e9;
+    var side_b = 0.0;
+    var index_b = 0;
+    if hash31(vec3<i32>(index_a, layer_seed, 41)) < chance {
+        let spacing_b = ROCK_CROSS_RATIO * spacing_a;
+        let b = (dot(p, normal_b) + rough.z * ROCK_ROUGH_AMP_M) / spacing_b
+            + 17.0 * hash31(vec3<i32>(index_a, layer_seed, 43));
+        let interval_seed = layer_seed * 4099 + index_a;
+        let cell_b = jittered_partition(b, vec2<i32>(interval_seed, 47), ROCK_JOINT_JITTER, -1e9, 1e9);
+        let before_b = (b - cell_b.low) * spacing_b;
+        let after_b = (cell_b.high - b) * spacing_b;
+        to_b = min(before_b, after_b);
+        side_b = select(-1.0, 1.0, before_b < after_b);
+        index_b = i32(cell_b.index) + 1;
     }
-    return RockBlocks(
-        mix(vec3<f32>(1.0), tone, keep),
-        joint * keep,
-        grad * keep,
-        inside * keep,
-        keep,
+    // The **block**: its own value, its traces' width and its facet, all draws on the block.
+    let block_x = index_a * 131 + index_b;
+    let draw = hash33(vec3<i32>(block_x, layer_seed, 53));
+    let draw2 = hash33(vec3<i32>(block_x, layer_seed, 59));
+    let weibull = min(
+        pow(-log(max(1.0 - draw2.x, 1e-6)), 1.0 / ROCK_BLOCK_WEIBULL),
+        ROCK_BLOCK_WEIBULL_MAX,
     );
+    // The aperture opens and closes along the crack, without closing it.
+    let aperture = clamp(0.85 + 0.6 * rough.x, 0.4, 1.3);
+    let half_width = mix(ROCK_TRACE_MIN_M, ROCK_TRACE_MAX_M, weibull / ROCK_BLOCK_WEIBULL_MAX)
+        * aperture;
+    let parting_width = half_width * ROCK_PARTING_WIDEN;
+    let trace = max(
+        rock_trace(to_parting, parting_width, footprint_m),
+        max(rock_trace(to_a, half_width, footprint_m), rock_trace(to_b, half_width, footprint_m)),
+    );
+    let value = (1.0 + ROCK_BLOCK_TONE * (draw.x * 2.0 - 1.0)) * (1.0 - ledge);
+    // The facet: a plane at the block's own angle, constant over the block.
+    let azimuth = 6.2831853 * draw.y;
+    let rise = draw.z * 2.0 - 1.0;
+    let level = sqrt(max(1.0 - rise * rise, 0.0));
+    let facet = vec3<f32>(cos(azimuth) * level, rise, sin(azimuth) * level) * ROCK_FACET_TILT;
+    // The bevels: the face rolls into each crack, so the height grows away from it on both
+    // sides — along the crack's own normal, on the side the point is on.
+    let grad = facet
+        + rough.yzw * ROCK_FACE_RELIEF
+        + normal * parting_side * rock_bevel(to_parting, parting_width, footprint_m)
+        + normal_a * side_a * rock_bevel(to_a, half_width, footprint_m)
+        + normal_b * side_b * rock_bevel(to_b, half_width, footprint_m);
+    return RockBlocks(mix(1.0, value, keep), trace * keep, grad * keep, keep);
 }
 
 /// The scree: a scatter of stones with turf between them, at `p` (metres) in the world XZ

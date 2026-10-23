@@ -5,11 +5,6 @@ use bevy::math::{IVec2, IVec3, UVec3, Vec2, Vec3, Vec4};
 
 const NOISE_PERIOD: i32 = 4096;
 
-/// How far a cell network's feature point is drawn *towards* its cell's centre, 0 to 1
-/// (`noise.wesl`'s `CELL_INSET`): the cells are unequal, and a face of unequal cells is a
-/// scatter of fragments and not a mosaic.
-const CELL_INSET: f32 = 0.0;
-
 fn pcg3d(v_in: UVec3) -> UVec3 {
     let mul = |a: u32, b: u32| a.wrapping_mul(b);
     let mut v = UVec3::new(
@@ -243,79 +238,6 @@ pub(crate) fn cell2(p: Vec2) -> Cell2 {
         distance: best.sqrt(),
         point: best_point,
         factor: best_factor,
-    }
-}
-
-/// A cell of the 3D cellular network, the mirror of `cell3` in `noise.wesl`: the distance to the
-/// nearest feature point, the distance to the second nearest (the cell's *boundary*), the point
-/// itself, and the cell's two random factors.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Cell3 {
-    /// The feature point's position, in lattice units.
-    #[allow(dead_code)]
-    pub point: Vec3,
-    /// The cell's own random factor, in [0, 1).
-    #[allow(dead_code)]
-    pub factor: f32,
-    /// A **second** per-cell draw, in [0, 1): an independent hash of the cell, for the rock's
-    /// palette (`noise.wesl`'s `factor2`).
-    #[allow(dead_code)]
-    pub factor2: f32,
-}
-
-/// Mirror of `cell3` in `noise.wesl`: the 3D cellular network's nearest feature point, the
-/// second nearest point's distance and the cell's two random factors.
-pub(crate) fn cell3(p: Vec3) -> Cell3 {
-    let i = p.floor().as_ivec3();
-    let f = p - p.floor();
-    let mut best = 1e9_f32;
-    let mut best_point = Vec3::ZERO;
-    let mut best_factor = 0.0;
-    let mut best_factor2 = 0.0;
-    // The cells are visited in order of increasing distance, so the prune's bound tightens
-    // quickly. The bound is exact, so the result is the same as the full search.
-    for ring in 0..3 {
-        for z in -1i32..=1 {
-            for y in -1i32..=1 {
-                for x in -1i32..=1 {
-                    // The ring the cell is in, from the point's own cell outwards.
-                    if x.abs().max(y.abs()).max(z.abs()) != ring {
-                        continue;
-                    }
-                    let o = IVec3::new(x, y, z);
-                // The cell is pruned by the distance to its nearest corner: a feature point
-                // lies inside its cell, so a cell whose corner is further than the best
-                // distance so far cannot hold a closer one. The bound is exact, so the result
-                // is the same as the full search.
-                let lo = (o.as_vec3() - f).abs().max((f - o.as_vec3() - 1.0).abs());
-                if lo.dot(lo) >= best {
-                    continue;
-                }
-                let c = (i + o) & IVec3::splat(NOISE_PERIOD - 1);
-                let h = hash33(c);
-                // The point's offset inside its cell is drawn towards the cell's centre, so
-                // the cells are **unequal**: a point near its cell's corner leaves a big cell
-                // behind it and a point at the centre a small one. A cell network's cells are
-                // the same size when the points sit on a lattice, and a face of equal cells is
-                // a mosaic (`noise.wesl`'s `CELL_INSET`).
-                let inset = h.lerp(Vec3::splat(0.5), CELL_INSET);
-                let point = o.as_vec3() + inset;
-                let d = point - f;
-                let d2 = d.dot(d);
-                    if d2 < best {
-                        best = d2;
-                        best_point = point;
-                        best_factor = h.z;
-                        best_factor2 = hash31(c + IVec3::new(7919, 104729, 1299709));
-                    }
-                }
-            }
-        }
-    }
-    Cell3 {
-        point: best_point,
-        factor: best_factor,
-        factor2: best_factor2,
     }
 }
 
