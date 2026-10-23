@@ -310,6 +310,22 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ### Added
 
+- **A record of recent days: `ClimateHistory`** (issue #31). `Environment` answered only the
+  present, so a game could not ask what the last few days were like. `ClimateHistory` (a
+  resource, inserted by `ClimatePlugin`) records each local calendar day from the `Weather` as
+  the clock runs: the mean, minimum and maximum temperature, the mean relative humidity, the
+  precipitation and snowfall totals and the hours observed (`DayConditions`).
+  `Environment::recent_days(n)` returns the completed days of the last `n` and
+  `recent_climate(n)` a `ClimateSummary` with the ETCCDI's daily indices — wet days (≥ 1 mm,
+  `WET_DAY_MM`), frost days (minimum < 0 °C, `FREEZING_C`) and icing days (maximum < 0 °C) —
+  the hour-weighted means, the extremes and the totals. A window of 0 is empty, a longer one is
+  the whole record, no days is `None`. It keeps 31 days (`ClimateHistory::with_capacity`); a
+  step of up to a day is recorded, a longer jump leaves a gap, a rewind forgets the days after
+  it. With `serde` it is part of the weather's save: restored onto the saved clock it continues
+  the same days (`tests/save.rs`). Deterministic for a climate and a seed, and the same days at
+  a quarter of the frame step within 0.02 °C (`tests/climate_history.rs`). See
+  `docs/research/climate-history.md`.
+
 - **`TerrainLook`: a game grades the owned terrain's ground** (issue #35). The terrain's shader
   writes its own albedo, so a game that grades its materials per palette could not grade the
   ground: at night the meadow's green showed through a navy veil as olive. `TerrainLook {
