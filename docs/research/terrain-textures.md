@@ -34,8 +34,9 @@ The terrain's ground layers take PBR detail textures since iteration 46 (`docs/r
 | height band | σ 1.2 to resolution / 24, normalised to ½ ± 4 std | ground-textures.md (prep.py) |
 | cavity σ | resolution / 96; occlusion `1 − 0.2·cavity`, over its mean | ground-textures.md, Deviation 9 |
 | tileable cross-fade band | 0.18 of the tile | ground-textures.md (prep.py) |
-| photograph `contrast` / `colour` | 0.65 / 0 | ground-textures.md, Deviation 7; Model adopted 2 |
-| PBR set `contrast` / `colour` | 1 / 1 | a PBR base colour is already de-lit (glTF's base colour) |
+| photograph `contrast` | 0.65 | ground-textures.md, Deviation 7 |
+| PBR set `contrast` | 1 | a PBR base colour is already de-lit (glTF's base colour) |
+| `colour` (every set) | 0; `with_colour` to take a set's own | Deviation 5 |
 | `relief_deg` (derived normals) | 10° (examples: 10° soil, 14° grass) | ground-textures.md, Deviation 8 |
 | `normal_scale` | 1 | glTF, Unity |
 
@@ -49,7 +50,7 @@ The terrain's ground layers take PBR detail textures since iteration 46 (`docs/r
 ## What great looks like
 
 - **The golem set through the new path** renders as it did through the KTX2 (ground-textures.md's GREAT captures): the same blades, crumbs and pebbles, the same colour field; differences only where the box cascade differs from a Gaussian, below what the eye finds side by side.
-- **A standard CC0 set** reads as that material: its own grass and earth colours at every distance, with no ring where the detail stops being fetched; its relief lit from the correct side under a raking sun (toward and away from it, dawn and dusk) — no inverted bumps, no flat paste; no tile repetition, no hex seam; snow, wetness and puddles act on it as on the procedural ground.
+- **A standard CC0 set** reads as that material's relief, roughness and grain over the crate's calibrated colour, with no ring where the detail stops being fetched; its relief lit from the correct side under a raking sun (toward and away from it, dawn and dusk) — no inverted bumps, no flat paste; no tile repetition, no hex seam; snow, wetness and puddles act on it as on the procedural ground. With its own colour taken (`with_colour(1.0)`), the set's colour holds at every distance.
 - **A swap at runtime** lands without a flash to the procedural ground or a hitch in the frame.
 - **Without a set**: the old procedural ground, unchanged.
 
@@ -68,6 +69,9 @@ The terrain's ground layers take PBR detail textures since iteration 46 (`docs/r
 2. **A box cascade, not a Gaussian.** `prep.py` used SciPy's Gaussian; four box passes approximate it (Kovesi), so the packed detail differs from the KTX2's slightly (Validation target 1).
 3. **Bilinear resampling, not Lanczos.** `prep.py` resized with Lanczos; the crate halves by averaging and then resamples bilinearly. The examples' sources are already 1024², where neither applies.
 4. **The examples' standard set leaves the sand procedural**, as the golem set does (ground-textures.md, Deviation 15): the sand waits for a ripple field.
+5. **The colour share defaults to 0 for every set** (Model adopted 2 and 7 had 1 for a PBR set). A library's base colour is not a calibrated albedo: the examples' CC0 sets have a mean linear luminance of 0.145 (`Grass004`) and 0.297 (`Ground037`), 2.1× and 6.5× the crate's grass (0.069) and soil (0.045), and `Grass004`'s red over green is 0.79 against the crate's 0.48 (a yellowed lawn). Taken whole, they bleached the landscape at every distance — lime meadows and pale beige soil from 12 m (`/tmp/i50/trio_hills_12.png`, bottom) — where at 0 the frame keeps its calibrated colour and the set's relief, roughness, occlusion and colour detail (middle). The crate already keeps its colour over a set's (ground-textures.md, Deviation 1: the low frequencies are the crate's, the frame's mean colour must not move); a stylised set whose colour is the point opts in with `GroundLayerTextures::with_colour`, and the share is then an art-direction knob, not a calibration.
+6. **The convention is checked on real maps.** The packed normals of the CC0 sets' `NormalGL` maps correlate with the normals the packer derives from the same sets' displacement maps at +0.50 (soil) and +0.40 (grass) in both u and v, and with `flip_normal_map_y` the v correlation turns to −0.50 and −0.40: the +Y-up reading is the shader's frame.
+7. **The packing time.** One 1024² map reads in 10 ms (a direct path for 8-bit RGBA, `get_color_at` for other formats) and a σ = 85 blur takes 20 ms (running sums down the columns, no transposes); two layers of five maps pack in 0.48 s, the golem photographs (made tileable and de-lit) in 0.62 s, on a desktop CPU in a background task. The first implementation took 1.2-1.4 s (40 ms reads through `get_color_at`, 88 ms blurs with transposes).
 
 ## Pending index
 
