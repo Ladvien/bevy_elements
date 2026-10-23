@@ -116,6 +116,8 @@ pub struct TerrainSnapshot {
     pub grid: TerrainGrid,
     /// Surface height (bedrock + sediment) per cell, m, relative to `grid.y0`.
     pub surface: Arc<[f32]>,
+    /// Sediment thickness per cell, m (the loose layer over the bedrock: soil, sand, deposits).
+    pub sediment: Arc<[f32]>,
     /// The GPU's surface version this was read at (changes when terrain, erosion or an edit
     /// changed the heights).
     pub version: u32,
@@ -131,6 +133,13 @@ impl TerrainSnapshot {
     /// defined everywhere, for callers (such as `bevy_flora`'s ground) that cannot take `None`.
     pub fn height_clamped(&self, p: Vec2) -> f32 {
         self.grid.y0 + self.grid.sample(&self.surface, p)
+    }
+
+    /// Sediment thickness at `p` (metre-frame XZ), m; `None` outside the grid.
+    pub fn sediment(&self, p: Vec2) -> Option<f32> {
+        self.grid
+            .contains(p)
+            .then(|| self.grid.sample(&self.sediment, p))
     }
 }
 
@@ -216,9 +225,11 @@ mod tests {
         let snap = TerrainSnapshot {
             grid,
             surface: layer.into(),
+            sediment: vec![0.25; 16].into(),
             version: 1,
         };
         assert_eq!(snap.height(Vec2::new(-7.0, -5.0)), Some(26.0));
+        assert_eq!(snap.sediment(Vec2::new(-7.0, -5.0)), Some(0.25));
         assert_eq!(snap.height(Vec2::new(-10.1, 0.0)), None);
         // The far corner of the extent is inside; a hair beyond it is not.
         assert!(snap.height(Vec2::new(-2.0, -2.0)).is_some());

@@ -46,6 +46,16 @@ pub fn units() -> f32 {
         .unwrap_or(1.0)
 }
 
+/// A vector from an `x,y,z` environment variable (`ELEMENTS_EYE`, `ELEMENTS_LOOK`).
+pub fn vec3_env(name: &str) -> Option<Vec3> {
+    let v: Vec<f32> = std::env::var(name)
+        .ok()?
+        .split(',')
+        .filter_map(|p| p.trim().parse().ok())
+        .collect();
+    (v.len() == 3).then(|| Vec3::new(v[0], v[1], v[2]))
+}
+
 /// The free-fly camera.
 #[derive(Component, Default)]
 pub struct FlyCamera {

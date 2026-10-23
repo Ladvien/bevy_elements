@@ -6,7 +6,10 @@
 //! elsewhere. Set `ELEMENTS_QUALITY=low|medium|high|ultra` (default high),
 //! `ELEMENTS_RESOLUTION=WxH` (default 1920x1080), `ELEMENTS_PRESET=Thunderstorm` (default `Fog`;
 //! the precipitation passes only run in a wet preset) and `ELEMENTS_BLOCKERS=256` (spawn that
-//! many precipitation blockers around the camera). `ELEMENTS_TERRAIN=hills|mountains|dunes|lake|none`
+//! many precipitation blockers around the camera). `ELEMENTS_EYE=x,y,z` and `ELEMENTS_LOOK=x,y,z`
+//! place the camera instead of the scene's own view (with `ELEMENTS_AGL=1.7` the eye's `y` is
+//! metres above the ground): a talus for the scattered rocks, say.
+//! `ELEMENTS_TERRAIN=hills|mountains|dunes|lake|none`
 //! (default `hills`): a 2 km terrain at the quality's full simulation resolution with a 50 m³/s
 //! water source, so hydrology and erosion run their full substeps every frame
 //! (`elements_hydrology`) and the terrain repacks its layers every frame (`elements_terrain`); the
@@ -23,9 +26,11 @@
 //! round the camera so `elements_trails` stamps every frame; `ELEMENTS_TRAILS=off` leaves the
 //! trails out (their parallax in `main_opaque_pass_3d`). `ELEMENTS_CONTACTS=8` sends that many
 //! `WaterContact` spheres round the `lake` (`elements_waves`); `ELEMENTS_WAVES=off` leaves the
-//! waves out (their shading in `main_transparent_pass_3d`). `dunes` runs the aeolian transport
+//! waves out (their shading in `main_transparent_pass_3d`). `ELEMENTS_ROCKS=off` leaves the
+//! scattered rocks out (their draws in `main_opaque_pass_3d`, `early prepass` and
+//! `per_view_shadow_pass`). `dunes` runs the aeolian transport
 //! (`elements_aeolian_*`, 20 steps a second) in a forced `DustStorm`, unless `ELEMENTS_PRESET`
-//! says otherwise. Bevy's main and depth passes the scene is drawn in
+//! says otherwise. Bevy's main, depth and shadow passes the scene is drawn in
 //! are printed on their own line.
 //!
 //! The timed passes are compute and do not depend on the resolution, but the GPU's clocks do: a
@@ -40,7 +45,7 @@ use bevy::prelude::*;
 use bevy::render::diagnostic::RenderDiagnosticsPlugin;
 use bevy::window::{PresentMode, WindowResolution};
 use bevy_elements::*;
-use common::{ExampleHarness, camera, stand_on_ground, test_scene};
+use common::{ExampleHarness, camera, stand_on_ground, test_scene, vec3_env};
 
 /// Frames before the per-pass minimum starts counting.
 const WARMUP_FRAMES: u32 = 240;
@@ -79,10 +84,11 @@ const PASSES: [&str; 26] = [
 ];
 
 /// Bevy's own passes the terrain is drawn in, printed on a separate line.
-const SCENE_PASSES: [&str; 3] = [
+const SCENE_PASSES: [&str; 4] = [
     "main_opaque_pass_3d",
     "early prepass",
     "main_transparent_pass_3d",
+    "per_view_shadow_pass",
 ];
 
 fn main() {
@@ -114,6 +120,12 @@ fn main() {
     // `ELEMENTS_WAVES=off` leaves the waves out, for the cost of their shading in the water.
     let elements = if std::env::var("ELEMENTS_WAVES").as_deref() == Ok("off") {
         elements.disable::<WavesPlugin>()
+    } else {
+        elements
+    };
+    // `ELEMENTS_ROCKS=off` leaves the scattered rocks out, for the cost of their draws.
+    let elements = if std::env::var("ELEMENTS_ROCKS").as_deref() == Ok("off") {
+        elements.disable::<RocksPlugin>()
     } else {
         elements
     };
@@ -190,8 +202,11 @@ fn setup(
     let lake = std::env::var("ELEMENTS_TERRAIN").as_deref() == Ok("lake");
     let game = std::env::var("ELEMENTS_TERRAIN").as_deref() == Ok("game");
     let bodies = std::env::var("ELEMENTS_CONTACTS").is_ok();
+    let placed = vec3_env("ELEMENTS_EYE").zip(vec3_env("ELEMENTS_LOOK"));
     let eye = commands
-        .spawn(if lake && bodies {
+        .spawn(if let Some((eye, look)) = placed {
+            camera(eye, look)
+        } else if lake && bodies {
             // Over the water, so every wave cascade's window is wet where it can be (the fine
             // one wholly): the field's cost on open water, not on the land around it.
             camera(Vec3::new(0.0, 12.0, -20.0), Vec3::new(0.0, 2.0, 0.0))
@@ -209,6 +224,13 @@ fn setup(
             )
         })
         .id();
+    if placed.is_some()
+        && let Some(agl) = std::env::var("ELEMENTS_AGL")
+            .ok()
+            .and_then(|a| a.parse::<f32>().ok())
+    {
+        commands.entity(eye).insert(stand_on_ground(agl));
+    }
     // A terrain at the quality's full simulation resolution with a river's worth of water, so
     // hydrology and erosion run their full substeps every frame; `none` is the flat test scene.
     if lake {

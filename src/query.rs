@@ -432,6 +432,7 @@ mod tests {
                 y0: 2.0,
             },
             surface: Arc::from(vec![0.0; 32 * 32]),
+            sediment: Arc::from(vec![0.0; 32 * 32]),
             version: 1,
         }
     }
