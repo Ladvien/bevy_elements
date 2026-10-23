@@ -4165,3 +4165,56 @@ Per view: night (the default night meadow is the issue's olive, graded a dark bl
 3. **Puddle shorelines follow the micro-relief** (the rhombi of the water grid).
 4. **Stylistic variants** (once 2 makes sets settable).
 5. **The rock's close range**; infiltration for long real-time rain.
+
+## Iteration 49 - 2026-10-23 - A record of recent days (issue #31)
+
+**Commits:** `557ee05`, `b4e738d` (the research note `docs/research/climate-history.md` and its amendment), `e0242cc` (`ClimateHistory`, `DayConditions`, `ClimateSummary`, the `Environment` queries, tests), `75399c7` (README, changelog, the clock-midnight trap in `AGENTS.md`), this log. **Issue:** #31, closed with the merge. **Sibling repos:** none. **Not released.**
+
+The last open issue, taken before any other enhancement as the user asked. No visual change: the deliverable is an API, verified by tests and a headless smoke over every climate preset.
+
+### What changed
+
+- **`ClimateHistory`** (resource, inserted by `ClimatePlugin`, recorded in `ElementsSystems::Weather` after the weather) keeps one `DayConditions` per local calendar day: TG, TN and TX (the mean, minimum and maximum temperature at the reference elevation), the mean relative humidity, RR (the precipitation total, liquid-water equivalent) and the snowfall, and the hours observed. Each frame adds the game time since the last with that frame's `Weather`, split at midnight, summed in f64. A step of up to a day is recorded (the point snowpack's 24 h), a longer jump leaves the days between unrecorded, a rewind forgets the days from its new date on, and a load more than an hour off the saved clock re-arms. 31 days by default (`with_capacity`).
+- **The indices**: `WET_DAY_MM` (1 mm) and `FREEZING_C` (0 °C) with `DayConditions::is_wet`, `is_frost` (TN < 0) and `is_icing` (TX < 0), the ETCCDI's definitions. `ClimateHistory::recent(n)` / `summary(n)` and `Environment::recent_days(n)` / `recent_climate(n)`: the completed days of the last `n` calendar days and their `ClimateSummary` (counts, hour-weighted means, extremes, totals); 0 is empty, a longer window is the record, no days is `None`.
+- `Environment` takes the record as `Option<Res<_>>`: a world built without `ClimatePlugin` keeps working, with no days.
+- With `serde` the record joins the weather's save set.
+
+### Rounds
+
+| Round | Finding | Change |
+|---|---|---|
+| 1 | The frame-step test failed: at 1.5-minute frames two days were dated 10 January. At 2.3×10⁵ hours, `days × 24 + 23.999999999999996` rounds to the next midnight, so the recorder saw the day change while `clock.date` still said the old day, and every later day shifted by one. | The day's date is derived from the hour count itself (`date_of`). `AGENTS.md` trap. |
+| 2 | All tests pass; the smoke over the presets shows the weather's precipitation totals far above climatology (below). | Recorded as a finding (`climate-history.md` Deviation 4); the next item. |
+
+### Measurements
+
+- Determinism: two runs of temperate seed 42 for 10 days give identical records and summaries.
+- Frame step: at 6- and 1.5-minute frames a temperate January week differs by at most 0.004 °C in the daily means, 0.014 °C in the minima, 0 in the maxima, 0.0007 in the humidity and 0 in the totals; the day counts are identical (the test's bounds are 3–5× that).
+- Save: restored onto the saved clock, the record matches the original exactly over 72 more game hours.
+- **Smoke, 30 days through `Environment::recent_climate(30)`, seed 7**:
+
+| Climate, month | Wet days | Frost days | Icing days | Mean °C | Min °C | Max °C | RH | Precipitation mm |
+|---|---|---|---|---|---|---|---|---|
+| Temperate, January | 12 | 30 | 0 | 1.8 | −7.0 | 9.2 | 0.73 | 231 |
+| Temperate, July | 16 | 0 | 0 | 19.0 | 9.9 | 27.0 | 0.77 | 1342 |
+| Desert, July | 3 | 0 | 0 | 33.7 | 15.9 | 50.0 | 0.58 | 46 |
+| Tundra, January | 11 | 30 | 30 | −26.5 | −36.0 | −19.6 | 0.70 | 429 (all snow) |
+| Tropical, July | 26 | 0 | 0 | 25.8 | 17.9 | 37.0 | 0.92 | 7844 |
+| Alpine, January | 12 | 30 | 17 | −8.9 | −21.0 | 1.2 | 0.72 | 533 (all snow) |
+
+The temperatures and day counts are plausible. **The amounts are not**: Richardson's observed Atlanta (1204 mm a year, a wet station) has 59–125 mm and 5.5–10.7 wet days per 28 days; the temperate preset rains 2–13× that. A defect of the scheduler (the wet presets' share and rates), not the record.
+
+- Cost: one CPU system of constant arithmetic per frame; no GPU work; not benchmarked.
+- Tests: six unit tests (a steady day, the midnight split, the jump and the rewind, the window and the capacity, the ETCCDI thresholds, the hour weighting), two integration tests (`tests/climate_history.rs`) and one save test. Gates 1-4 pass (25 suites; `tests/save.rs` with `--features serde`, 6); gate 5: 24 integration binaries ok, `clouds` 10, `terrain` 9, `cover` 8, `dust` 6 and `the_horizon_sky` 1.
+
+### Sources
+
+- Issue #31; the ETCCDI's definitions of the 27 core indices (FD, ID, the 1 mm wet day); Zhang et al. 2011 (WIREs Climate Change, the indices; not in the corpus, paywalled); Thurner et al. 2017 (frost and icing days); Richardson 1981 (the daily weather record; the observed Atlanta table).
+
+### The next five items, ranked
+
+1. **The weather's precipitation climatology**: the temperate preset rains 2–13× an observed wet station's totals on ~1.5× its wet days (this iteration's smoke). Calibrate the wet presets' share and rates against observed totals per climate, so the record, the snowpack, the hydrology's rain and the cover maps get realistic amounts. It changes every domain's weather and needs its own research and captures.
+2. **PBR textures settable on the terrain** (the user's ask): a per-`Terrain` set of ordinary PBR maps per layer (albedo, normal, roughness, AO, height), rock included, packed by the crate; golem's sets loadable without `prep.py`.
+3. **Puddle shorelines follow the micro-relief** (the rhombi of the water grid).
+4. **Stylistic variants** (once 2 makes sets settable).
+5. **The rock's close range**; infiltration for long real-time rain.
