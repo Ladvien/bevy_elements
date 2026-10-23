@@ -76,10 +76,12 @@ No system is implemented without its `docs/research/<system>.md`, committed firs
   ```sh
   cargo run --release --manifest-path tools/wesl-check/Cargo.toml -- src
   ```
-  It compiles every one of the crate's modules to WGSL and parses the result with naga, in about
-  twenty seconds and without a GPU, and it names the line. A module it reports as "not checked"
-  is one whose *Bevy* import could not be stubbed; the crate's own code in it is still checked
-  as far as the compiler got.
+  It compiles every one of the crate's modules to WGSL, keeping each module's own declarations,
+  and parses the result with naga, in about twenty seconds and without a GPU, and it names the
+  line. (Before iteration 45 it stripped a library module to an empty string, and "the WGSL is
+  ok" checked nothing of a library's functions past the parser.) A module it reports as "not
+  checked" is one whose *Bevy* import could not be stubbed; the crate's own code in it is still
+  checked as far as the compiler got.
 - **A name used from another WESL module must be in the import list.** A call to a function that
   `common.wesl` exports but that `render.wesl` does not import compiles *without an error* — naga
   emits a broken shader, no `failed to process shader` line appears, and the surface renders as a
@@ -90,7 +92,7 @@ No system is implemented without its `docs/research/<system>.md`, committed firs
 - **Do not name a local after a struct field the same function reads.** In a function imported
   into the terrain's material, `let w = …` beside reads of a struct's field `g.w` rendered wrong
   on the GPU with no error: a hex blend came out biased toward its darkest taps, the dunes 10-17 %
-  darker and bluer-short, and renaming either `w` fixed it. The `wesl` output and naga's IR are
+  darker and more so in blue, and renaming either `w` fixed it. The `wesl` output and naga's IR are
   both correct in isolation, so the fault is downstream (`docs/research/ground-textures.md`,
   Outcome). A surface the wrong *shade* — not dark navy, just off — can be this too: bisect by
   renaming before suspecting the maths, and compare a capture's mean against a CPU emulation of
