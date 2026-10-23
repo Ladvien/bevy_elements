@@ -236,9 +236,21 @@ fn snow_color() -> Color {
     Color::from(SNOW_ALBEDO)
 }
 
+/// A soaked, fully porous albedo: the film model `(1 − r_e)(1 − r_i) ρ / (1 − r_i ρ)` per channel,
+/// r_e = 0.0659 and r_i = 0.4720 (`wet-ground.md` Model adopted 1).
+fn wet_color(base: LinearRgba) -> Color {
+    let film = |rho: f32| (1.0 - 0.0659) * (1.0 - 0.4720) * rho / (1.0 - 0.4720 * rho);
+    Color::from(LinearRgba::new(
+        film(base.red),
+        film(base.green),
+        film(base.blue),
+        1.0,
+    ))
+}
+
 /// Wetness Validation 9 (plan M4), on the faces that face up: dry is a plain `StandardMaterial`
-/// bit for bit; full snow is the snow albedo at roughness 0.9; full wetness is the albedo × 0.5 at
-/// roughness 0.1; and `exposure` 0 shelters from both.
+/// bit for bit; full snow is the snow albedo at roughness 0.9; full wetness is the film model's
+/// albedo at roughness 0.54 (`wet-ground.md` Validation 3); and `exposure` 0 shelters from both.
 #[test]
 #[ignore = "needs a GPU"]
 fn weathered_tops_match_the_plain_material_with_the_notes_numbers() {
@@ -282,18 +294,11 @@ fn weathered_tops_match_the_plain_material_with_the_notes_numbers() {
     let (sheltered, plain) = centres(&rig.render());
     assert_eq!(sheltered, plain, "exposure 0 under snow");
 
-    // Wet: albedo × 0.5 (porosity 1 at roughness 0.9) and roughness 0.1.
+    // Wet: the film model's albedo (porosity 1 at roughness 0.9) and roughness 0.9 · (1 − 0.4) =
+    // 0.54.
     rig.set_exposure(1.0);
     rig.set_weather(1.0, 0.0, 0.0);
-    rig.set_plain(
-        Color::from(LinearRgba::new(
-            base.red * 0.5,
-            base.green * 0.5,
-            base.blue * 0.5,
-            1.0,
-        )),
-        0.1,
-    );
+    rig.set_plain(wet_color(base), 0.54);
     let (wet, plain_wet) = centres(&rig.render());
     assert!(
         max_diff(wet, plain_wet) <= 1,
@@ -332,15 +337,7 @@ fn deferred_tops_match_the_plain_material() {
     assert!(snowy[0] > l[0] + 20, "snow is brighter: {snowy:?} vs {l:?}");
 
     rig.set_weather(1.0, 0.0, 0.0);
-    rig.set_plain(
-        Color::from(LinearRgba::new(
-            base.red * 0.5,
-            base.green * 0.5,
-            base.blue * 0.5,
-            1.0,
-        )),
-        0.1,
-    );
+    rig.set_plain(wet_color(base), 0.54);
     let (wet, plain_wet) = centres(&rig.render());
     assert!(
         max_diff(wet, plain_wet) <= 2,

@@ -7,7 +7,10 @@
 //! The particles read the wind field, so [`WindPlugin`](crate::WindPlugin) must be present;
 //! without it (or without an [`ElementsCamera`](crate::ElementsCamera)) nothing is simulated or
 //! drawn. Ground is the terrain's surface plus the water standing on it (the plane y = 0 without a
-//! terrain).
+//! terrain). A rain impact rings on standing water at least
+//! [`WetnessSettings::puddle_min_m`](crate::WetnessSettings) deep and on a blocker's top face, not
+//! on the terrain's dry or merely wet ground (the plane without a terrain rings everywhere);
+//! `docs/research/wet-ground.md`.
 
 mod gpu;
 mod look;
@@ -33,6 +36,7 @@ use crate::celestial::{
 };
 use crate::climate::Weather;
 use crate::clouds::CloudShadows;
+use crate::cover::WetnessSettings;
 use crate::fog::extinction_for_visibility;
 use crate::gpu::grid::storage_buffer;
 use crate::plugin::{
@@ -130,7 +134,8 @@ pub(crate) struct PrecipParams {
     motion: Vec4,
     /// x: rain count. y: snow count. z: buffer capacity. w: blocker count.
     counts: UVec4,
-    /// x: Marshall–Palmer Λ, mm⁻¹.
+    /// x: Marshall–Palmer Λ, mm⁻¹. y: the standing water an impact on a live terrain needs to
+    /// ring, m.
     rain: Vec4,
     /// x: flutter speed m/s. y: snow fall speed m/s. zw: flutter frequency range, Hz.
     snow: Vec4,
@@ -464,7 +469,7 @@ fn update_precipitation(
     flash: Res<LightningFlash>,
     look: Res<PrecipitationLook>,
     shadows: Option<Res<CloudShadows>>,
-    terrain: Option<Res<TerrainState>>,
+    (terrain, wetness): (Option<Res<TerrainState>>, Option<Res<WetnessSettings>>),
 ) {
     let (Some(mut gpu), Some(mut state)) = (gpu, state) else {
         return;
@@ -531,7 +536,10 @@ fn update_precipitation(
         ),
         rain: Vec4::new(
             marshall_palmer_lambda(weather.precipitation_mm_h * (1.0 - snow_fraction)),
-            0.0,
+            wetness.map_or_else(
+                || WetnessSettings::default().puddle_min_m,
+                |w| w.puddle_min_m,
+            ),
             0.0,
             0.0,
         ),
