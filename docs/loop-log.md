@@ -3884,3 +3884,64 @@ Every round kept its invariants: the plains byte-identical (or within GPU noise)
 3. **Stylistic variants** (the user's next area): a style knob over the crate's materials, starting with the ground.
 4. **The world ends at 1 km in aerial views.**
 5. **Blue-black pits on the cliff's shaded fragments at dusk** (in the baseline and every round of the attempt, `dusk.png` lower left).
+
+## Iteration 44 - 2026-10-22 - the cliff cut by joint sets: five rounds, NOT YET, not shipped
+
+**Commits:** `c860457` (the research note `docs/research/joint-sets.md`), the note's deviations and outcome with the capture trap in `AGENTS.md`, this log. The attempt is preserved on the branch `attempt/iter-44-joint-sets` (`c301388`), **not merged**: `main`'s code is iteration 42's. **Sibling repos:** none. **Not released.**
+
+The user's focus for this run: better-looking terrain, variety, rocks and debris, a realistic ground, stylistic variants; added mid-run, PBR textures in everything, especially the terrain, using golem's texturing.
+
+### Candidates (`/tmp/i44/findings.md`)
+
+1. **The cliff's joints are chicken wire** (class 1, worst in the new `side_ne`), and the mid-distance rock is a scaly speckle (`side_sw`).
+2. The painted scree's polka dots beside the mesh rocks (`side_ne`).
+3. Stylistic variants.
+4. The world ends in a white plane at eye level too (`side_sw`), not only from the air.
+5. Blue-black pits at dusk.
+
+The joints beat the scree: every cliff at every distance, against aprons only, and iteration 43's outcome gave a concrete model to try.
+
+### What was tried (`/tmp/i44/critique.md`; pairs and zooms in `/tmp/i44/pairs_after{,2,3,4,5}/`)
+
+The cell network is replaced by the structure a sedimentary cliff is cut by: **bedding partings** split each bed into layers (a bedding style per bed, thin and flaggy to massive); **systematic joints** spaced in proportion to the layer's thickness at a ratio drawn per bed and confined to their layer, so they end at the partings and are staggered; **cross joints** only between two systematic joints, never lining up across one, likelier in narrow intervals. `cell3` is deleted, with its inexact prune and the inverted tabular stretch.
+
+| Round | Change | Verdict, and what the face read as |
+|---|---|---|
+| 1 | The joint sets, coverage traces, facets, the bed's colour at every distance | NOT YET: bedded rock at last (`mtn_foot`, `face12`, `dusk`, `side_sw`); dashed partings at 3×; masonry in the thin beds |
+| 2 | Roughness (0.6 m, 3 cm) on all three sets, aperture along the crack, block value ±5 % | NOT YET: natural cracks; still dashed; a flat painted wall |
+| 3 | Two-pixel kernel, ledges (cliff-and-bench) | NOT YET: still dashed — measured at `after3/face3.png` rows 264-267: 117-118 then 75-89, the bevel's slope flipping sign at the crack |
+| 4 | Round-floored bevel, face relief, jitter 0.8, deeper ledges | NOT YET: dashes gone (row 263: 108 → 82 → 109); isolated dark rectangular blocks |
+| 5 | Facet 0.12 | NOT YET: stratified rock at 3-12 m in direct light; a quilted mottle at 30 m (`face30`); wood grain under overcast |
+
+Every round: `far120` 0.9 % of its pixels and the same mean (the bed fix below moves some band edges), `plains` within GPU noise, no `failed to process`. Five failed rounds, so the code reverts; the note's `## Outcome` holds the hypothesis: a heavy-tailed aperture per joint and parting, a multi-scale band-limited face relief, partings of unequal prominence.
+
+### Defects found on `main` (open)
+
+- **A bed changes up to 0.33 m past its own boundary.** `bed_value`'s inversion corrects an overshot estimate but not an undershot one (`the_partings_split_the_beds_into_layers_of_many_thicknesses` on the attempt failed on 18 boundaries in 200 m before the step-up), and the bed's tone hash uses the uncorrected estimate. The attempt fixes both.
+- Iteration 43's two: the inverted tabular stretch and `cell3`'s inexact prune (the attempt deletes `cell3`).
+
+### Sources
+
+- **Bai, T. (2000)**, *Formation and spacing of orthogonal cross joints*, Stanford Rock Fracture Project 11 (`https://stacks.stanford.edu/file/druid:zb158kp7289/RFP_2000_Bai.pdf`, read in full): cross joints abut systematic joints and form a ladder; systematic joints are confined by layer boundaries; S/T > 2 extremely rare; cross-joint spacing ~S or ~T.
+- **Bai & Pollard (2000)**, JSG 22:43, DOI `10.1016/S0191-8141(99)00137-6` (abstract): spacing linear in layer thickness, critical ratio ~1.0.
+- **Ji et al. (2023)**, JRMGE, DOI `10.1016/j.jrmge.2023.03.012` (abstract; PDF downloaded): cross-joint spacing 1.5 × systematic; s/t 4.3 and 6.4 at low strain, ~1 strained.
+- **Akenine-Möller et al. (2018)**, *Real-Time Rendering* 4th ed. (corpus): a perfectly flat brick face looks wrong; bricks shadow the mortar.
+- Wikipedia's *Bench (geology)* (after the AGI *Glossary of Geology*) and *Mesa* (after Easterbrook): cliff-and-bench profile of resistant and weak layers.
+- Palmström 2015, Verdian et al. 2021, Talling 2001 (earlier notes). Not obtained: Narr & Suppe 1991, Gross 1993 (Elsevier; cited through Bai 2000).
+
+### Measurements
+
+- Mirror (the attempt, 22 tests pass): 295 layers over 200 m, p10 0.28 m, p90 1.21 m; median S/T 1.71, the thickest quarter of layers' spacing 1.93 m against the thinnest's 0.66 m; the joints' mean offset across a parting 0.34 of a spacing (0 if they continued); cross joints in 85 % of narrow intervals and 34 % of wide ones, mean offset across a systematic joint 0.35; a 30 m cut 4.9 % dark, every block edge a trace.
+- **Cost** (`bench_elements`, `mountains`, the cliff filling the frame from `ELEMENTS_EYE=0,0,0 ELEMENTS_LOOK=60,0,60 ELEMENTS_AGL=12`, three interleaved trials each, the last per-pass minimum of each run; clocks P5 for 413 of 450 samples, P2 for 24, so upper bounds with ~20 % run-to-run spread): `main_opaque_pass_3d` base 1.490 / 1.517 / 1.774 ms against the attempt's 1.823 / 1.394 / 1.404 ms; `early prepass` 0.076 against 0.082; `per_view_shadow_pass` 0.066 against 0.070. No slower: the joint sets cost no more than the cell network they replace.
+
+### golem's texturing, for the user's PBR direction
+
+This session's golem tools offer no texture or PBR-map generation: `health_check` lists `generate_3d`, `generate_3d_multi_image`, `segment_mesh`, `generate_garment` and `generate_orbit_views` (all unavailable on the GPU now) and `animate_mesh`; `generate_image` (FLUX.2 on bmb) has no tiling or map options. A texturing tool added since would appear only in a new session — check `health_check` and the tool list first.
+
+### The next five items, ranked
+
+1. **PBR texture sets for the terrain** (the user's direction), first slice the **rock**: tileable albedo, normal, roughness and height maps — from golem if a new session offers texturing, else FLUX tiles with derived maps — sampled triplanar in the rock's own frame on the joint-set structure of `attempt/iter-44-joint-sets`, so the blocks' faces carry real surface detail (the attempt's quilted relief and wood grain). Research: texture budget and compression for wasm, WebGPU binding limits beside the terrain's two storage buffers, band-limiting by mip.
+2. **The cliff's remaining gaps**, if the textures do not close them: a heavy-tailed aperture per joint and parting, partings of unequal prominence (`joint-sets.md` `## Outcome`); with the bed-inversion fix.
+3. **Stylistic variants**: a style knob over the materials, starting with the ground.
+4. **The painted scree's polka dots** beside the mesh rocks.
+5. **The world ends in a white plane** at eye level (`side_sw`) and from the air.
