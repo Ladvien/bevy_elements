@@ -4007,3 +4007,60 @@ golem's `generate_image` (FLUX.2 klein 9B, 1024², 4 steps, ~20 s) makes usable 
 3. **The rock's PBR texture** on the joint-set structure (`attempt/iter-44-joint-sets`), triplanar in the rock's frame.
 4. **Stylistic variants**: a second golem set (painterly) through the same `GroundTextures`.
 5. **The world ends in a white plane** at eye level and from the air; the painted scree's dots.
+
+## Iteration 46 - 2026-10-23 - PBR detail textures for the soil and grass
+
+**Commits:** `3a1e83f` (the research note's second attempt), `ea2a24c` (the implementation, the prep tool, the golem set), `bc30992` (README section, showcase `docs/ground_textures.png` and performance, changelog, the note's deviations 17-19 and outcome, two `AGENTS.md` rules), this log. **Sibling repos:** none. **Not released.**
+
+The user's focus for this run: better-looking terrain, variety, rocks and debris, a realistic ground, stylistic variants; PBR textures in everything, especially the terrain; golem (which now offers img2img: `image_path`, `image_strength`; still no texture or PBR-map tool).
+
+### Candidates (`/tmp/i46/findings.md`)
+
+1. **The meadow underfoot is a green felt** (`hills_down`, `hills_eye`, `plains_down`, `plains_seed3`, `hills_dawn`): iteration 45's attempt was right for the meadow and short by three defects.
+2. **Rain turns the meadow into a lake** (`hills_rain`, Rain, 3 h grown): every pixel is rippled open water. The hydrology has no infiltration (`hydrology.md`: rain, sources, sinks, evaporation, edge outflow), so 12 mm of rain stays on the surface and its sheet flow crosses the 2 mm puddle threshold everywhere. Class 1.
+3. **Snow is a flat white-out** with no surface detail at 1.7 m (`hills_snow`).
+4. **The dunes are a cottage-cheese mottle**, no ripples.
+5. The cliff's chicken wire; the world's white edge; the scree dots.
+
+The textures beat the flooded meadow: the user's focus names PBR terrain textures, and the attempt was three fixes from GREAT, while infiltration needs its own research (a loss term that must not drain lakes, and the conservation tests). It heads the backlog.
+
+### What changed
+
+From `attempt/iter-45-ground-textures`: `GroundTextures` (albedo detail with mean 1, height, normal, occlusion; hex-tiled; height-blended between layers), with the second attempt's changes:
+
+- **Soil and grass only.** A zero `tile_m` leaves a layer unsampled and procedural, with its whole procedural grain; the examples' set leaves the sand to a future ripple field, so the dunes are bit-identical to the baseline.
+- **Sources without litter.** A new golem soil (cracks, clods, grey pebbles, no leaves); for the grass FLUX drew a radial clump and then concentric rings, so the set's grass is an **img2img** pass (`image_strength` 0.6) over the attempt's leaf-free pasture that keeps its layout and greens its straw.
+- **The derived roughness is neutral** (the dawn's silver strands were specular from "tops glossier"); **the height blend is band-limited** (1-3 cm footprint).
+- **The cost** (below): the textured path compiled only into a set's pipeline (`TerrainExtensionKey`, `GROUND_TEXTURES`), taps and layers accumulated into running sums, negligible taps not fetched, the eight orientations of the square instead of a free angle, the relief fetched under 6 cm of footprint and the albedo detail under 0.5 m, the occlusion a mean-1 multiplier so the fades move no mean.
+
+### Rounds (`/tmp/i46/critique.md`; pairs `/tmp/i46/r{1,3,6}_*.png`)
+
+| Round | Change | Verdict |
+|---|---|---|
+| 1 | The attempt with the new sources, sand procedural | NOT YET: a 12 m mid-field speckle (high-pass 3.13 against 1.49); silver strands toward the low sun at dawn and dusk |
+| 2 | Height blend band-limited | NOT YET: the speckle is the texture's own grain, correctly filtered (a 0.3 m/s glide: it moves coherently, `z_slow.png`); the silver unchanged — and a greener source had not changed it either. Experiment: the roughness detail neutral drops the dawn's p99 from (219, 215, 179) to (199, 201, 152) (`z_dawn_exp.png`) |
+| 3 | Derived roughness neutral | GREAT on every angle |
+| 4-6 | The cost (below), then the final code re-judged | GREAT: as round 3 on all 20 views, the fades leave no band, nothing pops in the 3 m/s glides (the ground's mean climbs 134.6-135.4 smoothly) |
+
+Per angle, round 6: underfoot (`hills_down`, `plains_down`, `plains_seed3`) real pasture — blades, moss cushions, clover, crumbled red earth with pebbles, no tile repeat, no hex seam; eye level (`hills_eye`, `plains_eye`, `hills_seed7`) the felt gone, blades near, fine strands through the mid field, the palette's patches beyond; dawn green-gold, dusk golden with the turf's relief, `hills_dusk_away` green; overcast, night, rain (the old lake, now with blades under the water), snow (covers as before); 12 m and aerial within 0.1 DN; dunes, scree, talus, mountain foot unchanged. Remaining, cosmetic: the soil's grey pebbles take a faint mauve from the orange `SOIL`; the blades lie flat (standing grass is `bevy_flora`'s).
+
+### Measurements
+
+- **Cost** (`bench_elements`, `hills`, `ELEMENTS_EYE=0,0,0 ELEMENTS_LOOK=12,-3,8 ELEMENTS_AGL=1.7`, 3840 × 2160, base and change interleaved, P5 for most samples; the opaque pass's **mean**, since at 4K the minimum reads 0.000 and at 1080p the clocks hop between P2, P3 and P5): the plan's shader 13.2-14.3 ms against the base's 6.8-7.2 (and 8.9-9.1 with no set). Anisotropy 16/4/1, a 512² set, grass alone, no relief and only the dominant tap all left it within noise: the shader's peak register count was the cost. Final: **no set 6.8-7.4 ms against the base's 7.1-7.3; with the set 8.8-9.4 ms, +26 %**, logged as the trade. The early prepass equal across runs (0.15-0.19 ms).
+- Means (ground region, sRGB DN, round 6 against the baseline): `hills_12`, `hills_aerial` within 0.1; rock and dunes 0.0; snow 0.2; the near meadow R +1.5..+5.5, G −0.6..−5.4 (the detail's variance through the tonemap).
+- Mirror: 30 terrain mirror tests (new: the fetch cut-off carries at most 0.5 % of the blend over 48 000 samples; the height blend fades where it is not resolved; an untextured layer keeps its grain). Gates 1-5 pass (23 integration GPU blocks, the four library GPU modules, `the_horizon_sky` alone).
+- The set: 1024² per layer, 11 levels, zstd: 15.8 MB (`assets/ground/ground.ktx2`, the sand layer neutral).
+
+### Sources
+
+- Iteration 45's (Andersson 2007, Heitz & Neyret 2018, Mikkelsen 2022, RTR4).
+- **Baldocchi, Xu & Kiang (2004)**, Agric. For. Meteorol. 123, DOI `10.1016/j.agrformet.2003.11.006` (corpus): the green canopy obscures bare soil and detritus; golden dead grass is summer's.
+- **Lagae et al. (2010)**, CGF 29(8), DOI `10.1111/j.1467-8659.2010.01827.x` (corpus): frequency clamping, for the height blend.
+
+### The next five items, ranked
+
+1. **Infiltration, so light rain soaks in** (`hills_rain`: the meadow a lake after 3 h of 4 mm/h). A per-cell loss at the soil's steady infiltration capacity (Horton; saturated conductivity by texture, Rawls et al.), none on rock, and none where a lake's bed is saturated; the puddle threshold perhaps tied to the turf's height. Research first; the conservation budget gains a term.
+2. **Wind ripples on the sand**, then the sand's texture: ripples oriented by `WindState`, asymmetric, with defects; the hex-tiled grains on top.
+3. **Stylistic variants**: a second set through `GroundTextures` (img2img over this set's sources for a painterly style), and a style switch in the examples.
+4. **Snow surface detail** (`hills_snow`: a flat white-out at 1.7 m).
+5. **The rock's PBR texture** on the joint-set structure (`attempt/iter-44-joint-sets`); the world's white edge.

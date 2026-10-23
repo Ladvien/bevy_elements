@@ -14,6 +14,9 @@
 //!   is the same every run, which is what temporal effects (cloud accumulation, rain, lightning,
 //!   wind, water flow, snow melt) are reviewed on. A run with `ELEMENTS_SHOT_DIR` and no
 //!   `ELEMENTS_FRAMES` captures until it is killed.
+//! - `ELEMENTS_GROUND_TEXTURES=0` renders the terrain's procedural ground alone, without the
+//!   detail textures in `assets/ground/` ([`GroundTextures`]). A binary run directly (not through
+//!   `cargo run`) finds the assets with `BEVY_ASSET_ROOT=<the repository>`.
 //!
 //! Keys: WASD + Q/E move (Shift ×5), hold the right mouse button to look, `[`/`]` halve/double the
 //! time scale, `T` +1 hour, `1`–`0` force a weather preset, `R` release to the scheduler.
@@ -138,7 +141,7 @@ impl Plugin for ExampleHarness {
                 .unwrap_or(0.0),
             pending: std::sync::Arc::default(),
         })
-        .add_systems(Startup, spawn_status)
+        .add_systems(Startup, (spawn_status, load_ground_textures))
         .add_systems(
             Update,
             (grow_weather, fly, clock_keys, weather_keys).before(ElementsSystems::Clock),
@@ -151,6 +154,21 @@ impl Plugin for ExampleHarness {
         .add_systems(PostStartup, scale_projections);
         ground::plugin(app);
     }
+}
+
+/// The examples' ground texture set, generated with golem and packed by
+/// `tools/ground-textures/prep.py` (`tools/ground-textures/golem.json`).
+fn load_ground_textures(mut commands: Commands, asset_server: Res<AssetServer>) {
+    if std::env::var("ELEMENTS_GROUND_TEXTURES").as_deref() == Ok("0") {
+        return;
+    }
+    // The set textures the soil and the grass; the sand stays procedural (tile 0) until it has a
+    // ripple field (`docs/research/ground-textures.md`, Deviation 15).
+    commands.insert_resource(GroundTextures {
+        image: Some(GroundTextures::load(&asset_server, "ground/ground.ktx2")),
+        tile_m: Vec3::new(0.0, 2.0, 2.0),
+        ..default()
+    });
 }
 
 /// The standard example camera: an `ElementsCamera` that flies, placed at `position` looking at

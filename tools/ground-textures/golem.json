@@ -1,0 +1,20 @@
+{
+  "about": "The examples' ground texture set: albedos generated with golem's generate_image (FLUX.2 klein 9B, 1024x1024, 4 steps, quantize 8, guidance 1) and packed by prep.py. tile_m is the physical size of one tile (GroundTextures::tile_m); tilt_deg the mean tilt of the derived normals. The sand is left out (packed neutral, its tile set to zero): it waits for a ripple field.",
+  "layers": {
+    "soil": {
+      "albedo": "golem/soil.jpg",
+      "tile_m": 2.0,
+      "tilt_deg": 10.0,
+      "seed": 4632,
+      "prompt": "photogrammetry texture scan of bare dry earth from directly overhead, brown loamy soil with crumbs and small clods, scattered small grey and brown pebbles and grit of many sizes, fine shallow cracks, a few thin dry roots, only mineral soil and stones, absolutely no leaves, no fallen leaves, no plant litter, no twigs, no flowers, irregular random distribution with no pattern and no focal point, uniform flat diffuse light, no shadows, no vignette, orthographic, edge to edge detail"
+    },
+    "grass": {
+      "albedo": "golem/grass.jpg",
+      "tile_m": 2.0,
+      "tilt_deg": 14.0,
+      "seed": 4628,
+      "img2img": "image_strength 0.6 from a parent generated with seed 4523 and the prompt below with 'a few fallen dry grass stems' (iteration 45's leaf-free pasture), which keeps its irregular layout and turns most of its straw green",
+      "prompt": "photogrammetry texture scan of a fresh green early summer pasture from directly overhead, living green grass blades crossing each other chaotically, irregular clumps, patches of moss and dark soil between them, only a very few thin dry stems, tiny clover leaves, no tree leaves, no flowers, uniform flat diffuse light, no shadows, no vignette, orthographic, edge to edge detail"
+    }
+  }
+}
