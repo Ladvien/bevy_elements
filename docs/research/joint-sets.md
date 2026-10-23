@@ -82,6 +82,34 @@ No new bindings or passes; the change is inside `rock_material`'s fragment code.
 5. **The block's value** (`ROCK_BLOCK_TONE` 0.22 → 0.12). Once the blocks wear their bed's colour, iteration 43's ±22 % read as a light-and-dark patchwork (round 4); a block of one bed is a lighter or darker piece of the same rock.
 6. **The joint's darkening** (`ROCK_JOINT_DARKEN` 0.76 → 0.40) and **width** (4.5–18 cm of band → a 1.2–3.0 cm trace): iteration 43, Palmström.
 
+Found during iteration 44's attempt, which did not ship (branch `attempt/iter-44-joint-sets`, `## Outcome` below):
+
+7. **The joints are rough.** One `perlin3_d` at 0.6 m displaces the three sets by up to a few centimetres (its value and gradient components are four independent fields) and varies each crack's aperture along it; a straight crack of one width is a mortar line (Palmström's rough and undulating joints). The bed's own boundaries are not displaced, so the bed's tone changes exactly at its parting.
+8. **Ledges.** Each layer draws a resistance; a layer more resistant than the one under it overhangs it by up to 0.35 m and shades its top in a band 1.5 times the overhang — the "cliff-and-bench" profile, where "the more resistant layers form the cliffs, or stairsteps, while the less resistant layers form gentle slopes" (Easterbrook, *Surface Processes and Landforms*, after Wikipedia's *Mesa*; the AGI *Glossary of Geology*'s structural benches, after Wikipedia's *Bench (geology)*).
+9. **The trace's anti-aliasing spans two pixels**, at the darkness that keeps its ink (`coverage = w / max(w, 2f)`), and **the bevel's floor is round** (zero slope at the crack). A bevel steepest at the crack flips the shading normal's sign across one pixel, and a gently sloping parting rendered as a sawtooth of lit and dark dashes (measured: rows of 117-118 against 75-89).
+10. **More jitter** (partings 0.8, joints 0.8): at 0.5 and 0.6 the layers of a thin bed were equal courses and the joints a brick bond.
+11. **The bed's inversion steps up as well as down.** `bed_span` (`bed_value` on `main`) corrects an overshot estimate but not an undershot one, so a bed changes up to 0.33 m past its own boundary (the failing test `the_partings_split_the_beds_into_layers_of_many_thicknesses`: 18 bed boundaries missed in 200 m). The fix also draws the bed's tone from the corrected index.
+
+## Outcome
+
+Iteration 44 stopped after five rounds, NOT YET at every round, and `main` keeps the baseline (`/tmp/i44/critique.md`, `docs/loop-log.md` iteration 44).
+
+| Round | Change | The face read as |
+|---|---|---|
+| 1 | Partings, systematic and cross joints, coverage traces, facets, bed colour everywhere | bedded rock at last; dashed partings close up; masonry in the thin beds |
+| 2 | Roughness, aperture, block value ±5 % | natural cracks; still dashed; a flat painted wall |
+| 3 | Two-pixel kernel, ledges | still dashed — measured: the bevel's sign flip, not the trace |
+| 4 | Round-floored bevel, face relief, more jitter, deeper ledges | dashes gone; isolated dark blocks (facet too strong) |
+| 5 | Facet 0.12 | stratified rock at 3-12 m; a quilted mottle at 30 m; wood grain under overcast |
+
+The model is right: it removed the chicken wire, and in direct light the cliff reads as bedded rock cut by joints. It is no slower (`bench_elements`, the cliff filling the frame, interleaved, P5 clocks: opaque pass minimum 1.394 ms against the base's 1.490 ms). What it lacks:
+
+1. A heavy-tailed **aperture** per joint and per parting — most tight, a few weathered open by decimetres — so master joints and recessed partings stay visible at 30 m and under overcast; with every joint a hairline that fades by coverage, only the continuous partings are left and the face is wood grain.
+2. A **multi-scale, aperiodic, band-limited** face relief: one 0.6 m octave of a gradient is a regular quilted mottle at 30 m.
+3. Partings of **unequal prominence**.
+
+Start from `attempt/iter-44-joint-sets`; its 22 mirror tests pass.
+
 ## Pending index
 
 - Bai 2000 (Stanford RFP, non-DOI): read from the URL above, not ingested.
