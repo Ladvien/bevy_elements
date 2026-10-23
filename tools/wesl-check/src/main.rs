@@ -223,7 +223,18 @@ fn main() {
         router.mount_resolver(namespace.parse().expect("a namespace"), stub);
     }
 
-    let compiler = wesl::Compiler::new_with_resolver(Default::default(), router);
+    // `keep_main`: a library module has no entry point, and stripping keeps only what an entry
+    // point reaches, so without it a library compiled to an *empty* string and "the WGSL is ok"
+    // checked nothing past the parser (a `let x: f32 = vec3<f32>(1.0);` in `textures.wesl`
+    // passed). Keeping the module's own declarations pulls in what they import, and
+    // `visibility: false` is how Bevy compiles the crate's shaders, so a `package` item imported
+    // across the crate's modules is not refused here when Bevy accepts it.
+    let options = wesl::CompileOptions {
+        keep_main: true,
+        visibility: false,
+        ..Default::default()
+    };
+    let compiler = wesl::Compiler::new_with_resolver(options, router);
 
     let mut failed = 0;
     for module in MODULES {
