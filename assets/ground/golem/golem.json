@@ -1,5 +1,5 @@
 {
-  "about": "The examples' ground texture set: albedos generated with golem's generate_image (FLUX.2 klein 9B, 1024x1024, 4 steps, quantize 8, guidance 1) and packed by prep.py. tile_m is the physical size of one tile (GroundTextures::tile_m); tilt_deg the mean tilt of the derived normals. The sand is left out (packed neutral, its tile set to zero): it waits for a ripple field.",
+  "about": "The examples' golem ground texture set: albedos generated with golem's generate_image (FLUX.2 klein 9B, 1024x1024, 4 steps, quantize 8, guidance 1), handed to TerrainTextures as photographs (GroundLayerTextures::photograph: de-lit, made tileable, the crate's colour kept; height, normal and occlusion derived). tile_m is the physical size of one tile (GroundLayerTextures::tile_m); tilt_deg the mean tilt of the derived normals (with_relief_deg). The sand is left out: it waits for a ripple field.",
   "layers": {
     "soil": {
       "albedo": "golem/soil.jpg",

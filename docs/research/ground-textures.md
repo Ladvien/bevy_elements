@@ -2,6 +2,8 @@
 
 Underfoot, the terrain is a procedural noise: the meadow is a soft green felt (`/tmp/i45/before/hills_down.png`), the sand a beige blotch (`dunes_down.png`), and from 12 m the hills read as a low-poly game (`hills_12.png`). Nothing at the scale of a blade, a grain or a clod. This note adds **PBR detail textures** — albedo, height, normal, roughness and occlusion — to the terrain's ground layers, sampled without visible tiling and blended by height, while the crate's procedural layers keep the macro colour. The textures are data a game supplies; without them the ground renders exactly as before (Deviation 5), and the examples use a set generated with golem.
 
+**Since iteration 50** the set is no longer a pre-packed resource: a game puts `TerrainTextures` on the terrain with ordinary PBR maps per layer and the crate packs them itself, `prep.py` ported into the crate and removed (`docs/research/terrain-textures.md`). The format, the shading and the derivations below are unchanged; Model adopted 9-10 and Deviation 14 describe the API and the tool they replaced.
+
 ## Sources
 
 - **Andersson, J. (2007)**, *Terrain Rendering in Frostbite Using Procedural Shader Splatting*, SIGGRAPH 2007 course "Advanced Real-Time Rendering in 3D Graphics and Games" (corpus `10.1145_1281500.1281668`): "combine low-resolution unique color maps for low-frequency details with multiple tiled detail maps for high-frequency details that are blended in at certain distance to the camera"; materials masked procedurally by slope with detail added by an overlay blend; "having multiple detail mask textures together with all other textures quickly eat performance and texture samplers", so channels are reused.

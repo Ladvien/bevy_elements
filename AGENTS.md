@@ -114,9 +114,12 @@ No system is implemented without its `docs/research/<system>.md`, committed firs
   47). Derive a late quantity from what is live there (the albedo, `n`, `rough`, `rockness`,
   `depth`) rather than carrying an early one. A uniform branch that never runs costs too: a
   branch skipping `TerrainLook`'s default cost +6 %, the branchless operator nothing (iteration
-  48). Measure with the opaque pass over the early prepass of the same run: the ratio cancels
-  Xvfb's clock hopping to about ±3 % within a P-state (prepass 0.15-0.18 ms at 4K, P5), where
-  the means alone swing 2×; a run that lands in P2 (prepass ~0.075 ms) reads ~10 % higher and is
+  48); three uniform colour lanes replacing the layer constants cost the textured meadow +8 %
+  even at a share of 0 (iteration 50), so an optional input goes behind its own shader def and
+  pipeline-key bit (`GROUND_COLOURS`), not a uniform. Measure with the opaque pass over the
+  early prepass of the same run: the ratio cancels Xvfb's clock hopping to about ±3 % within a
+  P-state (prepass 0.15-0.18 ms at 4K, P5), where the means alone swing 2×; a run that lands in
+  P2 (prepass ~0.075 ms) reads ~10 % higher and is
   discarded.
 - **`ELEMENTS_GROW_HOURS` grows the cover maps, not the water.** It advances the `WorldClock`,
   which wetness and snow integrate; the hydrology runs on `HydrologySettings::time_scale` (real

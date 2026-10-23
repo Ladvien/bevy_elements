@@ -341,23 +341,33 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
   `bench_elements` take `ELEMENTS_TINT` and `ELEMENTS_SATURATION`, `terrain_tour` also
   `ELEMENTS_GRADE_GLIDE`. See `docs/research/terrain-look.md`.
 
-- **PBR detail textures for the terrain's ground.** Underfoot the meadow was a soft green felt.
-  `GroundTextures { image, tile_m, grain }` lays physically based detail maps over the owned
-  terrain's sand, soil and grass: an albedo detail (a multiplier with mean 1, so the
-  landscape's colour does not move), a height, a normal and an occlusion, two layers of a 2D
-  array texture per ground layer. They are hex-tiled (Mikkelsen 2022: offset taps in eight
-  orientations, so a tile never repeats), blended between the layers by their heights (grass
-  blades stand out of the soil), and band-limited by the pixel's footprint, so nothing sparkles
-  and from 12 m on the ground is the procedural one (within 0.1 DN); a layer whose `tile_m` is
-  zero stays procedural. `GroundTextures::load` loads a set with the settings it needs (linear,
-  repeating, anisotropic). `tools/ground-textures/prep.py` packs any albedos (photographs, golem
-  generations, a stylised set) into the KTX2 array with every mip level, tileable, de-lit, with
-  the height, normal and occlusion derived. The examples load a golem-generated soil and grass
-  set from `assets/ground/` (excluded from the package; `ELEMENTS_GROUND_TEXTURES=0` turns it
-  off); the sand waits for wind ripples. Cost: the textured path is compiled only into the
-  pipeline of a material that has a set (`TerrainExtensionKey`), so without one the ground costs
-  what it did; with one the eye-level meadow's opaque pass rises 26 % (4K, interleaved, P5
-  clocks). See `docs/research/ground-textures.md`.
+- **PBR textures set on the terrain.** Underfoot the meadow was a soft green felt.
+  `TerrainTextures` on the `Terrain` entity takes, per ground layer (sand, soil, grass), a
+  `GroundLayerTextures`: a base colour and, optionally, a normal (+Y up; `flip_normal_map_y` for
+  DirectX maps), roughness (G), occlusion (R) and height (R) map, as a glTF material or a PBR
+  library stores them, and the tile's size. The crate packs them itself, off the frame (an
+  async task, 0.5 s for two layers of five 1024² maps), into physically based detail over its
+  procedural layers: an albedo detail (a multiplier with mean 1), a height, a normal, and
+  roughness and occlusion as multipliers with mean 1, deriving whatever a set leaves out from
+  its base colour; the base colour is a detail over the crate's calibrated colour, and
+  `with_colour(share)` lets the set's own mean colour replace the layer's at every distance (a
+  library's albedo is rarely calibrated: two CC0 libraries' sets measured 2-6.5 times the
+  crate's and bleach the hills taken whole). `GroundLayerTextures::photograph()` de-lights and
+  tiles a photograph or a generated image. The maps are hex-tiled (Mikkelsen 2022: offset taps
+  in eight orientations, so a tile never repeats), blended between the layers by their heights
+  (grass blades stand out of the soil), and band-limited by the pixel's footprint, so nothing
+  sparkles; a layer left `None` stays procedural. Inserting, changing or removing the component
+  re-textures the ground at runtime, the previous set rendering until the new one is packed, so
+  a set is a stylistic variant a game can swap. The examples wear golem-generated soil and
+  grass photographs from `assets/ground/golem/` (excluded from the package;
+  `ELEMENTS_GROUND_TEXTURES=0` leaves them off, `ELEMENTS_GROUND_SWAP=S` toggles them,
+  `ELEMENTS_GROUND_COLOUR=c` sets their colour share); the sand waits for wind ripples. Cost:
+  the textured path is compiled only into the pipeline of a material that has a set
+  (`TerrainExtensionKey`), so without one the ground costs what it did; with one the eye-level
+  meadow's opaque pass rises 26 % (4K, interleaved, P5 clocks), and a set that takes its own
+  colour runs its own pipeline (`GROUND_COLOURS`), since the colour lanes read in the hot path
+  cost a further 8 %. See `docs/research/terrain-textures.md` and
+  `docs/research/ground-textures.md`.
 
 - **Rocks on the ground.** The crate's ground was an empty carpet: every stone in it was
   painted into the terrain's material, so nothing on a meadow, a hillside or below a cliff had a

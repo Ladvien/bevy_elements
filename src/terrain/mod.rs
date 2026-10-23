@@ -16,6 +16,7 @@ mod gpu_tests;
 pub(crate) mod lod;
 mod material;
 pub(crate) mod model;
+mod textures;
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -42,8 +43,8 @@ use bevy::transform::TransformSystems;
 pub(crate) use gpu::TerrainDispatch;
 use lod::{BoundsTree, LodConfig, Patch, select_patches};
 pub use material::{
-    GroundExtension, GroundMaterial, GroundParams, GroundTextures, TerrainExtension,
-    TerrainExtensionKey, TerrainLook, TerrainMaterial, TerrainMaterialParams,
+    GroundExtension, GroundMaterial, GroundParams, TerrainExtension, TerrainExtensionKey,
+    TerrainLook, TerrainMaterial, TerrainMaterialParams,
 };
 pub(crate) use material::{NO_TERRAIN, insert_placeholder, lod_uniform, shadow_inputs};
 use model::{
@@ -51,6 +52,7 @@ use model::{
     resolve_resolution, seed_mix,
 };
 pub use model::{TerrainGrid, TerrainSnapshot};
+pub use textures::{GroundLayerTextures, TerrainTextures};
 
 /// Largest readback edge: a larger simulation grid is box-averaged down by 2 first.
 const READBACK_MAX_CELLS: u32 = 1024;
@@ -436,13 +438,14 @@ impl Plugin for TerrainPlugin {
             MaterialPlugin::<GroundMaterial>::default(),
         ))
         .init_resource::<TerrainRuntime>()
-        .init_resource::<GroundTextures>()
+        .init_resource::<textures::GroundTexturePack>()
         .init_resource::<TerrainLook>()
         .add_systems(Update, ensure_terrain.in_set(ElementsSystems::Simulation))
         .add_systems(
             Update,
             (
                 read_terrain.in_set(ElementsSystems::Readback),
+                textures::pack_terrain_textures,
                 material::update_materials,
             )
                 .chain()
