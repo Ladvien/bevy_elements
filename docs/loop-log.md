@@ -3735,3 +3735,97 @@ compared). The saving is a direction, not a measurement.
    lights the *ground* and not the *rain*. A hook for a game's own lights in the precipitation
    and cloud passes would close it; the ownership map keeps the geometry in `bevy_flora`, but
    the lighting hook is this crate's.
+
+## Iteration 42 - 2026-10-22 - rocks on the ground: a scatter of boulders and stones, not a painted texture
+
+**Commits:** `3402ca6` (iteration 41's record corrected), `f2be650` (the research note `docs/research/rock-scatter.md`), `baee56c` (the implementation with its tests), `761275f` (the README section and showcase `docs/rocks.png`, the changelog and the note's deviations), this log. **Sibling repos:** none. **Not released.**
+
+The user's focus for this run: "better looking terrain, more variety, scattering rocks and debris, stuff to make the ground look more realistic", with stylistic variants of everything to follow.
+
+### Iteration 41's record, corrected first
+
+Iteration 41's log said its benchmark ran "eight trials each"; the run hit its 3000 s timeout after six baseline and five change trials, and a 3 % gap between two minima of a bimodal reading is inside the card's noise. The log and the changelog now say so, and the saving is "no slower", not "3.2 % faster" (`3402ca6`).
+
+### Candidates
+
+| Rank | Candidate | Class | Decision |
+|---|---|---|---|
+| 1 | **The ground is an empty carpet**: nothing on a meadow, a hillside or below a cliff has a silhouette or a shadow; every stone is painted into the terrain's material (`/tmp/i42/before/hills_eye.png`, `hills_ground.png`, `mtn_foot.png`) | 2 (the user's focus) | **this iteration** |
+| 2 | The cliff's joints read as a web of flat grey ribbons, chicken wire over every near cliff (`/tmp/i42/crop_web.png`; also in iteration 40's showcase `docs/block_sizes.png`) | 1 | next |
+| 3 | Saturated blue-black lens pits on the cliff's shaded fragment flanks at dusk (`/tmp/i42/crop_pits.png`) | 1 | carried |
+| 4 | The world ends at 1 km in aerial views: a white plane beyond the 2 km terrain (`hills_aerial.png`) | 1 | carried |
+| 5 | Stylistic variants of the crate's materials (the user's next area) | 3 | carried |
+
+Rank 1 beat the class-1 web because the user named the scatter as the focus, and because the rocks are their own material, so they neither depend on nor hide the web; the web is ranked first for the next iteration.
+
+### What changed
+
+- **`RocksPlugin`** (in `ElementsPlugins`): boulders and stones as meshes over the `Terrain`.
+  - **Where**: Golombek's total cover `k` per point from the terrain readback - a **talus** in the scree's band of slope (16-40°) *below a cliff* (the steepest of four points 6-36 m up the slope, as rock), angular blocks; the **meadow**: Golombek's plain (1.5 %), up to rocky ground (5 %) in patches 220 m across and on steep hillsides (Verdian: faster erosion, more rock at the surface); both scaled by an 18 m cluster field so rocks gather in heaps; nothing above 40° and nothing on sand (sediment over 0.15-0.5 m).
+  - **How big**: Golombek's exponential law, rocks of `D` or more cover `k·exp(−(1.79 + 0.152/k)·D)`; four size classes from 0.25 to 3.6 m, each a jittered lattice whose cell is its footprint and a hashed threshold against the expected count (HZD's density-and-dither placement, on the CPU), the diameter by inverse transform.
+  - **What shape**: twelve shapes, a block cut by six jittered joint planes and chips under a soft minimum with analytic normals; angular (sharp edges, the talus) and rounded (worn, the meadow); squashed to Verdian's talus axis ratios (b:a 0.55-0.85, c:a 0.30-0.55), lying on the largest face, tilted 70 % to the slope, a quarter to a third buried.
+  - **Where exactly it sits**: on the surface the CDLOD patches draw - the readback on the covering patch's lattice (its own triangles), blended to the next level by the vertex shader's morph factor; each rock caches its two lattice heights and morphs between them as the camera moves.
+  - **How far**: to `ElementsQuality::rock_range() · D` (100 m per metre at High), shrinking to nothing over the last fifth; a near and a far mesh (1280 and 320 triangles) switch at 22·D.
+  - **Material**: `WeatheredMaterial` with the terrain rock's albedo, the palette's four tones at 60 % per shape, a darkened base, and a **stone grain**.
+- **`WeatheredExtension::with_grain(feature_m)`**: a mottle at the grain's size and a speckle at an eighth, two octaves each of the terrain's band-limited 3D noise, on the albedo and the shading normal.
+- **`TerrainSnapshot::sediment`** (breaking for struct literals): the readback copies the sediment beside the surface.
+- `ElementsQuality::rock_range`; `RockSettings`, `ScatteredRock`, `RockStats`.
+- `terrain_tour`: `ELEMENTS_FLY`; `bench_elements`: `ELEMENTS_EYE`/`LOOK`/`AGL`, `ELEMENTS_ROCKS=off`, `per_view_shadow_pass` reported; `vec3_env` moved to `examples/common`.
+- `AGENTS.md`: the trap that a crossfading `VisibilityRange` leaves black holes under the depth prepass.
+
+### Sources
+
+- **Golombek, M. P. et al. (2021)**, *Rock size-frequency distributions at the InSight landing site, Mars*, Earth and Space Science 8, DOI `10.1029/2021EA001959` (the Caltech authors repository's PDF, read): the exponential model `Fk(D) = k exp[−q(k) D]`, `q(k) = 1.79 + 0.152/k`; abundances of 1-2 % on plains and 4-5 % on rocky ground; "the usual hemisphere of one half the diameter". Golombek & Rapp 1997 not obtained (Wiley 403).
+- **Verdian, J. P. et al. (2021)**, Earth Surface Dynamics 9:1073, DOI `10.5194/esurf-9-1073-2021`: talus b:a and c:a 0.57-0.64 and 0.26-0.36, Domokos's 0.67 and 0.45; "bedrock exposures (and thus areas with TR ∼ 0) are patchy"; "faster erosion should generally lead to larger initial particle sizes".
+- **Galin, E. et al. (2019)**, *A Review of Digital Terrain Modeling*, CGF 38(2), DOI `10.1111/cgf.13657` (corpus): talus angle 30-45°, accretion cones "at the bottom of cliffs", spheroidal weathering rounds edges first.
+- **van Muijden, J. (2017)**, *GPU-Based Procedural Placement in Horizon Zero Dawn*, GDC 2017 (Guerrilla's slides PDF): density maps, a dither pattern with spacing = footprint, range and threshold tests; ~250 µs for 100 000+ objects; per-rock colour variance maps.
+- The crate's own `scree.md`, `rock-palette.md`, `rock-material.md`, `terrain.md`, `wetness.md`.
+
+### The critique and the verdicts (`/tmp/i42/critique.md`)
+
+| Round | Finding | Verdict |
+|---|---|---|
+| 1 | No rocks on the hills (a 0.4 % floor gives `q = 39.8`: rocks of 25 cm and up cover 2·10⁻⁷); black dithered checkerboards on every fading rock; potatoes | FAIL |
+| 2 | Mask did not fix the black (shadows off: same; abrupt ranges: gone); shapes still loaves; basalt rocks painted blue | FAIL |
+| 3-5 | Shrink fade (no black); polyhedral blocks; tone at 60 %; mottle + speckle grain (the plan's fBm showed only smooth bands at 5×) | NOT YET |
+| 6 | A dense ribbon of talus along a grass flank with no cliff (a dry-stone wall); even "chocolate chip" spacing on the aprons | NOT YET |
+| 7-8 | Talus only below a cliff; clusters on talus and meadow | GREAT (talus, shapes, grain, seat, fade, rules, snow) |
+
+| Feature | Verdict |
+|---|---|
+| Talus aprons below cliffs | GREAT |
+| Shapes | GREAT |
+| Stone grain | GREAT |
+| Seat, burial, contact shadows | GREAT |
+| No pop (glide) | GREAT |
+| Placement rules (cliffs, sand, dunes) | GREAT |
+| Snow on the tops | GREAT |
+| Rain on rocks | NOT YET (cosmetic: the weathered material's own wet response darkens them but adds little gloss; unchanged by this iteration) |
+| The flat meadow | correct and sparse (Golombek's 1.5 % plain); a game wanting a stonier pasture raises `meadow_cover` |
+| The cliff's joint web | FAIL (pre-existing, iteration 40; rank 1 next) |
+
+### Measurements
+
+- **The rocks are there.** At High the mountains' rings hold about **6 000 rocks** around a camera in the talus (5 900–6 300 through the glide, counted by the seat pass with the cliff rule in place); the hills' flat meadow a few dozen in view, a rocky patch dozens at eye level (`/tmp/i42/r8/patch_eye.png`). Dunes: none.
+- **The law holds through the placement** (`the_scatter_reproduces_the_cumulative_area`): over a 0.6 km² patch at `k = 0.30`, rocks of 1 m and up cover the law's `F(1) − F(3.6)` within 25 %.
+- **Placement rules** (`no_rock_on_the_cliff_or_the_sand_and_the_talus_is_dense`, `a_talus_lies_below_a_cliff_and_nowhere_else`): no rock on a 45° face, on 0.8 m of sand or on a sand flat; below a 60° cliff the 26° apron is angular blocks and at least 5× as dense per metre as the same slope 70 m further down (rounded); a uniform 26° hillside with no cliff above holds no talus.
+- **Not a lattice** (`the_scatter_is_not_a_lattice`): Clark–Evans ratio between 0.85 and 1.6. **Deterministic** (`a_tile_built_twice_holds_the_same_rocks`). **Shapes** (`the_shapes_are_slabs_and_blocks_not_spheres`, `the_meshes_are_closed_and_face_out`, `the_angular_family_has_flat_faces_and_the_rounded_one_does_not`, `the_palette_is_the_rocks_mean`). **Seat** (`the_seat_is_the_surface_the_patches_draw`): level 0 is the readback at the nodes, a quad is its triangles, a fully morphed level is the next one.
+- **GPU cost.** `bench_elements`, High, 1920 × 1080, `mountains`, the camera in the densest talus (`ELEMENTS_EYE=45,0,52 ELEMENTS_LOOK=10,0,30 ELEMENTS_AGL=1.7`), rocks on and `ELEMENTS_ROCKS=off` interleaved, five trials each, the minimum over the diagnostic history:
+
+  | Pass | Rocks on | Rocks off | Δ |
+  |---|---|---|---|
+  | `main_opaque_pass_3d` | 1.050 ms | 0.938 ms | +0.112 ms |
+  | `early prepass` | 0.048 ms | 0.041 ms | +0.007 ms |
+  | `per_view_shadow_pass` | 0.071 ms | 0.066 ms | +0.005 ms |
+
+  **About +0.12 ms**, under the note's 0.3 ms budget. The clocks were logged in the same script: the card sat in **P5 (median 660 MHz) for 1433 of 1501 samples** and reached P2 for 38, so these are upper bounds; a 3840 × 2160 run stayed in P5 too (451 of 601 samples, Xvfb's presentation is the bottleneck) and never left the bench's warm-up in 150 s.
+- **CPU cost.** A glide at 8 m/s through the talus (`ELEMENTS_FLY=8`, 600 frames, the first 60 dropped): the placement (`scatter`) mean **0.033 ms**, p95 0.06 ms, max 1.0 ms (a frame that builds tiles); the seat (`seat_rocks`) mean **0.134 ms**, p50 0.114 ms, p95 1.02 ms, max 1.21 ms - the p95 is the full re-read when the terrain's surface version moves (hydrology steps it). Before each rock cached its two lattice heights the seat read 0.425 ms mean and 0.649 ms p50; the last frame of the glide is the same picture either way (0.74 of 921 600 pixels differ).
+- **The full gate.** `cargo test` 327 (the rocks' 11 and the snapshot's sediment check new), clippy, doc, wasm, the WESL check, the GPU integration suite (57 passed), the lib GPU modules clouds (10), terrain (8), cover (8) and dust (6), and `the_horizon_sky` alone: all pass.
+
+### The next five items, ranked
+
+1. **The cliff's joints read as chicken wire.** Every near cliff wears a web of flat, constant-width grey ribbons crossing each other (`/tmp/i42/crop_web.png`, `mtn_foot`, `mtn_dusk`, and iteration 40's showcase). A joint is a thin dark shadowed step, not a grey band laid over the rock. Class 1, and now beside real rock meshes it is the worst thing in a mountain frame.
+2. **The painted scree reads as polka dots beside real stones.** The terrain material's scree (iteration 34) paints round domes on the apron; with mesh rocks on it they read flat. Fade the painted stones where the mesh talus is dense, or reshape them.
+3. **Stylistic variants** (the user's next area): a style knob over the crate's materials - the rock palette, the turf palette, the rocks' grain and tone, the sky's grading - starting with the ground.
+4. **The world ends at 1 km in aerial views** (`hills_aerial.png`): a white plane beyond the terrain's edge.
+5. **Blue-black pits on the cliff's shaded fragments at dusk** (`crop_pits.png`).
