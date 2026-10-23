@@ -18,7 +18,8 @@ Issue #35 (Sanctuary, an isometric siege game on the crate's owned `Terrain` at 
 3. **The canopy is read before the grade.** The wet grass's share (`canopy_share`, the albedo's excess green) is taken from the ungraded colour, so a desaturated or blue-graded meadow still beads the rain as grass (an excess green of a grey ground would be 0 and the meadow would take the porous sheen).
 4. **Identity is exact.** The default (`tint` 1, `saturation` 1) skips the operator by a branch on the uniform, coherent across the draw, so the default renders as before: no `grey + (c − grey)` rounding.
 5. **A uniform, not a key.** `TerrainMaterialParams` gains `look: Vec4` (tint, saturation); `update_materials` re-prepares the material when it changes, as it does for the ripple phases every frame in rain. The pipeline key (`TerrainExtensionKey`) is untouched, so a look written every frame compiles nothing.
-6. **Out of scope:** `TerrainRender::External` / `GroundMaterial`, whose base colour is the game's own `StandardMaterial` and which the game can grade itself; the rock's geometry (`RocksPlugin`'s meshes, `WeatheredMaterial` with the game's colour).
+6. **The scattered rocks follow the ground.** `RocksPlugin`'s boulders and stones are the crate's own debris on the terrain, drawn with one shared `WeatheredMaterial` whose per-rock tones are vertex colours; a grade that left them out would leave warm tan stones on a cool graded ground (`/tmp/i48/after/mtn_graded.png`). Their material's uniform gains the same `look` lane, written from `TerrainLook` when it changes, and the weathered shader applies the same operator after the vertex colours and the stone grain and before the weather. A `WeatheredMaterial` a game makes keeps the identity (its own colours are the game's to grade).
+7. **Out of scope:** `TerrainRender::External` / `GroundMaterial`, whose base colour is the game's own `StandardMaterial` and which the game can grade itself; a game's own `WeatheredMaterial`s.
 
 ## Parameters
 
@@ -32,6 +33,7 @@ Issue #35 (Sanctuary, an isometric siege game on the crate's owned `Terrain` at 
 
 - `render.wesl`: `TerrainMaterialParams.look`; after the albedo is complete and `canopy_share` has read it, `if any(material.look != vec4(1.0))` applies the operator (a dot product, a multiply-add, a max, a multiply). The albedo is live at that point, so nothing new is carried across `rock_material` (`AGENTS.md`).
 - `material.rs`: the field, packed from `Res<TerrainLook>` in `update_materials` (saturation clamped at 0 there); a changed look re-prepares the material, as any parameter change does.
+- `weathered`: `WeatheredExtension` gains a private `look: Vec4` in its `#[uniform(100)]` block (identity by default; its other uniform fields are private, so no caller builds it by struct literal), `weathered.wesl` grades the base colour with it; `rocks` writes `TerrainLook` into its shared material when the look changes.
 - No binding, texture or shader def. Cost: a uniform branch on the default; four ALU when graded.
 
 ## What great looks like
@@ -54,7 +56,7 @@ The issue's acceptance criteria, each with how it is checked:
 
 ## Deviations from this plan
 
-None from the issue's API. The order of the two operations (saturation, then tint) and the canopy read before the grade are this note's (Model adopted 2-3), with the reasons there.
+None from the issue's API. The order of the two operations (saturation, then tint) and the canopy read before the grade are this note's (Model adopted 2-3), with the reasons there. The scattered rocks are graded too (Model adopted 6), which the issue does not ask for: it lists the bare ground's rock among what a grade must reach, and the crate's own stones lying on that ground are part of it.
 
 ## Pending index
 
