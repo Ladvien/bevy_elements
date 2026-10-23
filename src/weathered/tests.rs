@@ -2,7 +2,7 @@
 //! (Validation 6, 7, 10) and `docs/research/snow-cover.md` (Validation 2), through the
 //! transliteration of `surface_cover.wesl` in `mirror.rs`.
 
-use bevy::math::{Vec2, Vec3};
+use bevy::math::{Vec2, Vec3, Vec4};
 
 use super::mirror::{self, Surface};
 use super::model;
@@ -496,4 +496,66 @@ fn the_grass_is_canopy_and_the_bare_ground_is_not() {
         "brightness",
     );
     assert_eq!(mirror::canopy_share(Vec3::ZERO), 0.0);
+}
+
+/// terrain-look.md Model adopted 2 and 4 (issue #35): the grade is the identity at its default
+/// and a tint scales the albedo, both within a float's rounding (the operator is branchless);
+/// saturation 0 is the colour's own luminance, the saturation comes before the tint, and no
+/// channel goes below zero.
+#[test]
+fn the_terrain_grade_is_the_issues_operator() {
+    let luma = |c: Vec3| c.dot(Vec3::new(0.2126, 0.7152, 0.0722));
+    let near = |a: Vec3, b: Vec3, what: &str| {
+        for (x, y) in [(a.x, b.x), (a.y, b.y), (a.z, b.z)] {
+            close(x, y, 1e-6, what);
+        }
+    };
+    let colours = [
+        Vec3::new(0.0397, 0.0835, 0.0134),
+        Vec3::new(0.5382, 0.3931, 0.1960),
+        Vec3::new(0.076, 0.071, 0.066),
+        Vec3::new(0.1, 0.3, 0.7),
+    ];
+    for c in colours {
+        near(
+            mirror::graded(c, Vec4::ONE),
+            c,
+            "the default is the identity",
+        );
+        near(
+            mirror::graded(c, Vec4::new(0.5, 0.5, 0.5, 1.0)),
+            c * 0.5,
+            "a tint of 0.5 halves the albedo",
+        );
+        let grey = mirror::graded(c, Vec4::new(1.0, 1.0, 1.0, 0.0));
+        assert!(
+            (grey.max_element() - grey.min_element()).abs() < 1e-6,
+            "saturation 0 has no chroma: {grey:?}"
+        );
+        close(
+            luma(grey),
+            luma(c),
+            1e-6,
+            "saturation 0 keeps the luminance",
+        );
+        // Negative saturation is taken as zero.
+        assert_eq!(mirror::graded(c, Vec4::new(1.0, 1.0, 1.0, -2.0)), grey);
+        // Oversaturated, no channel below zero.
+        assert!(mirror::graded(c, Vec4::new(1.0, 1.0, 1.0, 4.0)).min_element() >= 0.0);
+    }
+    // The saturation comes first: a cool tint on a grey ground stays the tint's colour.
+    let cool = Vec3::new(0.6, 0.7, 1.0);
+    let night = mirror::graded(colours[0], cool.extend(0.0));
+    close(
+        night.x / night.z,
+        cool.x / cool.z,
+        1e-5,
+        "the tint survives",
+    );
+    close(
+        night.y / night.z,
+        cool.y / cool.z,
+        1e-5,
+        "the tint survives",
+    );
 }

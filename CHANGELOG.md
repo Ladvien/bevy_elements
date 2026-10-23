@@ -310,6 +310,21 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ### Added
 
+- **`TerrainLook`: a game grades the owned terrain's ground** (issue #35). The terrain's shader
+  writes its own albedo, so a game that grades its materials per palette could not grade the
+  ground: at night the meadow's green showed through a navy veil as olive. `TerrainLook {
+  tint, saturation }` (a resource, default identity) grades the bare ground — rock, soil, grass,
+  sand and scree, textured or not — and the scattered rocks lying on it: the saturation first
+  around the colour's own linear Rec. 709 luminance (0 grey, above 1 oversaturated, negative
+  taken as 0), then the tint, so a cooling tint survives a desaturation; before the ground
+  cover, so snow and standing water keep their colours and wet grass still beads the rain. The
+  default renders the ground as before (within a float's rounding, below one 8-bit level; a
+  branch that skipped it bit-exactly cost the 4K opaque pass 6 %, the branchless operator
+  nothing measurable), and a change is a uniform write, so a palette blend can write it every
+  frame without compiling a pipeline (tested over 240 frames). `terrain_tour` and
+  `bench_elements` take `ELEMENTS_TINT` and `ELEMENTS_SATURATION`, `terrain_tour` also
+  `ELEMENTS_GRADE_GLIDE`. See `docs/research/terrain-look.md`.
+
 - **PBR detail textures for the terrain's ground.** Underfoot the meadow was a soft green felt.
   `GroundTextures { image, tile_m, grain }` lays physically based detail maps over the owned
   terrain's sand, soil and grass: an albedo detail (a multiplier with mean 1, so the

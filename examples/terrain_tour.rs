@@ -10,6 +10,9 @@
 //! - `ELEMENTS_FLY=8` glides the camera forward at 8 m/s along its view's heading, held
 //!   `ELEMENTS_AGL` (default 6) metres above the ground: a moving capture for what streams with
 //!   the camera (the scattered rocks' rings and their fade). Use it with `ELEMENTS_SHOT_DIR`.
+//! - `ELEMENTS_TINT=r,g,b` and `ELEMENTS_SATURATION=s` grade the bare ground (`TerrainLook`);
+//!   `ELEMENTS_GRADE_GLIDE=8` glides between the default and that grade and back every 8 s,
+//!   written every frame, as a palette blend would.
 //!
 //! `cargo run --release --example terrain_tour`
 
@@ -19,7 +22,7 @@ use std::time::Duration;
 
 use bevy::prelude::*;
 use bevy_elements::*;
-use common::{ExampleHarness, camera, stand_on_ground, units, vec3_env};
+use common::{ExampleHarness, camera, stand_on_ground, terrain_look_env, units, vec3_env};
 
 fn main() {
     let hour = std::env::var("ELEMENTS_HOUR")
@@ -35,7 +38,7 @@ fn main() {
         )
         .insert_resource(Climate::temperate())
         .add_systems(Startup, setup)
-        .add_systems(Update, glide)
+        .add_systems(Update, (glide, grade_glide))
         .run();
 }
 
@@ -57,6 +60,25 @@ fn glide(env: Environment, time: Res<Time>, mut cameras: Query<(&mut Transform, 
     }
 }
 
+/// The grade the ground glides to and back (`ELEMENTS_GRADE_GLIDE`), and the period, s.
+#[derive(Resource)]
+struct GradeGlide {
+    target: TerrainLook,
+    period: f32,
+}
+
+fn grade_glide(time: Res<Time>, glide: Option<Res<GradeGlide>>, mut look: ResMut<TerrainLook>) {
+    let Some(glide) = glide else {
+        return;
+    };
+    let t = 0.5 - 0.5 * (std::f32::consts::TAU * time.elapsed_secs() / glide.period).cos();
+    let base = TerrainLook::default();
+    *look = TerrainLook {
+        tint: base.tint.lerp(glide.target.tint, t),
+        saturation: base.saturation + (glide.target.saturation - base.saturation) * t,
+    };
+}
+
 fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -75,6 +97,15 @@ fn setup(
         _ => Terrain::procedural(ProceduralTerrain::hills(seed)),
     };
     commands.spawn(terrain);
+    if let Some(target) = terrain_look_env() {
+        match std::env::var("ELEMENTS_GRADE_GLIDE")
+            .ok()
+            .and_then(|p| p.parse::<f32>().ok())
+        {
+            Some(period) => commands.insert_resource(GradeGlide { target, period }),
+            None => commands.insert_resource(target),
+        }
+    }
     if let Some(n) = std::env::var("ELEMENTS_WEATHER")
         .ok()
         .and_then(|w| w.parse::<usize>().ok())

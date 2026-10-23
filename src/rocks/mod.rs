@@ -17,7 +17,7 @@ use bevy::prelude::*;
 
 use crate::plugin::{ElementsQuality, ElementsSystems, ElementsUnits, ElementsView};
 use crate::query::EnvironmentSnapshot;
-use crate::terrain::{TerrainRuntime, TerrainSnapshot, TerrainState};
+use crate::terrain::{TerrainLook, TerrainRuntime, TerrainSnapshot, TerrainState};
 use crate::weathered::{WeatheredExtension, WeatheredMaterial, WeatheredPlugin};
 use mesh::{FAR_SUBDIVISIONS, NEAR_SUBDIVISIONS, SHAPES, ShapeInfo, rock_geometry, rock_mesh};
 use model::{
@@ -113,7 +113,29 @@ impl Plugin for RocksPlugin {
                 (update_levels, scatter, seat_rocks)
                     .chain()
                     .after(ElementsSystems::Readback),
-            );
+            )
+            .add_systems(Update, grade_rocks);
+    }
+}
+
+/// The scattered rocks are the crate's own debris on the terrain, so they take the terrain's grade
+/// ([`TerrainLook`], `docs/research/terrain-look.md`): written into their shared material only
+/// when it differs, so a still look re-prepares nothing.
+fn grade_rocks(
+    look: Option<Res<TerrainLook>>,
+    assets: Option<Res<RockAssets>>,
+    materials: Option<ResMut<Assets<WeatheredMaterial>>>,
+) {
+    let (Some(look), Some(assets), Some(mut materials)) = (look, assets, materials) else {
+        return;
+    };
+    let packed = look.packed();
+    if materials
+        .get(&assets.material)
+        .is_some_and(|m| m.extension.look != packed)
+        && let Some(mut material) = materials.get_mut(&assets.material)
+    {
+        material.extension.look = packed;
     }
 }
 

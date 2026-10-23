@@ -2,7 +2,7 @@
 //! to check the shading numbers of `docs/research/wetness.md`, `docs/research/wet-ground.md` and
 //! `docs/research/snow-cover.md`.
 
-use bevy::math::{IVec3, Vec2, Vec3, Vec3Swizzles};
+use bevy::math::{IVec3, Vec2, Vec3, Vec3Swizzles, Vec4};
 
 use crate::gpu::noise_mirror::{hash33, perlin3_d};
 
@@ -174,8 +174,16 @@ pub(crate) fn wet_canopy(colour: Vec3, wetness: f32) -> Vec3 {
     if wetness <= 0.0 {
         return colour;
     }
+    saturated(colour, 1.0 + WET_LEAF_SATURATE * wetness)
+}
+
+pub(crate) fn saturated(colour: Vec3, s: f32) -> Vec3 {
     let grey = Vec3::splat(colour.dot(Vec3::new(0.2126, 0.7152, 0.0722)));
-    (grey + (colour - grey) * (1.0 + WET_LEAF_SATURATE * wetness)).max(Vec3::ZERO)
+    (grey + (colour - grey) * s).max(Vec3::ZERO)
+}
+
+pub(crate) fn graded(albedo: Vec3, look: Vec4) -> Vec3 {
+    saturated(albedo, look.w.max(0.0)) * look.truncate()
 }
 
 pub(crate) fn canopy_share(colour: Vec3) -> f32 {

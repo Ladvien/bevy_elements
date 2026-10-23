@@ -112,9 +112,12 @@ No system is implemented without its `docs/research/<system>.md`, committed firs
   cost +5 % of the 4K opaque pass on dry ground, and folding the three into one value before the
   call cost +20 %, while the same share read from the albedo after the call was free (iteration
   47). Derive a late quantity from what is live there (the albedo, `n`, `rough`, `rockness`,
-  `depth`) rather than carrying an early one. Measure with the opaque pass over the early
-  prepass of the same run: the ratio cancels Xvfb's clock hopping to about ±3 %, where the
-  means alone swing 2×.
+  `depth`) rather than carrying an early one. A uniform branch that never runs costs too: a
+  branch skipping `TerrainLook`'s default cost +6 %, the branchless operator nothing (iteration
+  48). Measure with the opaque pass over the early prepass of the same run: the ratio cancels
+  Xvfb's clock hopping to about ±3 % within a P-state (prepass 0.15-0.18 ms at 4K, P5), where
+  the means alone swing 2×; a run that lands in P2 (prepass ~0.075 ms) reads ~10 % higher and is
+  discarded.
 - **`ELEMENTS_GROW_HOURS` grows the cover maps, not the water.** It advances the `WorldClock`,
   which wetness and snow integrate; the hydrology runs on `HydrologySettings::time_scale` (real
   time by default), so a 10 s capture of 3 grown hours of rain has soaked ground and about

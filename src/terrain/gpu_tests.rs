@@ -691,3 +691,86 @@ fn every_patch_bounds_its_displaced_vertices() {
     }
     finish(&mut app);
 }
+
+/// Issue #35, acceptance 4 (`docs/research/terrain-look.md`): a `TerrainLook` written every frame
+/// is a uniform write. Over 240 frames of a changing grade the render world's pipeline count does
+/// not grow, and the terrain's material carries the last grade written.
+#[test]
+#[ignore = "needs a GPU"]
+fn a_look_written_every_frame_compiles_nothing() {
+    use bevy::render::render_resource::PipelineCache;
+    use bevy::render::{Render, RenderApp};
+
+    use super::{TerrainLook, TerrainMaterial};
+
+    let _lock = serial();
+    let counts: Arc<Mutex<Vec<usize>>> = Arc::default();
+    let mut app = App::new();
+    app.add_plugins((support::headless_plugins(), ElementsPlugins))
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )))
+        .insert_resource(ElementsQuality::Low)
+        .add_systems(
+            Startup,
+            |mut commands: Commands, mut images: ResMut<Assets<Image>>| {
+                commands.spawn((
+                    Camera3d::default(),
+                    support::image_target(&mut images),
+                    ElementsCamera::default(),
+                    Transform::from_xyz(0.0, 60.0, 0.0)
+                        .looking_at(Vec3::new(200.0, 0.0, 200.0), Vec3::Y),
+                ));
+                commands.spawn(Terrain::procedural(ProceduralTerrain::hills(42)));
+            },
+        );
+    // The render world leaves the app at `finish`, so its counter is registered before.
+    let sink = counts.clone();
+    app.sub_app_mut(RenderApp)
+        .add_systems(Render, move |cache: Res<PipelineCache>| {
+            sink.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(cache.pipelines().count());
+        });
+    support::finish(&mut app);
+    run_until(&mut app, "the terrain", live);
+    // Everything the scene draws is compiled (synchronously) in its first frames.
+    for _ in 0..60 {
+        app.update();
+    }
+    let last = |counts: &Arc<Mutex<Vec<usize>>>| {
+        *counts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .last()
+            .expect("the render world ran")
+    };
+    let before = last(&counts);
+    let mut written = TerrainLook::default();
+    for frame in 0..240 {
+        let t = frame as f32 / 239.0;
+        written = TerrainLook {
+            tint: Vec3::new(1.0 - 0.5 * t, 1.0 - 0.4 * t, 1.0),
+            saturation: 1.0 - 0.6 * t,
+        };
+        app.insert_resource(written);
+        app.update();
+    }
+    // Two more frames: the render world runs one behind the main world.
+    app.update();
+    app.update();
+    let after = last(&counts);
+    assert!(before > 0, "the render world cached no pipeline");
+    assert_eq!(
+        after, before,
+        "pipelines were compiled while the look changed"
+    );
+    let materials = app.world().resource::<Assets<TerrainMaterial>>();
+    let (_, material) = materials.iter().next().expect("the terrain's material");
+    assert_eq!(
+        material.extension.params.look,
+        written.tint.extend(written.saturation),
+        "the material carries the last look"
+    );
+    finish(&mut app);
+}

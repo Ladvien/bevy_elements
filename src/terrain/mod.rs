@@ -43,7 +43,7 @@ pub(crate) use gpu::TerrainDispatch;
 use lod::{BoundsTree, LodConfig, Patch, select_patches};
 pub use material::{
     GroundExtension, GroundMaterial, GroundParams, GroundTextures, TerrainExtension,
-    TerrainExtensionKey, TerrainMaterial, TerrainMaterialParams,
+    TerrainExtensionKey, TerrainLook, TerrainMaterial, TerrainMaterialParams,
 };
 pub(crate) use material::{NO_TERRAIN, insert_placeholder, lod_uniform, shadow_inputs};
 use model::{
@@ -437,6 +437,7 @@ impl Plugin for TerrainPlugin {
         ))
         .init_resource::<TerrainRuntime>()
         .init_resource::<GroundTextures>()
+        .init_resource::<TerrainLook>()
         .add_systems(Update, ensure_terrain.in_set(ElementsSystems::Simulation))
         .add_systems(
             Update,

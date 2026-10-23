@@ -82,8 +82,9 @@ pub use lightning::{
 // Terrain.
 pub use terrain::{
     GroundExtension, GroundMaterial, GroundParams, GroundTextures, ProceduralTerrain, Terrain,
-    TerrainExtension, TerrainExtensionKey, TerrainGrid, TerrainMaterial, TerrainMaterialParams,
-    TerrainPlugin, TerrainRender, TerrainSnapshot, TerrainSource, TerrainState,
+    TerrainExtension, TerrainExtensionKey, TerrainGrid, TerrainLook, TerrainMaterial,
+    TerrainMaterialParams, TerrainPlugin, TerrainRender, TerrainSnapshot, TerrainSource,
+    TerrainState,
 };
 
 // Aeolian transport.

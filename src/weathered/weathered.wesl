@@ -12,7 +12,7 @@
 // plane, as `GroundExtension` does.
 
 import bevy_elements::surface_cover::{
-    ElementsGlobals, cloud_shadow_ratio, cloud_shadow_uv, mesh_snow_cover, overcast_relief,
+    ElementsGlobals, cloud_shadow_ratio, cloud_shadow_uv, graded, mesh_snow_cover, overcast_relief,
     rain_streak, ripple_offset, ripple_weights, weather_surface,
 };
 import bevy_elements::terrain::common::detail_scale_3d;
@@ -50,6 +50,9 @@ struct WeatheredParams {
     trails: f32,
     // The stone grain's feature size, m; 0 for none.
     grain_m: f32,
+    // A colour grade of the base colour: xyz tint, w saturation (the identity by default; the
+    // crate's scattered rocks carry `TerrainLook`, docs/research/terrain-look.md).
+    look: vec4<f32>,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> params: WeatheredParams;
@@ -165,6 +168,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     }
 }
 
+    // The grade (identity unless the crate set it: its scattered rocks follow `TerrainLook`),
+    // after the vertex colours and the stone grain, before the weather, so snow and water keep
+    // their own colours.
+    pbr_input.material.base_color = vec4<f32>(
+        graded(pbr_input.material.base_color.rgb, params.look),
+        pbr_input.material.base_color.a,
+    );
     var wet = g.weather.x * exposure;
     let rain = g.weather.z * exposure;
     if rain > 0.0 {

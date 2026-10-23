@@ -72,6 +72,8 @@ pub struct TerrainMaterialParams {
     /// the soil and the grass, zero for a layer left procedural (all zero without a set); w the
     /// procedural grain's albedo share under a textured layer.
     pub(crate) ground: Vec4,
+    /// The game's grade of the bare ground ([`TerrainLook`]): xyz the tint, w the saturation.
+    pub(crate) look: Vec4,
     /// World units to the metre ([`ElementsUnits`](crate::ElementsUnits)): the vertex and
     /// fragment stages divide the positions Bevy gives them by it and multiply the ones they
     /// hand back.
@@ -92,6 +94,7 @@ impl Default for TerrainMaterialParams {
             trail: Vec4::ZERO,
             trail_light: Vec4::ZERO,
             ground: Vec4::W,
+            look: Vec4::ONE,
             units: 1.0,
         }
     }
@@ -250,6 +253,44 @@ impl GroundTextures {
                 });
             })
             .load(path)
+    }
+}
+
+/// A game's colour grade of the owned terrain's bare ground (rock, soil, grass, sand, scree) and
+/// of the scattered rocks lying on it, so a palette can grade the ground the way the game grades
+/// its own materials (`docs/research/terrain-look.md`). The saturation is applied first, around
+/// the colour's own linear Rec. 709 luminance — 0 renders the ground at its luminance, 1 leaves
+/// it, above 1 oversaturates (negative is taken as 0) — and then the tint multiplies the result,
+/// so a cooling tint survives a desaturation. The grade applies to the textured albedo too, and
+/// before the ground cover: snow and standing water keep their own colours, and wet grass keeps
+/// behaving as grass. The default renders the ground as without it, within a float's rounding.
+/// A change is a uniform write (no pipeline is specialised or compiled), so a palette blend may
+/// write it every frame. [`TerrainRender::External`](crate::TerrainRender::External) grounds and
+/// a game's own [`WeatheredMaterial`](crate::WeatheredMaterial)s are the game's to grade.
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Reflect)]
+#[reflect(Resource)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct TerrainLook {
+    /// Linear multiplier on the bare ground's albedo. Default `Vec3::ONE`.
+    pub tint: Vec3,
+    /// 1 keeps the ground's colours, 0 renders it at its own luminance (grey), above 1
+    /// oversaturates. Default 1.
+    pub saturation: f32,
+}
+
+impl Default for TerrainLook {
+    fn default() -> Self {
+        Self {
+            tint: Vec3::ONE,
+            saturation: 1.0,
+        }
+    }
+}
+
+impl TerrainLook {
+    /// The uniform's lane: the tint, and the saturation clamped at zero.
+    pub(crate) fn packed(&self) -> Vec4 {
+        self.tint.max(Vec3::ZERO).extend(self.saturation.max(0.0))
     }
 }
 
@@ -471,6 +512,7 @@ pub(super) fn update_materials(
     trails: Option<Res<TrailState>>,
     textures: Res<GroundTextures>,
     images: Res<Assets<Image>>,
+    look: Res<TerrainLook>,
 ) {
     let (shadow, light, map) = shadow_inputs(shadows.as_deref());
     let absorption = water.map_or(Vec4::ZERO, |w| w.absorption.extend(w.refractive_index));
@@ -503,6 +545,7 @@ pub(super) fn update_materials(
             trail: trail_window,
             trail_light,
             ground,
+            look: look.packed(),
             units: units.per_metre(),
         };
         let ids: Vec<_> = terrain_materials.iter().map(|(id, _)| id).collect();
@@ -570,6 +613,23 @@ pub(super) fn update_materials(
 
 #[cfg(test)]
 mod tests {
+    use bevy::math::{Vec3, Vec4};
+
+    use super::TerrainLook;
+
+    /// terrain-look.md Model adopted 4: the default look packs to exactly (1, 1, 1, 1), the value
+    /// the shader skips, and a negative tint or saturation packs to zero.
+    #[test]
+    fn the_default_look_packs_to_the_shaders_identity() {
+        assert_eq!(TerrainLook::default().packed(), Vec4::ONE);
+        let clamped = TerrainLook {
+            tint: Vec3::new(-1.0, 0.5, 2.0),
+            saturation: -0.3,
+        }
+        .packed();
+        assert_eq!(clamped, Vec4::new(0.0, 0.5, 2.0, 0.0));
+    }
+
     /// Terrain validation 9: each extension declares at most two storage buffers (terrain cells
     /// now, the cover pack with M4), so with Bevy's five in the fragment stage the WebGPU default
     /// of eight holds. Counted from the declarations: the layout itself needs a device.

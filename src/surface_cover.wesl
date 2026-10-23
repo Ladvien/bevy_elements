@@ -225,8 +225,22 @@ fn wet_canopy(colour: vec3<f32>, wetness: f32) -> vec3<f32> {
     if wetness <= 0.0 {
         return colour;
     }
+    return saturated(colour, 1.0 + WET_LEAF_SATURATE * wetness);
+}
+
+/// A colour's saturation scaled by `s` around its own linear Rec. 709 luminance: 0 is its grey,
+/// 1 the colour itself, above 1 more saturated; the luminance kept, no channel below zero.
+fn saturated(colour: vec3<f32>, s: f32) -> vec3<f32> {
     let grey = vec3<f32>(dot(colour, vec3<f32>(0.2126, 0.7152, 0.0722)));
-    return max(grey + (colour - grey) * (1.0 + WET_LEAF_SATURATE * wetness), vec3<f32>(0.0));
+    return max(grey + (colour - grey) * s, vec3<f32>(0.0));
+}
+
+/// A game's grade of an albedo, `look` = (tint, saturation) (`TerrainLook`,
+/// `docs/research/terrain-look.md`): the saturation first, then the tint, so a cooling tint
+/// survives a desaturation. The default (1, 1, 1, 1) returns the albedo itself to the bit, and a
+/// tint alone is exactly a multiply.
+fn graded(albedo: vec3<f32>, look: vec4<f32>) -> vec3<f32> {
+    return saturated(albedo, max(look.w, 0.0)) * look.xyz;
 }
 
 /// The share of a surface that is green canopy, 0–1, read from its albedo: Woebbecke et al.'s

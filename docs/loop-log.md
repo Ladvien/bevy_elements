@@ -4124,3 +4124,44 @@ The user asked, during this run, that open issues come before other enhancements
 3. **PBR textures settable on the terrain** (the user's ask): today `GroundTextures` is a crate-global resource holding one pre-packed KTX2 array (mean-1 albedo detail + height, normal + roughness + AO) that only `tools/ground-textures/prep.py` makes, for sand, soil and grass. A game needs a per-`Terrain` set of ordinary PBR maps per layer (albedo, normal, roughness, AO, height), rock included, packed by the crate, and golem's sets loadable without the Python step.
 4. **Puddle shorelines follow the micro-relief**: the puddles are rhombi of the water grid (`cover_rain`), now legible against the matte meadow.
 5. **Stylistic variants** (once 3 makes sets settable); the rock's close range (the scree view's giant flat planes); infiltration for long real-time rain.
+
+## Iteration 48 - 2026-10-23 - `TerrainLook`: a game grades the terrain's ground (issue #35)
+
+**Commits:** `f098060`, `13a586c`, `1b12983` (the research note `docs/research/terrain-look.md` and its two amendments, each before the code it covers), `30e38e1` (`TerrainLook`, the shared operator, the scattered rocks, the examples' knobs, tests), `87c3a9c` (README, changelog, the branch-cost trap in `AGENTS.md`), this log. **Issue:** #35, closed with the merge. **Sibling repos:** none. **Not released.**
+
+The user asked during iteration 47 that open issues come before other enhancements; two were open (#35 `TerrainLook`, #31 a recent-climate query). #35 ranked first: it blocks a consumer's night palette today and it is the terrain, the run's focus; #31 is next.
+
+### What changed
+
+- **`TerrainLook { tint, saturation }`** (resource, default identity) grades the owned terrain's bare ground — the albedo after the layers, textures, turf, scree and rock, before the ground cover — with the family's saturation operator (`grey + (c − grey) s` about linear Rec. 709 luminance, clamped at 0), then the tint. The canopy share is read before the grade, so a grey or blue meadow still beads the rain as grass; snow and standing water keep their colours.
+- **The scattered rocks follow it**: their shared `WeatheredMaterial` gains a crate-private `look` lane, written from `TerrainLook` when it changes; a game's own `WeatheredMaterial`s keep the identity.
+- `TerrainMaterialParams.look` is a uniform lane: a change re-prepares the material and compiles nothing (GPU test, 240 frames).
+- `saturated()` is shared with `wet_canopy`; `examples/common::terrain_look_env` gives `terrain_tour` and `bench_elements` `ELEMENTS_TINT`/`ELEMENTS_SATURATION`; `terrain_tour` also `ELEMENTS_GRADE_GLIDE` (a palette blend written every frame).
+
+### Rounds (`/tmp/i48/critique.md`)
+
+| Round | Change | Verdict |
+|---|---|---|
+| 1 | The grade on the terrain | NOT YET: the scattered rocks stayed warm tan on a cool graded ground (`mtn_graded`) |
+| 2 | + the rocks follow the grade | GREAT on every view; the performance gate failed: the identity branch cost +6 % on every frame |
+| 3 | Branchless operator | GREAT (branchless vs branched ≤ 9 levels on 0.04 % of the pixels, the rock's flips); cost within noise |
+
+Per view: night (the default night meadow is the issue's olive, graded a dark blue-grey); day and 12 m (a cool, desaturated, coherent grade with every blade and the relief); saturation 0 (monochrome, chromaticity spread 0.0074 dry and 0.0040 wet against the issue's 0.01; the snow frame pixel-identical to the default); tint 0.5 (the CPU mirror within 1e-6); graded rock, sand and scattered rocks (the stones at the cliff's foot the ground's cool family); the glide (61 frames, the ground's L a smooth cosine 130.2 → 116.9, ≤ 1.07 levels a step).
+
+### Measurements
+
+- Default identity against `main`: `hills_eye` ≤ 1 level on 0.05 % of the pixels, `hills_snow` and `dunes_overcast` 0, `mtn_overcast` ≤ 1 level on 5 % (the operator's rounding at the default), `weathered_town` ≤ 1 level.
+- **Cost** (`bench_elements`, 4K dry meadow, the opaque pass over the early prepass, base and change interleaved): with the branch 57.3-61.4 against base 54.6-57.5 (+6 %); branchless at the default 56.3-57.7 and 57.5-57.7 against base 57.8, graded 53.9-59.8: no measurable cost. A base run that landed in P2 (prepass 0.075 ms, ratio 63.7) was discarded; the ratio cancels the clocks within a P-state only (`AGENTS.md`).
+- Tests: the operator (identity and tint within 1e-6, saturation 0's zero chroma and kept luminance, the order, the clamps), the default packs to (1, 1, 1, 1) and negative lanes to 0, and the GPU test `a_look_written_every_frame_compiles_nothing`. Gates 1-4 pass (24 suites); gate 5: 23 integration binaries ok, `clouds` 10, `terrain` 9, `cover` 8, `dust` 6 and `the_horizon_sky` 1.
+
+### Sources
+
+- Issue #35 (the requirement and acceptance criteria); RTR4 §8.2.3 (colour grading, scene-referred over display-referred; Uncharted 4's multiply); `bevy_flora`'s `wet_on` and this crate's `wet_canopy` (the saturation operator); ITU-R BT.709 luma.
+
+### The next five items, ranked
+
+1. **Issue #31, a recent-climate history query**: a rolling record of daily conditions a game can summarise (the issue's own alternative, `DayConditions` history; no game vocabulary in `src/`).
+2. **PBR textures settable on the terrain** (the user's ask): a per-`Terrain` set of ordinary PBR maps per layer (albedo, normal, roughness, AO, height), rock included, packed by the crate; golem's sets loadable without `prep.py`.
+3. **Puddle shorelines follow the micro-relief** (the rhombi of the water grid).
+4. **Stylistic variants** (once 2 makes sets settable).
+5. **The rock's close range**; infiltration for long real-time rain.

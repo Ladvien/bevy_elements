@@ -9,7 +9,8 @@
 //! many precipitation blockers around the camera). `ELEMENTS_EYE=x,y,z` and `ELEMENTS_LOOK=x,y,z`
 //! place the camera instead of the scene's own view (with `ELEMENTS_AGL=1.7` the eye's `y` is
 //! metres above the ground): a talus for the scattered rocks, say.
-//! `ELEMENTS_TERRAIN=hills|mountains|dunes|lake|none`
+//! `ELEMENTS_TERRAIN=hills|mountains|dunes|lake|none`, with `ELEMENTS_TINT=r,g,b` and
+//! `ELEMENTS_SATURATION=s` grading its ground (`TerrainLook`)
 //! (default `hills`): a 2 km terrain at the quality's full simulation resolution with a 50 m³/s
 //! water source, so hydrology and erosion run their full substeps every frame
 //! (`elements_hydrology`) and the terrain repacks its layers every frame (`elements_terrain`); the
@@ -45,7 +46,7 @@ use bevy::prelude::*;
 use bevy::render::diagnostic::RenderDiagnosticsPlugin;
 use bevy::window::{PresentMode, WindowResolution};
 use bevy_elements::*;
-use common::{ExampleHarness, camera, stand_on_ground, test_scene, vec3_env};
+use common::{ExampleHarness, camera, stand_on_ground, terrain_look_env, test_scene, vec3_env};
 
 /// Frames before the per-pass minimum starts counting.
 const WARMUP_FRAMES: u32 = 240;
@@ -278,6 +279,9 @@ fn setup(
                 Terrain::procedural(preset)
                     .with_resolution(UVec2::splat(quality.terrain_max_resolution())),
             );
+            if let Some(look) = terrain_look_env() {
+                commands.insert_resource(look);
+            }
             commands.spawn((
                 WaterSource {
                     rate_m3_s: 50.0,
