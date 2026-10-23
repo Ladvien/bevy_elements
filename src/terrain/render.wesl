@@ -9,6 +9,7 @@
 import bevy_elements::grid::{GridParams, grid_taps};
 import bevy_elements::noise::{perlin3_d, fbm3, seed_offset};
 import bevy_elements::terrain::common::{TerrainParams, ground_detail, rock_material, scree_scatter, terrain_live, turf_palette};
+import bevy_elements::terrain::textures::{LayerMaps, layer_maps, height_blend, DETAIL_GATE};
 import bevy_elements::surface_cover::{weather_surface, ripple_weights, ripple_offset, overcast_relief};
 import bevy_elements::trails::surface::{TrailHit, trail_fade, trail_march, trail_none};
 import bevy_pbr::render::{
@@ -54,6 +55,10 @@ struct TerrainMaterialParams {
     // x: the beam's share of the light on a horizontal surface. yz: the window's centre,
     // metre-frame XZ.
     trail_light: vec4<f32>,
+    // The ground's detail textures (`GroundTextures`): xyz one tile's size on the ground (m) for
+    // the sand, the soil and the grass, all zero without a texture set; w the share of the
+    // procedural grain kept under them (1 without a set).
+    ground: vec4<f32>,
     // World units to the metre (`ElementsUnits`): the shader divides the positions Bevy gives it
     // by this and multiplies the ones it hands back.
     units: f32,
@@ -68,6 +73,9 @@ struct TerrainMaterialParams {
 @group(constants::MATERIAL_BIND_GROUP) @binding(104) var cloud_sampler: sampler;
 @group(constants::MATERIAL_BIND_GROUP) @binding(105) var trail_field: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(106) var trail_sampler: sampler;
+// The ground's detail textures: two array layers per ground layer (`textures.wesl`).
+@group(constants::MATERIAL_BIND_GROUP) @binding(107) var ground_maps: texture_2d_array<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(108) var ground_maps_sampler: sampler;
 
 struct TerrainVertex {
     @builtin(instance_index) instance_index: u32,
@@ -376,6 +384,46 @@ fn brightest_light() -> vec3<f32> {
     return l;
 }
 
+// The ground layers with their detail textures: the layers' weights after the height blend,
+// their colours times their albedo detail, and the relief's slope, roughness and occlusion,
+// each weighted by its layer's share (so they fade where the rock takes over).
+struct GroundTextured {
+    // Sand, soil, grass.
+    weights: vec3<f32>,
+    albedo: vec3<f32>,
+    slope: vec2<f32>,
+    rough: f32,
+    occlusion: f32,
+}
+
+// The ground layers' maps at `xz` (metre frame) for the ground weights `w` (sand, soil, grass),
+// with the point's screen derivatives `dx`, `dy`. A layer below the gate is not sampled.
+fn ground_textured(xz: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, w: vec3<f32>) -> GroundTextured {
+    let tile = material.ground.xyz;
+    let neutral = LayerMaps(vec3<f32>(1.0), 0.5, vec2<f32>(0.0), 1.0, 1.0);
+    var sand = neutral;
+    var soil = neutral;
+    var grass = neutral;
+    if w.x > DETAIL_GATE {
+        sand = layer_maps(ground_maps, ground_maps_sampler, 0u, xz / tile.x, dx / tile.x, dy / tile.x);
+    }
+    if w.y > DETAIL_GATE {
+        soil = layer_maps(ground_maps, ground_maps_sampler, 1u, xz / tile.y, dx / tile.y, dy / tile.y);
+    }
+    if w.z > DETAIL_GATE {
+        grass = layer_maps(ground_maps, ground_maps_sampler, 2u, xz / tile.z, dx / tile.z, dy / tile.z);
+    }
+    let b = height_blend(w, vec3<f32>(sand.height, soil.height, grass.height));
+    let rest = 1.0 - (b.x + b.y + b.z);
+    var out: GroundTextured;
+    out.weights = b;
+    out.albedo = b.x * SAND * sand.albedo + b.y * SOIL * soil.albedo + b.z * GRASS * grass.albedo;
+    out.slope = b.x * sand.slope + b.y * soil.slope + b.z * grass.slope;
+    out.rough = rest + b.x * sand.rough + b.y * soil.rough + b.z * grass.rough;
+    out.occlusion = rest + b.x * sand.occlusion + b.y * soil.occlusion + b.z * grass.occlusion;
+    return out;
+}
+
 // The trail field at the fragment `p` on ground of slope `g` (∂y/∂x, ∂y/∂z): a flat no-op
 // outside the window or without trails.
 fn trail_at(p: vec3<f32>, g: vec2<f32>) -> TrailHit {
@@ -431,14 +479,30 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let fields = ground_fields(p, w.z);
     w.z = w.z * fields.scatter;
     w = layer_variation(fields.large, w);
-    var albedo = w.x * ROCK + w.y * SAND + w.z * SOIL + w.w * GRASS;
-    // A trench through grass or soil shows the soil (sand stays sand; rock takes no imprint).
-    albedo = mix(albedo, SOIL, smoothstep(0.01, 0.05, depth) * (w.z + w.w));
-    let rough = mix(0.9, 0.95, w.z);
 
     // The pixel's footprint on the surface, in metres: the detail is band-limited by what the
-    // pixel can resolve *on the surface*, not on the ground plane.
-    let footprint = max(length(dpdx(pv)), length(dpdy(pv)));
+    // pixel can resolve *on the surface*, not on the ground plane. The derivatives are taken
+    // here, in uniform control flow, because the detail textures' gradients are these too.
+    let dpx = dpdx(pv);
+    let dpy = dpdy(pv);
+    let footprint = max(length(dpx), length(dpy));
+
+    // The ground's detail textures (`docs/research/ground-textures.md`): each ground layer's own
+    // albedo, relief, roughness and occlusion, hex-tiled, and the layers' heights decide where
+    // they meet. Without a texture set (`material.ground.x` is 0) the ground is the procedural
+    // one alone, exactly.
+    let maps_on = material.ground.x > 0.0 && w.y + w.z + w.w > DETAIL_GATE;
+    var maps = GroundTextured(w.yzw, vec3<f32>(0.0), vec2<f32>(0.0), 1.0, 1.0);
+    if maps_on {
+        maps = ground_textured(pv.xz, dpx.xz, dpy.xz, w.yzw);
+        w = vec4<f32>(w.x, maps.weights);
+    }
+    // A trench through grass or soil shows the soil (sand stays sand; rock takes no imprint).
+    let trench = smoothstep(0.01, 0.05, depth) * (w.z + w.w);
+    // The layers' own colours without the textures' detail: the turf's palette reads their chroma.
+    let plain = mix(w.x * ROCK + w.y * SAND + w.z * SOIL + w.w * GRASS, SOIL, trench);
+    var albedo = select(plain, mix(w.x * ROCK + maps.albedo, SOIL, trench), maps_on);
+    let rough = mix(0.9, 0.95, w.z) * maps.rough;
 
     // The ground's detail, and the rock's own material (`docs/research/rock-material.md`).
     // The ground's grain is turf, soil and sand: it belongs on the near-horizontal surfaces,
@@ -457,12 +521,16 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var grad = vec3<f32>(0.0);
     if turf > 0.01 {
         let grain = ground_detail(pv, footprint);
-        tint = tint * mix(1.0, grain.albedo, turf);
+        // Under detail textures the procedural grain's *albedo* keeps only its share
+        // (`GroundTextures::grain`): its mottle is the felt the textures replace. Its *relief*
+        // stays whole: the turf's 10–50 cm bumps are the ground's micro-topography, which a low
+        // sun reveals across the mid field, where the textures' own normals have averaged flat.
+        tint = tint * mix(1.0, grain.albedo, turf * material.ground.w);
         grad = grad + grain.grad * turf;
         // The turf's palette: a meadow is not one green (`ground-colour.md`). The palette's
         // *clump* is the detail's own fine field, which the turf has already evaluated for its
         // grain, so the near field has colour variation in it for no extra noise.
-        tint = tint * mix(vec3<f32>(1.0), turf_palette(pv, albedo, fields.large, grain.coarse, grain.fine), turf);
+        tint = tint * mix(vec3<f32>(1.0), turf_palette(pv, plain, fields.large, grain.coarse, grain.fine), turf);
     }
     // The scree: the stone that has weathered off the rock above lies *below* it, on the band
     // of slope just under the rock's ramp. Without it the grass meets the rock in a single
@@ -521,6 +589,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // at 6 m rendered at 137 DN with a saturation of 8 — a washed-out grey, not stone).
     tint = tint * mix(1.0, rock_sky_occlusion(n.y), rockness);
     albedo = albedo * tint;
+    // The detail textures' relief, already weighted by the ground layers' shares.
+    grad = grad + vec3<f32>(maps.slope.x, 0.0, maps.slope.y);
     n = normalize(n - (grad - dot(grad, n) * n));
 
     // Ground cover: wet darkening and gloss, puddles with ripples while it rains, snow
@@ -565,7 +635,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     pbr_input.world_normal = n;
     pbr_input.N = n;
     pbr_input.world_position = vec4<f32>(pv * material.units, 1.0);
-    pbr_input.diffuse_occlusion = pbr_input.diffuse_occlusion * trail.open;
+    pbr_input.diffuse_occlusion = pbr_input.diffuse_occlusion * trail.open * maps.occlusion;
 
     let ratio = vec3<f32>(cloud_shadow_ratio(p)) * bed_transmittance(water_depth);
     // The trail's self-shadow removes the beam's share of the light inside its trenches.

@@ -1,0 +1,26 @@
+{
+  "about": "The examples' ground texture set: albedos generated with golem's generate_image (FLUX.2 klein 9B, 1024x1024, 4 steps, quantize 8, guidance 1) and packed by prep.py. tile_m is the physical size of one tile (GroundTextures::tile_m); tilt_deg the mean tilt of the derived normals.",
+  "layers": {
+    "sand": {
+      "albedo": "golem/sand.jpg",
+      "tile_m": 1.5,
+      "tilt_deg": 4.0,
+      "seed": 4552,
+      "prompt": "photogrammetry texture scan of flat dry sand from directly overhead, smooth sand surface without ripples or waves, individual grains of slightly varied colour visible, faint footprint-free natural unevenness, a few scattered tiny shell fragments, small dark grains and grit, isotropic irregular distribution with no direction and no focal point, uniform flat diffuse light, no shadows, no vignette, orthographic, edge to edge detail"
+    },
+    "soil": {
+      "albedo": "golem/soil.jpg",
+      "tile_m": 2.0,
+      "tilt_deg": 10.0,
+      "seed": 4531,
+      "prompt": "photogrammetry texture scan of bare dry earth from directly overhead, brown loamy soil with crumbs and small clods, scattered small pebbles and grit of many sizes, a few tiny roots and dead leaf fragments, fine cracks, irregular random distribution with no pattern and no focal point, uniform flat diffuse light, no shadows, no vignette, orthographic, edge to edge detail"
+    },
+    "grass": {
+      "albedo": "golem/grass.jpg",
+      "tile_m": 2.0,
+      "tilt_deg": 14.0,
+      "seed": 4523,
+      "prompt": "photogrammetry texture scan of natural unmown pasture ground from directly overhead, dense tangled grass blades of many lengths crossing each other chaotically, irregular random clumps of different sizes, bits of bare brown earth and moss showing through in random places, a few fallen dry grass stems and tiny clover, absolutely no tree leaves, no fallen leaves, no petals, no flowers, no rows, no grid, no pattern, uniform flat diffuse light, no shadows, no vignette, orthographic, edge to edge detail"
+    }
+  }
+}

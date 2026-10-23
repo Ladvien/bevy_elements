@@ -1,10 +1,10 @@
 //! CPU transliterations of the terrain kernels that the tests compare against: the procedural
 //! generator of `generate.wesl` and the layer weights of `terrain.wesl`.
 
-use bevy::math::{IVec3, UVec2, Vec2, Vec3};
+use bevy::math::{IVec2, IVec3, Mat2, UVec2, Vec2, Vec3};
 
 use super::{F_HALF, GAIN, LACUNARITY, OCTAVE_ROTATION, R_LOW, R_SPAN, octave_count, seed_mix};
-use crate::gpu::noise_mirror::perlin3_d;
+use crate::gpu::noise_mirror::{hash33, perlin3_d};
 use crate::terrain::ProceduralTerrain;
 
 /// Both noise sums of a sample point: `(f, r)` of the research note.
@@ -528,6 +528,64 @@ pub(crate) fn scree_coverage(xz: Vec2) -> f32 {
         SCREE_SIZE_MAX * 0.8,
     );
     coarse.max(fine * (1.0 - coarse))
+}
+
+/// `textures.wesl`'s hex grid scale (Mikkelsen's `2√3`).
+pub(crate) const HEX_SCALE: f32 = 3.464_101_6;
+/// `textures.wesl`'s sampling gate and height-blend sharpness.
+pub(crate) const DETAIL_GATE: f32 = 0.01;
+pub(crate) const HEIGHT_BLEND: f32 = 8.0;
+
+/// `hex_grid`: the three hex-grid vertices around `st` (texture tiles) and their weights.
+pub(crate) fn hex_grid(st: Vec2) -> ([IVec2; 3], Vec3) {
+    let s = st * HEX_SCALE;
+    let skewed = Vec2::new(s.x - 0.577_350_27 * s.y, 1.154_700_5 * s.y);
+    let base = skewed.floor();
+    let f = skewed - base;
+    let base = base.as_ivec2();
+    let z = 1.0 - f.x - f.y;
+    let up = if z <= 0.0 { 1.0 } else { 0.0 };
+    let flip = 2.0 * up - 1.0;
+    let u = up as i32;
+    let w = Vec3::new(-z * flip, up - f.y * flip, up - f.x * flip);
+    let vertices = [
+        base + IVec2::new(u, u),
+        base + IVec2::new(u, 1 - u),
+        base + IVec2::new(1 - u, u),
+    ];
+    (vertices, w)
+}
+
+/// `hex_centre`: a hex vertex's centre in texture tiles.
+pub(crate) fn hex_centre(v: IVec2) -> Vec2 {
+    let p = v.as_vec2();
+    Vec2::new(p.x + 0.5 * p.y, 0.866_025_4 * p.y) / HEX_SCALE
+}
+
+/// `hex_tap`: the hex's coordinate in the texture for ground layer `layer`, and its rotation.
+pub(crate) fn hex_tap(v: IVec2, layer: u32, st: Vec2) -> (Vec2, Mat2) {
+    let h = hash33(IVec3::new(v.x, v.y, layer as i32));
+    let (s, c) = ((h.z - 0.5) * std::f32::consts::TAU).sin_cos();
+    let rot = Mat2::from_cols(Vec2::new(c, s), Vec2::new(-s, c));
+    let centre = hex_centre(v);
+    (rot * (st - centre) + centre + Vec2::new(h.x, h.y), rot)
+}
+
+/// `tap_slope`'s turn: a slope read in a tap's texture, back in the world.
+pub(crate) fn tap_slope(texture_slope: Vec2, rot: Mat2) -> Vec2 {
+    rot.transpose() * texture_slope
+}
+
+/// `height_blend`: the ground layers' weights `w` (sand, soil, grass) blended by their heights.
+pub(crate) fn height_blend(w: Vec3, h: Vec3) -> Vec3 {
+    let total = w.x + w.y + w.z;
+    let lift = |h: f32| (HEIGHT_BLEND * (h - 0.5)).exp();
+    let e = (w - Vec3::splat(DETAIL_GATE)).max(Vec3::ZERO) * Vec3::new(lift(h.x), lift(h.y), lift(h.z));
+    let sum = e.x + e.y + e.z;
+    if sum <= 0.0 {
+        return w;
+    }
+    e * (total / sum)
 }
 
 #[cfg(test)]
@@ -1379,5 +1437,63 @@ mod tests {
             }
         }
         assert_eq!(slope_deg(&vec![3.0; 128], size, 2.0, 0, 0), 0.0);
+    }
+
+    /// The hex grid's weights are the point's barycentric coordinates in the triangle of the
+    /// three hexes' centres: none is negative, they sum to one, and they rebuild the point. A
+    /// vertex paired with another's weight rebuilds a different point.
+    #[test]
+    fn the_hex_weights_are_the_points_barycentric_coordinates() {
+        for i in 0..2000 {
+            let st = Vec2::new(i as f32 * 0.013_7 - 13.0, (i * 7919 % 2000) as f32 * 0.011_3 - 11.0);
+            let (v, w) = hex_grid(st);
+            assert!(w.min_element() >= -1e-6, "{st}: a negative weight {w}");
+            assert!((w.x + w.y + w.z - 1.0).abs() < 1e-5, "{st}: weights {w}");
+            let rebuilt = w.x * hex_centre(v[0]) + w.y * hex_centre(v[1]) + w.z * hex_centre(v[2]);
+            assert!((rebuilt - st).length() < 1e-4, "{st} rebuilt as {rebuilt}");
+        }
+    }
+
+    /// A tap's slope turns back into the world by the transpose of its rotation: a texture whose
+    /// height rises along a texture direction rises, in the world, along the direction the tap's
+    /// coordinate maps onto it. With the rotation itself instead, the relief would be lit from
+    /// the wrong side in every hex but the unrotated ones.
+    #[test]
+    fn a_taps_slope_turns_back_into_the_world() {
+        let rise = Vec2::new(0.3, -0.7);
+        let e = 1e-3;
+        for vx in -4..4 {
+            for vy in -4..4 {
+                let v = IVec2::new(vx, vy);
+                let st = hex_centre(v) + Vec2::new(0.01, 0.02);
+                let height = |p: Vec2| rise.dot(hex_tap(v, 2, p).0);
+                let finite = Vec2::new(
+                    height(st + Vec2::X * e) - height(st - Vec2::X * e),
+                    height(st + Vec2::Y * e) - height(st - Vec2::Y * e),
+                ) / (2.0 * e);
+                let (_, rot) = hex_tap(v, 2, st);
+                let slope = tap_slope(rise, rot);
+                assert!((slope - finite).length() < 2e-3, "{v}: {slope} vs {finite}");
+            }
+        }
+    }
+
+    /// The height blend keeps the ground's share whatever the heights, lets the taller layer
+    /// show, and starts where the sampling does: a layer at the gate has no share and one just
+    /// above it a small one, so its tallest texels do not jump in on a contour line.
+    #[test]
+    fn the_height_blend_keeps_the_ground_and_starts_at_the_gate() {
+        let w = Vec3::new(0.0, 0.3, 0.5);
+        for h in [Vec3::new(0.5, 0.2, 0.9), Vec3::new(0.5, 0.9, 0.1), Vec3::splat(0.5)] {
+            let b = height_blend(w, h);
+            assert!((b.x + b.y + b.z - 0.8).abs() < 1e-6, "{h}: {b}");
+        }
+        let b = height_blend(Vec3::new(0.0, 0.5, 0.5), Vec3::new(0.5, 0.9, 0.2));
+        assert!(b.y > 0.95, "the taller soil shows: {b}");
+        let tall = Vec3::new(1.0, 0.5, 0.5);
+        let at_gate = height_blend(Vec3::new(DETAIL_GATE, 0.0, 1.0 - DETAIL_GATE), tall);
+        assert_eq!(at_gate.x, 0.0, "{at_gate}");
+        let above = height_blend(Vec3::new(DETAIL_GATE + 1e-4, 0.0, 1.0 - DETAIL_GATE - 1e-4), tall);
+        assert!(above.x > 0.0 && above.x < 0.01, "{above}");
     }
 }

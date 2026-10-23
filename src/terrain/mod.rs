@@ -29,6 +29,7 @@ use crate::plugin::{
 };
 use crate::query::EnvironmentSnapshot;
 use bevy::asset::{RenderAssetUsages, embedded_asset};
+use bevy::shader::load_shader_library;
 use bevy::camera::primitives::Aabb;
 use bevy::camera::visibility::NoAutoAabb;
 use bevy::math::UVec4;
@@ -41,8 +42,8 @@ use bevy::transform::TransformSystems;
 pub(crate) use gpu::TerrainDispatch;
 use lod::{BoundsTree, LodConfig, Patch, select_patches};
 pub use material::{
-    GroundExtension, GroundMaterial, GroundParams, TerrainExtension, TerrainMaterial,
-    TerrainMaterialParams,
+    GroundExtension, GroundMaterial, GroundParams, GroundTextures, TerrainExtension,
+    TerrainMaterial, TerrainMaterialParams,
 };
 pub(crate) use material::{NO_TERRAIN, insert_placeholder, lod_uniform, shadow_inputs};
 use model::{
@@ -428,11 +429,14 @@ impl Plugin for TerrainPlugin {
         embedded_asset!(app, "flow.wesl");
         embedded_asset!(app, "render.wesl");
         embedded_asset!(app, "ground.wesl");
+        // The ground's detail textures' hex-tiling, imported by `render.wesl`.
+        load_shader_library!(app, "textures.wesl");
         app.add_plugins((
             MaterialPlugin::<TerrainMaterial>::default(),
             MaterialPlugin::<GroundMaterial>::default(),
         ))
         .init_resource::<TerrainRuntime>()
+        .init_resource::<GroundTextures>()
         .add_systems(Update, ensure_terrain.in_set(ElementsSystems::Simulation))
         .add_systems(
             Update,
@@ -680,6 +684,7 @@ fn ensure_terrain(
                 cover: NO_TERRAIN,
                 cloud_shadow: None,
                 trail: None,
+                ground: None,
             },
         });
         // Hidden until the first selection puts a patch in a slot.

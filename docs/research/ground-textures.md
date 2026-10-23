@@ -30,18 +30,21 @@ Underfoot, the terrain is a procedural noise: the meadow is a soft green felt (`
 |---|---|---|
 | tile size: sand, soil, grass | 1.5, 2.0, 2.0 m | a 1024² tile at 1.5-2 mm per texel, a grain to a tuft; at 1.7 m eye height the near footprint is 1-3 mm |
 | hex tiles per texture tile | Mikkelsen's `2√3` grid scale | Mikkelsen 2022 |
-| γ, β | 7, 0.6 | Mikkelsen 2022 |
-| contrast `r` | 0.75 | Mikkelsen's Fig. 3: sharper than 0.5 without hex borders |
+| γ, β | 7, 0.6 (β on the tap's height, not its luminance) | Mikkelsen 2022; Deviation 11 |
+| contrast `r` (S-curve) | none | Deviation 11 |
 | height blend `k` | 8 | Deviation 2 |
-| detail normal strength | from the texture | the set's own normal map |
-| `grain` share, golem set | 0.3 | Deviation 3 |
+| albedo detail encoding | `value · 64 / 255`, range [0, 4) | Deviation 6 |
+| de-lighting exponent on the luminance ratio | 0.65 | Deviation 7 |
+| detail normal: mean tilt of sand, soil, grass | 4°, 10°, 14° | Deviation 8 |
+| occlusion | `1 − 0.2 · cavity` (mean 0.93-0.95) | Deviation 9 |
+| `grain` share of the procedural albedo, golem set | 0.3 (its relief stays whole) | Deviations 3 and 12 |
 
 ## GPU mapping
 
-- `TerrainExtension` gains `#[texture(107, dimension = "2d_array")]` and `#[sampler(108)]`; `TerrainMaterialParams` gains the three tile sizes and the grain share (re-prepared when the resource changes, as the material's other uniform values are).
+- `TerrainExtension` gains `#[texture(107, dimension = "2d_array")]` and `#[sampler(108)]` (an `Option<Handle<Image>>`, so Bevy binds its own fallback array without a set); `TerrainMaterialParams` gains `ground`: the three tile sizes and the grain share (re-prepared when the resource changes, as the material's other uniform values are). The tile sizes are zero without a set, and the shader then skips the textures entirely (Deviation 5).
 - Per pixel, for each ground layer whose weight exceeds 0.01: one triangle-grid lookup and three hashes, then 3 × 2 fetches (albedo-height and normal-roughness-occlusion). Typically one or two layers are live, so 6-12 fetches; the rock (above 40°) samples none.
 - Gradients for `textureSampleGrad` are the derivatives of the projected coordinate taken once in uniform control flow, rotated per tile.
-- The neutral default is a 1×1×6 `Rgba8Unorm` array inserted under a constant handle (`uuid_handle`), so `GroundTextures::default()` is valid before any game code runs.
+- The set is bound only once its image exists (`ground_inputs`), so the material is never left waiting on a 25 MB load.
 
 ## What great looks like
 
@@ -54,7 +57,7 @@ Underfoot, the terrain is a procedural noise: the meadow is a soft green felt (`
 
 ## Validation targets
 
-1. **Neutral identity** (mirror): the neutral texel decodes to an albedo multiplier of exactly 1, a flat normal, roughness ×1 and occlusion 1; the height blend with equal heights returns the input weights; captures with the default set match the baseline (plains and hills within GPU noise).
+1. **No set is no change** (capture): without a `GroundTextures::image` the shader takes the old path, so a capture matches the baseline bit for bit (`dunes_down` with `ELEMENTS_GROUND_TEXTURES=0`: every channel's mean identical).
 2. **Hex weights** (mirror): the three weights are non-negative and sum to 1 everywhere; the vertex offsets are a pure function of the vertex, so two pixels of one hex agree.
 3. **No visible tiling** (capture): `hills_down`, `plains_down`, `dunes_down` show no repeated feature at the tile period (an autocorrelation peak at the tile's offset below the baseline grain's), and no hex border.
 4. **Captures** (`/tmp/i45/`): `hills_eye`, `hills_down`, `hills_12`, `hills_aerial`, `hills_dawn`, `hills_dusk`, `hills_overcast`, `hills_seed7`, `plains_eye`, `plains_down`, `dunes_eye`, `dunes_down`, `scree_down`, `talus_b` judged GREAT; `mtn_foot` unchanged on the rock.
@@ -67,6 +70,16 @@ Underfoot, the terrain is a procedural noise: the meadow is a soft green felt (`
 2. **Height blend exponent `k` = 8.** No source gives a number; the form `w · exp(k (h − ½))` is the common game practice of comparing layer heights (the "height-based blending" of splat maps), chosen because it is the identity for equal heights. 8 makes a 0.25 height difference a factor of 7.4, a clear but not hard edge.
 3. **The procedural grain's share falls to 0.3 with a photographic set.** At 1 the felt noise lies over the blades and muddies them; at 0 the near field loses the crate's variation between tiles. 0.3 keeps the second without the first.
 4. **One weight set for both texture layers.** Mikkelsen weights normals by their slope and colours by their luminance; here the weights are computed once from the albedo-height sample and reused for the normal-roughness-occlusion sample, so a feature's colour and its relief cannot come from different tiles.
+5. **No neutral default texture.** The plan bound a 1×1×6 neutral array under a constant handle, so one shader path would serve both cases. A neutral texture still pays for its fetches (eighteen at a three-layer transition) on every game that has no set; the binding is an `Option` instead, Bevy binds its fallback array, and the uniform's zero tile size skips the textures. The no-set path is then the old one, bit for bit.
+6. **The albedo detail spans [0, 4), stored at 64.** At the planned `value · 128 / 255` (range [0, 2)) the golem grass's detail clipped in 21-29 % of its texels (its 99th percentile is 4.4-7.2: bright blades over dark gaps, in linear light), the mean-restoring loop then scaled the rest up, and the clipped texels lost their hue: dead leaves rendered salmon-pink. The encoding stays linear, because a log encoding filters to a geometric mean and the far mips would darken the landscape.
+7. **De-lighting.** A photograph's contrast is its albedo's and its light's: the turf's lit tops and shadowed gaps span about ten to one in linear light, where a blade's albedo and the soil's span three or four. The prep tool compresses the detail's luminance ratio by an exponent (0.65) and keeps its hue; compressing the hue as well (tried at 0.6) turned the straw and the soil gaps the meadow's green.
+8. **The relief is a mean tilt, not a depth.** A depth in metres is the wrong knob: the slope depends on the height field's frequency content, and the turf's 2 mm detail at "3 cm" tilted the normals 47° on average (the 90th percentile 71°), which darkened the meadow by a fifth under a high sun, since the mean of N·L is the mean of the normals' z. The tool solves for the scale that gives a mean tilt of 4° (sand), 10° (soil) and 14° (grass).
+9. **Occlusion `1 − 0.2 · cavity`** (mean 0.93-0.95), weakened from 0.7: it multiplies the ambient light, and a mean of 0.77-0.83 darkened the meadow under overcast.
+10. **KTX2 with every mip level, not a stacked PNG.** Bevy generates no mips for a loaded image, and a PNG has none; a set without mips aliases at a distance. The tool writes the levels (the decoded values averaged, so the detail's mean stays 1 at every level) with zstd supercompression: 25 MB for 1024² per layer (a 512² set is 7 MB, and magnifies three times underfoot).
+11. **β on the tap's height, no S-curve.** Mikkelsen modulates the hex weights by the taps' luminance; the set's height is its band-passed luminance and is what the layer blend compares too, so the taller grain is in front at a hex's seam as it is at a layer's. Mikkelsen's S-curve was not needed: at γ = 7 no hex border shows in the captures.
+12. **The grain's relief stays whole.** At a share of 0.3 for both its albedo and its relief, the dusk meadow lost the raking-light mottle across its mid field and the dunes read as smooth paste: the textures' own normals average flat in their far mips, and the turf's 10-50 cm bumps are real micro-topography. The share applies to the procedural albedo only.
+13. **The normal's v runs along the texture's rows** (world +Z), not OpenGL's `+v` up: the shader's coordinate is the world's XZ over the tile, and the tool writes the derived normal in that frame. A standard set's OpenGL normal map needs its green channel flipped.
+14. **The prep tool reads albedos only.** The plan had it take a standard PBR set's own normal, roughness, occlusion and height maps as well; it derives all four from the albedo, so a stylistic variant is three albedos and a manifest, and a captured set's own maps are not used yet.
 
 ## Pending index
 

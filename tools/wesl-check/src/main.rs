@@ -84,6 +84,7 @@ const MODULES: &[&str] = &[
     "bevy_elements::terrain::heightmap",
     "bevy_elements::terrain::pack",
     "bevy_elements::terrain::render",
+    "bevy_elements::terrain::textures",
     "bevy_elements::trails::surface",
     "bevy_elements::trails::trails",
     "bevy_elements::waves::waves",
