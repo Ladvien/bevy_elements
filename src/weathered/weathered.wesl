@@ -15,6 +15,7 @@ import bevy_elements::surface_cover::{
     ElementsGlobals, cloud_shadow_ratio, cloud_shadow_uv, mesh_snow_cover, overcast_relief,
     rain_streak, ripple_offset, ripple_weights, weather_surface,
 };
+import bevy_elements::terrain::common::detail_scale_3d;
 import bevy_pbr::render::{
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::alpha_discard,
@@ -47,6 +48,8 @@ struct WeatheredParams {
     exposure: f32,
     // 1 when the material draws trails.
     trails: f32,
+    // The stone grain's feature size, m; 0 for none.
+    grain_m: f32,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> params: WeatheredParams;
@@ -58,6 +61,19 @@ struct WeatheredParams {
 
 // Compacted snow's albedo relative to fresh snow on a trench floor (trails.md Deviation 8).
 const COMPACTED_SNOW_TINT: vec3<f32> = vec3<f32>(0.86, 0.91, 0.97);
+
+// The stone grain (`docs/research/rock-scatter.md` Model 7): a **mottle** at the grain's own size
+// and a **speckle** at an eighth of it, each two octaves of the terrain rock's band-limited 3D
+// noise (`detail_scale_3d`), so a scattered rock and the cliff it fell from share a surface. A
+// stone face reads at arm's length by its centimetre speckle (mineral grains, pits); one fBm from
+// the grain's size down puts almost nothing there (the octaves halve), and the rocks read as clay.
+// The albedo's swing per unit of each normalised field, and the relief's height per metre of
+// each feature size.
+const STONE_MOTTLE_ALBEDO: f32 = 1.2;
+const STONE_SPECKLE_ALBEDO: f32 = 2.0;
+const STONE_SPECKLE_SCALE: f32 = 0.125;
+const STONE_MOTTLE_RELIEF: f32 = 0.15;
+const STONE_SPECKLE_RELIEF: f32 = 0.35;
 
 // The direction toward the brightest directional light (the sun, else the moon); straight up
 // without one.
@@ -95,6 +111,29 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let exposure = params.exposure;
     let n = normalize(pbr_input.world_normal);
     let p = in.world_position.xyz / g.units.x;
+
+    // The stone grain: mottles the albedo and bends the shading normal, never the geometric one
+    // (snow and streaks follow the face). Each octave fades where it is finer than the pixel.
+    let footprint = max(length(dpdx(p)), length(dpdy(p)));
+    if params.grain_m > 0.0 {
+        let mottle = detail_scale_3d(p, params.grain_m, 2u, footprint, 71u);
+        let speckle_m = params.grain_m * STONE_SPECKLE_SCALE;
+        let speckle = detail_scale_3d(p, speckle_m, 2u, footprint, 79u);
+        if mottle.present > 0.0 {
+            let m_norm = max(mottle.norm, 1e-6);
+            let s_norm = max(speckle.norm, 1e-6);
+            let tone = 1.0 + STONE_MOTTLE_ALBEDO * mottle.sum / m_norm
+                + STONE_SPECKLE_ALBEDO * speckle.sum / s_norm;
+            pbr_input.material.base_color = vec4<f32>(
+                pbr_input.material.base_color.rgb * max(tone, 0.2),
+                pbr_input.material.base_color.a,
+            );
+            let grad = mottle.grad / m_norm * (STONE_MOTTLE_RELIEF * params.grain_m)
+                + speckle.grad / s_norm * (STONE_SPECKLE_RELIEF * speckle_m);
+            let tangential = grad - dot(grad, pbr_input.N) * pbr_input.N;
+            pbr_input.N = normalize(pbr_input.N - tangential);
+        }
+    }
 
     // Trails: the hit of the view ray on the field over this face's plane. Snow and streaks keep
     // the face's own normal (a trench's wall is snow); what the trench changes is its depth.

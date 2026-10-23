@@ -16,6 +16,7 @@ mod lightning;
 mod plugin;
 mod precipitation;
 mod query;
+mod rocks;
 mod terrain;
 mod trails;
 #[cfg(feature = "isomesh")]
@@ -103,6 +104,9 @@ pub use trails::{Imprint, TrailGround, TrailSettings, TrailState, TrailsPlugin};
 
 // Waves: ripples and wakes from bodies in the water.
 pub use waves::{WaterContact, WaveSettings, WaveState, WavesPlugin};
+
+// Rocks scattered on the ground: boulders and stones as meshes.
+pub use rocks::{RockSettings, RockStats, RocksPlugin, ScatteredRock};
 
 // `bevy_flora` integration.
 #[cfg(feature = "flora")]

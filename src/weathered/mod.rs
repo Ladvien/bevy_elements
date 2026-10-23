@@ -235,6 +235,9 @@ pub struct WeatheredExtension {
     /// 1 when the material draws trails ([`with_trails`](Self::with_trails)).
     #[uniform(100)]
     trails: f32,
+    /// The stone grain's feature size, m: 0 for none ([`with_grain`](Self::with_grain)).
+    #[uniform(100)]
+    grain_m: f32,
     #[storage(101, read_only, visibility(fragment))]
     pub(crate) globals: Handle<ShaderBuffer>,
     #[texture(102)]
@@ -258,6 +261,7 @@ impl WeatheredExtension {
         Self {
             exposure,
             trails: 0.0,
+            grain_m: 0.0,
             globals: ELEMENTS_GLOBALS_BUFFER,
             cloud_shadow: None,
             trail: None,
@@ -278,6 +282,22 @@ impl WeatheredExtension {
     /// Whether the material draws trails.
     pub fn draws_trails(&self) -> bool {
         self.trails > 0.5
+    }
+
+    /// The same extension with a **stone grain**: the crate's band-limited 3D noise at the world
+    /// point, a mottle at `feature_m` and a speckle at an eighth of it (two octaves each),
+    /// varying the albedo and bending the shading normal, so a stone surface has relief at arm's
+    /// length without a texture or UVs. It is in world space, so it suits meshes that do not
+    /// move (the scattered rocks use it); each octave fades out where it is finer than the
+    /// pixel's footprint. 0 turns it off.
+    pub fn with_grain(mut self, feature_m: f32) -> Self {
+        self.grain_m = feature_m.max(0.0);
+        self
+    }
+
+    /// The stone grain's feature size, m (0 for none).
+    pub fn grain_m(&self) -> f32 {
+        self.grain_m
     }
 }
 

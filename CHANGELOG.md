@@ -6,7 +6,14 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ### Changed
 
-- **The rock's material costs less, and the picture is the same.** The crate's rock is the most
+- **Breaking: `TerrainSnapshot` carries the sediment.** The terrain's readback now copies the
+  sediment thickness beside the surface height (`TerrainState::height_readback` is an
+  `array<vec2<f32>>` of surface and sediment per cell, written only when the terrain changes),
+  and `TerrainSnapshot` has a public `sediment` field and a `sediment(Vec2)` query: the
+  scattered rocks keep off sand with it. Code that builds a `TerrainSnapshot` by struct literal
+  adds `sediment` (an `Arc<[f32]>` of the surface's length).
+
+- **The rock's material skips the fields it cannot use, and the picture is the same.** The crate's rock is the most
   expensive thing it draws: the mountains' opaque pass is 0.72–0.79 ms with the rock's
   material and 0.13–0.38 ms without it, so the material is **roughly half the pass**, and the
   crate's notes have warned about it since 0.5.0.
@@ -25,10 +32,11 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
   use the value alone. The change is **crate-wide** — the hydrology's phase noise, the
   terrain's generator, the surface cover's field and the noise's own `fbm3` all call `perlin3`.
 
-  Measured: the mountains' opaque pass, the minimum over eight interleaved trials, **0.253 ms
-  on the baseline and 0.245 ms on this one** — a 3.2 % saving. The picture is **the same**: every
-  angle differs by under 0.55 % of its pixels (the GPU's own non-determinism) and every mean is
-  identical to three decimals, and the value-only noise is **bit-identical** by test. See
+  Measured: the mountains' opaque pass, the minimum over six baseline and five interleaved
+  trials, **0.253 ms on the baseline and 0.245 ms on this one** — no slower; the 3 % gap is
+  inside the card's noise. The picture is **the same**: every angle differs by under 0.55 % of
+  its pixels (the GPU's own non-determinism) and every mean is identical to three decimals,
+  and the value-only noise is **bit-identical** by test. See
   `docs/research/rock-cost.md`.
 
 - **A cliff carries slabs and chips: a second joint set, and a spacing that varies.** The
@@ -270,6 +278,29 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
   countable. See `docs/research/scree.md`.
 
 ### Added
+
+- **Rocks on the ground.** The crate's ground was an empty carpet: every stone in it was
+  painted into the terrain's material, so nothing on a meadow, a hillside or below a cliff had a
+  silhouette or cast a shadow. `RocksPlugin` (in `ElementsPlugins`) scatters boulders and stones
+  over the `Terrain` as meshes: angular talus blocks in heaps below the cliffs, rounded rocks
+  over the meadow (sparse on the flat, more on steep hillsides and in rocky patches), none on
+  sand or on the cliffs. Their sizes follow Golombek's exponential rock-abundance law (rocks of
+  diameter `D` or more cover `k·exp(−q(k)·D)` of the ground), their shapes are jointed blocks
+  with the axis ratios measured on talus (Verdian et al. 2021), and each sits on the surface the
+  CDLOD patches actually draw, a quarter to a third buried. A rock is drawn to a distance in
+  proportion to its size (`ElementsQuality::rock_range`, 100 m per metre of diameter at High)
+  and shrinks away over the last fifth of it, so it never pops. They are drawn with
+  `WeatheredMaterial`, so they take snow, wetness and cloud shadows. `RockSettings` sets the
+  covers, the range and the seed; `ScatteredRock` marks each rock for a game's colliders;
+  `RockStats` counts them. See `docs/research/rock-scatter.md`.
+- **`WeatheredExtension::with_grain(feature_m)`**: a stone grain for any static mesh, the
+  terrain rock's band-limited 3D noise as a mottle at `feature_m` and a speckle at an eighth of
+  it, varying the albedo and bending the shading normal, with no texture or UVs. Every existing
+  `WeatheredMaterial` is unchanged (the grain is off by default).
+- **`terrain_tour`: `ELEMENTS_FLY=8`** glides the camera forward at 8 m/s, held above the
+  ground, for moving captures. **`bench_elements`: `ELEMENTS_EYE`/`ELEMENTS_LOOK`/`ELEMENTS_AGL`**
+  place the camera, **`ELEMENTS_ROCKS=off`** leaves the rocks out, and the scene line reports
+  Bevy's `per_view_shadow_pass`.
 
 - **A game lights its own night.** The crate simulates a day and a night, a sun and a moon, a sky
   and a metered exposure, and a game that put a character in that world at night had **nothing

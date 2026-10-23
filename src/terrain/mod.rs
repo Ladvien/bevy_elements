@@ -258,8 +258,8 @@ pub struct TerrainState {
     pub cells: Handle<ShaderBuffer>,
     /// The packed water-render buffer, `array<vec4<f32>>`: velocity xy, turbidity, spare.
     pub flow_cells: Handle<ShaderBuffer>,
-    /// Surface height per readback cell, `array<f32>` (`readback_size` cells; the grid
-    /// box-averaged by 2 above 1024²).
+    /// Surface height and sediment thickness per readback cell, `array<vec2<f32>>`
+    /// (`readback_size` cells; the grid box-averaged by 2 above 1024²).
     pub height_readback: Handle<ShaderBuffer>,
     /// Bounds of every 32 × 32-cell leaf, `array<vec4<f32>>`: surface min, surface max, water
     /// surface max, water depth max.
@@ -386,6 +386,15 @@ pub(crate) struct TerrainRuntime {
     pub(crate) water_box: Option<BoundsTree>,
     /// Water depth max of every node (both entries): `get(..).1` is the deepest cell's depth.
     pub(crate) water_depth: Option<BoundsTree>,
+}
+
+impl TerrainRuntime {
+    /// Whether the crate draws the active terrain with its own patches (not a consumer's mesh).
+    pub(crate) fn draws_ground(&self) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|(_, terrain, _)| terrain.render == TerrainRender::Owned)
+    }
 }
 
 /// Heightmap formats the generator reads linearly, and whether the kernel is the integer one.
@@ -626,7 +635,7 @@ fn ensure_terrain(
         height_readback: zeroed_buffer(
             &mut buffers,
             "elements_terrain_height_readback",
-            u64::from(readback_size.x) * u64::from(readback_size.y) * 4,
+            u64::from(readback_size.x) * u64::from(readback_size.y) * 8,
         ),
         leaf_bounds: zeroed_buffer(&mut buffers, "elements_terrain_leaf_bounds", leaves * 16),
         readback_size,
@@ -974,15 +983,17 @@ fn read_terrain(
             "terrain_height",
             state.height_readback.clone(),
             move |bytes, snapshot| {
-                let Some(surface) = decode::<f32>(bytes) else {
+                let Some(cells) = decode::<[f32; 2]>(bytes) else {
                     return;
                 };
-                if surface.len() < expected {
+                if cells.len() < expected {
                     return;
                 }
+                let cells = &cells[..expected];
                 snapshot.terrain = Some(TerrainSnapshot {
                     grid,
-                    surface: surface[..expected].into(),
+                    surface: cells.iter().map(|c| c[0]).collect(),
+                    sediment: cells.iter().map(|c| c[1]).collect(),
                     version,
                 });
             },

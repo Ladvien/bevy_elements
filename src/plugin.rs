@@ -23,6 +23,7 @@ use crate::hydrology::{HydrologyPlugin, WaterPlugin};
 use crate::lightning::LightningPlugin;
 use crate::precipitation::PrecipitationPlugin;
 use crate::query::EnvironmentSnapshot;
+use crate::rocks::RocksPlugin;
 use crate::terrain::TerrainPlugin;
 use crate::trails::TrailsPlugin;
 use crate::waves::WavesPlugin;
@@ -57,7 +58,9 @@ impl PluginGroup for ElementsPlugins {
             .add(CloudPlugin)
             .add(LightningPlugin)
             .add(PrecipitationPlugin)
-            .add(WeatheredPlugin);
+            .add(WeatheredPlugin)
+            // Rocks on the terrain, drawn with the weathered material above.
+            .add(RocksPlugin);
         // Snow on `bevy_isomesh` voxel volumes; it needs the terrain, hydrology and cover
         // plugins above, so it comes last.
         #[cfg(feature = "isomesh")]
@@ -272,6 +275,17 @@ impl ElementsQuality {
             Self::Medium => (512, 0.06),
             Self::High => (512, 0.05),
             Self::Ultra => (1024, 0.04),
+        }
+    }
+
+    /// How far scattered rocks are drawn, m per m of a rock's diameter: a rock vanishes at the
+    /// same size on screen whatever its size (`docs/research/rock-scatter.md` Deviation 3).
+    pub fn rock_range(self) -> f32 {
+        match self {
+            Self::Low => 60.0,
+            Self::Medium => 80.0,
+            Self::High => 100.0,
+            Self::Ultra => 140.0,
         }
     }
 }

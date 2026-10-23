@@ -7,6 +7,9 @@
 //!   eye's `y` is metres above the ground there instead.
 //! - `ELEMENTS_UNDERLAY=1` puts a bright red plane under the terrain: a crack between patches
 //!   shows red.
+//! - `ELEMENTS_FLY=8` glides the camera forward at 8 m/s along its view's heading, held
+//!   `ELEMENTS_AGL` (default 6) metres above the ground: a moving capture for what streams with
+//!   the camera (the scattered rocks' rings and their fade). Use it with `ELEMENTS_SHOT_DIR`.
 //!
 //! `cargo run --release --example terrain_tour`
 
@@ -16,16 +19,7 @@ use std::time::Duration;
 
 use bevy::prelude::*;
 use bevy_elements::*;
-use common::{ExampleHarness, camera, stand_on_ground};
-
-fn vec3_env(name: &str) -> Option<Vec3> {
-    let v: Vec<f32> = std::env::var(name)
-        .ok()?
-        .split(',')
-        .filter_map(|p| p.trim().parse().ok())
-        .collect();
-    (v.len() == 3).then(|| Vec3::new(v[0], v[1], v[2]))
-}
+use common::{ExampleHarness, camera, stand_on_ground, units, vec3_env};
 
 fn main() {
     let hour = std::env::var("ELEMENTS_HOUR")
@@ -41,7 +35,26 @@ fn main() {
         )
         .insert_resource(Climate::temperate())
         .add_systems(Startup, setup)
+        .add_systems(Update, glide)
         .run();
+}
+
+/// The camera's glide (`ELEMENTS_FLY`): world units per second and above the ground.
+#[derive(Component)]
+struct Glide {
+    speed: f32,
+    agl: f32,
+}
+
+fn glide(env: Environment, time: Res<Time>, mut cameras: Query<(&mut Transform, &Glide)>) {
+    for (mut transform, glide) in &mut cameras {
+        let heading =
+            (transform.forward().as_vec3() * Vec3::new(1.0, 0.0, 1.0)).normalize_or_zero();
+        transform.translation += heading * glide.speed * time.delta_secs();
+        if let Some(ground) = env.terrain_height(transform.translation.xz()) {
+            transform.translation.y = ground + glide.agl;
+        }
+    }
 }
 
 fn setup(
@@ -72,10 +85,18 @@ fn setup(
     let eye = vec3_env("ELEMENTS_EYE").unwrap_or(Vec3::new(0.0, 200.0, 0.0));
     let look = vec3_env("ELEMENTS_LOOK").unwrap_or(eye + Vec3::new(150.0, -40.0, 80.0));
     let mut camera = commands.spawn(camera(eye, look));
-    if let Some(agl) = std::env::var("ELEMENTS_AGL")
+    let agl: Option<f32> = std::env::var("ELEMENTS_AGL")
         .ok()
-        .and_then(|a| a.parse().ok())
+        .and_then(|a| a.parse().ok());
+    if let Some(speed) = std::env::var("ELEMENTS_FLY")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
     {
+        camera.insert(Glide {
+            speed: speed * units(),
+            agl: agl.unwrap_or(6.0) * units(),
+        });
+    } else if let Some(agl) = agl {
         camera.insert(stand_on_ground(agl));
     }
     if std::env::var("ELEMENTS_UNDERLAY").is_ok() {
