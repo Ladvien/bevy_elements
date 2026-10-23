@@ -4064,3 +4064,63 @@ Per angle, round 6: underfoot (`hills_down`, `plains_down`, `plains_seed3`) real
 3. **Stylistic variants**: a second set through `GroundTextures` (img2img over this set's sources for a painterly style), and a style switch in the examples.
 4. **Snow surface detail** (`hills_snow`: a flat white-out at 1.7 m).
 5. **The rock's PBR texture** on the joint-set structure (`attempt/iter-44-joint-sets`); the world's white edge.
+
+## Iteration 47 - 2026-10-23 - Wet ground is no longer a mirror
+
+**Commits:** `3c05386`, `5611bce`, `310c592`, `e293709` (the research note and its three addenda, each before the code it covers), `2c9db2f` (the shading, the canopy, the rain rings, the rock's cavities, the town's ground, tests), `6630e9d` (README, the showcase `docs/ground_cover_rain.png` and `docs/water_flood_rain.png`, changelog, the wetness and precipitation notes' pointers, three `AGENTS.md` traps), this log. **Sibling repos:** none. **Not released.**
+
+The user's focus for this run, unchanged: better-looking, more varied, more realistic ground; rocks and debris; stylistic variants; PBR textures everywhere, especially the terrain, settable on it; golem. Asked mid-run how the PBR textures are going, that they be settable on the terrain, and that open issues come before other enhancements: see items 1-3 below.
+
+### Candidates (`/tmp/i47/findings.md`)
+
+1. **Rain turns every ground into a mirror** (class 1, every rain, drizzle and storm scene). Iteration 46 logged it as "the meadow becomes a lake; no infiltration". Wrong diagnosis: `ELEMENTS_GROW_HOURS` advances the world clock, which wetness integrates, but the hydrology runs in real time, so a 10 s capture holds ~0.01 mm of water. The lake was `weather_surface` lerping roughness to 0.1 at full wetness for every surface: the meadow a choppy grey lake (10-60 m band 187 DN, saturation 0.032, against 124 / 0.308 for the same rain unsoaked), hills at dusk that read as snow, a cliff of chrome foil, dunes white in the middle distance.
+2. Rain splash rings on dry grass (unmasked by 1).
+3. Infiltration (no visible defect in captures; hours of real-time rain would pond everywhere).
+4. Stylistic variants; snow detail; rock texture.
+
+Wet ground beats the runner-up (stylistic variants) because it is a physically wrong result in every rain scene and the user's focus is a realistic ground.
+
+### What changed
+
+- **Porous wet surfaces take Lagarde's limited sheen**, `r (1 − 0.4 w φ)` (0.54 soaked), and the 0.1 film only where a film forms: smooth and metal surfaces, and porous ones drenched past saturation (rain streaks).
+- **The wet albedo is the water-film physics per channel**, `(1 − r_e)(1 − r_i) ρ / (1 − r_i ρ)`, the model `wetness.md` derived as the evidence for its flat × 0.5: a dark channel loses more, so wet colour is more saturated (sand darker and browner, not greyer).
+- **The grass is a canopy** (its wax beads the rain): `bevy_flora`'s wet leaf (saturation × 1.25, brightness kept, no gloss); only soil, sand, rock, trench and scree darken and shine.
+- **The rock's joints and fractures occlude its sky reflection** by the visibility that already darkens them, so a wet cliff keeps its joint network.
+- **Rain rings only on standing water** on a live terrain (≥ `WetnessSettings::puddle_min_m`); a blocker's roof and a plane without terrain as before.
+- `weathered_town`'s ground is 40 km (its 600 m slab ended in a hard line once the ground stopped mirroring the sky).
+
+### Rounds (`/tmp/i47/critique.md`)
+
+| Round | Change | Verdict |
+|---|---|---|
+| 1 | Porous gloss, film, canopy | NOT YET: white rain rings littering the grass (storm: dozens); town ground ends in a line; cliff a uniform silver-grey; sand greyer than dry |
+| 2 | + rings on water only, town 40 km | NOT YET: cliff and sand. Diagnostics: V1 slope specular occlusion (no gain), V2 no gloss on rock (palette still gone: the unsoaked rain cliff is 0.033 saturation already) |
+| 3 | + film albedo per channel (V4), + the rock's cavity occlusion (V3) | GREAT on every view: meadow eye/down/12 m/aerial/dusk, drizzle, storm, plains, cliff (dark joints through a soft sheen), sand (darker, browner), town, puddles, pond rings, flood banks clean. Performance gate failed: +5-10 % on the dry meadow |
+| 4 | The canopy share from the albedo's excess green (Woebbecke et al. 1995) instead of the layer weights | GREAT on every view (as round 3; the soil between the blades now darkens as soil); the dry cost back to the base |
+
+A dry-rock difference against the baseline (p99 24 levels) was bisected: wetness 0 there (binary mask), V3 accounts for p99 4, and the rest is the rock's cell network flipping on last-bit differences when the fragment's register schedule changes — a pure no-op that keeps `w.w` and `trench` alive reproduces the canopy line's difference exactly (B2 vs B4: max 1). Each build renders identically run to run. Recorded in `AGENTS.md`.
+
+The performance gate was the harder one. With the opaque pass divided by the same run's early prepass (Xvfb hops between P2 and P5, and the means alone swing 2×; the ratio holds to about ±3 %), removing one piece at a time on the dry meadow: base 55.5-57.4, round 3 59.1-59.4, the canopy's three values folded into one before the rock's material 66.7, without V3 60.5, without the canopy 54.5-55.5 — and without the canopy the meadow greyed again (mid band 144.0/0.068). The canopy's inputs (`w.w`, the trench, the scree band) were dead before `rock_material` on `main` and had to live across it; the albedo is live there anyway. Recorded in `AGENTS.md`.
+
+### Measurements
+
+- Bands (sRGB, rain unsoaked → final): meadow near 115.4/0.347 → 115.7/0.436; 10-60 m 124.0/0.308 → 123.2/0.384 (was 187.3/0.032); look-down 110.8/0.354 → 110.1/0.440; cliff 125.0/0.033 → 127.5/0.031 (high-pass 2.57 → 3.22); sand near 190.7/0.245 → 176.7/0.258, grazing 195.7/0.236 → 187.6/0.199 (Jensen's sheen).
+- Dry: `hills_eye`, `hills_overcast`, `hills_snow`, `dunes_overcast` ≤ 1 level on ≤ 0.2 % of pixels.
+- **Cost** (`bench_elements`, 3840 × 2160, eye-level meadow and mountain foot, base and change interleaved, the opaque pass over the early prepass; clocks P2/P5/P8, logged in the same shell): dry meadow 55.2-55.6 against 55.5-57.4, **unchanged**; soaked under Rain (`ELEMENTS_GROW_HOURS=3`) the meadow 57.2-58.7 against 54.7-55.3, **+5 %**, the mountain 56.4-57.1 against 55.6-55.8, **+2 %** — the wet path's own arithmetic, logged as the trade for every rain scene's ground.
+- Tests: the shading numbers (0.54 / 0.57 / 0.4975, the film table as a gate, saturation 0.667 → 0.736, a film on smooth and metal, the drenched ramp 0.32 at 1.2), the canopy rule and the canopy share (grass > 0.99; sand, rock, soil 0; a grass-soil half 0.34), the GPU wet cube, forward and deferred, at the film albedo and 0.54. Gates 1-5 pass: 23 integration GPU blocks, the library modules (clouds 10, terrain 8, cover 8, dust 6), `the_horizon_sky` alone; the deferred wet test was found by the gate still pinning × 0.5 and 0.1.
+
+### Sources
+
+- Lagarde 2013, *Water drop 3b* (the porous rule, verbatim; the wet/drenched/puddle regimes; "wet surface color is more saturated").
+- RTR4 §9.9 (porous darkening is subsurface), the cavity specular trick, Lagarde & de Rousiers 2014 via Bevy's specular occlusion.
+- `bevy_flora` 0.46 `wet_on`; Chen et al. 2017 (`10.1038_s41598-017-03360-1`, leaf wax and contact angle); Tatarchuk 2006 (ripples in puddles, splashes on hard surfaces); Xiao et al. 1998 (`10.48044_jauf.1998.028`, canopy interception); Jensen et al. 1999 via `wetness.md` (the film model, forward scattering of wet sand and rock).
+
+### The next five items, ranked
+
+The user asked, during this run, that open issues come before other enhancements.
+
+1. **Issue #35, `TerrainLook`**: a tint and saturation a game sets on the owned terrain (Sanctuary grades its ground per palette; at night the meadow's green shows olive through its navy veil). A uniform on `TerrainMaterialParams` applied to the bare ground's albedo before the cover; identity skipped by a uniform branch; no re-specialisation. The saturation operator is `wet_canopy`'s.
+2. **Issue #31, a recent-climate history query**: a rolling record of daily conditions (temperature, humidity, precipitation) a game can summarise ("damp days in the last week"); no game vocabulary in `src/`, so the issue's own alternative (`DayConditions` history), not `GrainCondition`.
+3. **PBR textures settable on the terrain** (the user's ask): today `GroundTextures` is a crate-global resource holding one pre-packed KTX2 array (mean-1 albedo detail + height, normal + roughness + AO) that only `tools/ground-textures/prep.py` makes, for sand, soil and grass. A game needs a per-`Terrain` set of ordinary PBR maps per layer (albedo, normal, roughness, AO, height), rock included, packed by the crate, and golem's sets loadable without the Python step.
+4. **Puddle shorelines follow the micro-relief**: the puddles are rhombi of the water grid (`cover_rain`), now legible against the matte meadow.
+5. **Stylistic variants** (once 3 makes sets settable); the rock's close range (the scree view's giant flat planes); infiltration for long real-time rain.
