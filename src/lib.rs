@@ -45,8 +45,9 @@ pub use celestial::{
 
 // Climate, seasons, weather.
 pub use climate::{
-    Climate, ClimatePlugin, LAPSE_RATE_C_PER_M, Season, SeasonChanged, SeasonState, SnowSeason,
-    SurfaceWeathering, Weather, WeatherChanged, WeatherDirector, WeatherPreset,
+    Climate, ClimateHistory, ClimatePlugin, ClimateSummary, DayConditions, FREEZING_C,
+    LAPSE_RATE_C_PER_M, Season, SeasonChanged, SeasonState, SnowSeason, SurfaceWeathering,
+    WET_DAY_MM, Weather, WeatherChanged, WeatherDirector, WeatherPreset,
 };
 
 // Wind.
