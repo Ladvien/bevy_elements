@@ -3829,3 +3829,58 @@ Rank 1 beat the class-1 web because the user named the scatter as the focus, and
 3. **Stylistic variants** (the user's next area): a style knob over the crate's materials - the rock palette, the turf palette, the rocks' grain and tone, the sky's grading - starting with the ground.
 4. **The world ends at 1 km in aerial views** (`hills_aerial.png`): a white plane beyond the terrain's edge.
 5. **Blue-black pits on the cliff's shaded fragments at dusk** (`crop_pits.png`).
+
+## Iteration 43 - 2026-10-22 - the cliff's joints: five rounds, NOT YET, not shipped
+
+**Commits:** `d0adc32` (the research note `docs/research/rock-joints.md`), the note's outcome, this log. The attempt is preserved on the branch `attempt/iter-43-joints` (`7bc5e14`), **not merged**: `main`'s code is iteration 42's. **Sibling repos:** none. **Not released.**
+
+### Candidates
+
+1. **The cliff's joints read as chicken wire** (class 1, blocker): every near cliff is a web of flat grey ribbons and a fence of straight bands (`/tmp/i43/crop_face3.png`, `crop_face30.png`). Four causes in `rock_block_scale`: the first set's "joint" was the distance to the *lattice cell's wall*, not to the Voronoi border; it was up to 0.4 of a half-cell wide, and `soft = max(width, footprint)` widened it with distance at full darkness; the relief steps were 0.95 slopes over twice that; and the second set's step used the unwandered, unsegmented plane, while its darkening waved by 13 %.
+2. The painted scree reads as polka dots beside the mesh rocks.
+3. Stylistic variants (the user's next area).
+4. The world ends at 1 km in aerial views.
+5. Blue-black pits on the cliff's shaded fragments at dusk.
+
+The joints beat the scree because they are on every cliff at every distance and in the user's focus; the scree shows only on aprons.
+
+### What was tried (`/tmp/i43/critique.md`; pairs and 3× zooms in `/tmp/i43/pairs_after{,2,3,4,5}/`)
+
+| Round | Change | Verdict, and what the face read as |
+|---|---|---|
+| 1 | `cell3` returns the border (bisector of the two nearest points); hairline traces 1.2–3 cm anti-aliased by coverage; a facet per piece; the second set planar (wander 0.04), split per block | NOT YET: the chicken wire is gone, but the face is crazy paving — convex tiles of one size, each a flat palette tone, each outlined |
+| 2 | The tabular stretch restored (below) | NOT YET: a dry-stone wall; a patio where the slope parallels the bedding |
+| 3 | Open and tight joints: cells grouped 2.6 cells across, a tight joint at 0.35 of the ink; the palette per group | NOT YET: camouflage, the hue jumping block to block |
+| 4 | The bed's palette at every distance, the blocks carrying value only | NOT YET, the clearest step: at 12 m, at dusk and under overcast the cliff reads as a banded succession of different rock; inside each bed a cobble mosaic of per-piece facets |
+| 5 | A facet per open block, a 0.08 crease per piece, value ±14 % and ±4 % | NOT YET: the groups' rounded, stair-stepped outlines read as camouflage blobs |
+
+Every round kept its invariants: the plains byte-identical (or within GPU noise), the far massif (`far120`) 0.4–0.6 % of pixels changed with the same mean, no `failed to process`. After the fifth failed round the skill's rule applied: stop, log, and keep the last GREAT state. No benchmark was run, since no round reached GREAT.
+
+**Best hypothesis.** A jointed face reads as rock when its *open* joints are persistent **plane sets** — bedding partings and one or two cross sets with Weibull spacing, the cross joints terminating at the partings and staggered between them — so the blocks are parallelepipeds with straight edges. A Voronoi network, whole (paving) or grouped (camouflage), cannot give a block a straight edge; it should carry only the tight hairlines. Keep from the attempt: the coverage-anti-aliased trace, the bed's colour at every distance, the tabular fix and the exact prune bound (`docs/research/rock-joints.md`, `## Outcome`).
+
+### Defects found on `main` (open; each changes the image, so they wait for the next attempt)
+
+- **The blocks are columns, not slabs.** `0e58b68` turned the bedding stretch `p + n(p·n)(T − 1)` into `p − n(p·n)(1 − 1/T)`, against `rock-blocks.md` Deviation 10, on a test that compared two directions both lying in the bedding plane. Counting blocks along real cuts, `main` crosses **0.55 blocks per metre across the beds against 1.42 along them** (2.5 m columns). The attempt's rewritten `the_blocks_are_tabular` fails on it and passes on the multiply.
+- **`cell3`'s prune bound is not exact, and the mirror's is a different bound.** The WESL's `max(o − f, f − o − 1)` is not clamped at zero, so on an axis where the neighbour spans the point its square inflates the bound and a cell holding a nearer point can be pruned; the CPU mirror's `abs().max()` is the cell's *far* corner. The attempt clamps both, and its exhaustive test (343 cells, 20 000 points) finds the nearest point always exact and the border exact within the widest bevel's reach; the 27-cell search misses a second point on 1 point in 4 000, 7.5 cm deep in its cell.
+
+### Sources
+
+- **Palmström, A. (2015)**, *Joint characteristics*, RockMass.net (non-DOI; read in full): separation "mainly less than a millimetre"; planar waviness u < 1 %, wavy > 2 %; "continuous joints terminate at other joints".
+- **Worley, S. (1996)**, *A Cellular Texture Basis Function*, SIGGRAPH '96, DOI `10.1145/237170.237267` (PDF read, not ingested): `F2 − F1` is zero on the Voronoi boundary; a value constant per cell with a bump at the boundary is flagstone.
+- **Lagae, A. et al. (2010)**, *A Survey of Procedural Noise Functions*, CGF 29(8), DOI `10.1111/j.1467-8659.2010.01827.x` (corpus).
+- **Verdian, J. P. et al. (2021)**, Earth Surface Dynamics 9:1073: the latent block size is set by fracture, foliation and bedding spacings (the plane-set hypothesis).
+
+### Measurements (the attempt, CPU mirror)
+
+- Over a 30 m oblique cut: round 1, 41 pieces, 5.6 % of the cut dark, every piece's edge traced and every trace at an edge; round 4, 93 pieces in 55 open blocks, 5.9 % dark, the same two properties.
+- The cross joints' worst waviness over 175 four-metre segments: **1.24 %** (Palmström's planar limit 2 %).
+- A trace's integral across the line is the same within 2 % from a 1 mm to a 1 m footprint; at a footprint eight times the half-width its peak is 0.25.
+- The lib suite at round 1: 290 passed.
+
+### The next five items, ranked
+
+1. **The cliff's joints, a second attempt: blocks cut by plane sets.** Start from `attempt/iter-43-joints`: keep the traces, the bed's colour at every distance and the two fixes above; replace the open joints with bedding partings and staggered cross joints (the hypothesis), keeping Voronoi for tight hairlines only. Still the worst thing in a mountain frame.
+2. **The painted scree reads as polka dots beside real stones.**
+3. **Stylistic variants** (the user's next area): a style knob over the crate's materials, starting with the ground.
+4. **The world ends at 1 km in aerial views.**
+5. **Blue-black pits on the cliff's shaded fragments at dusk** (in the baseline and every round of the attempt, `dusk.png` lower left).
