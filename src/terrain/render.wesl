@@ -10,7 +10,7 @@ import bevy_elements::grid::{GridParams, grid_taps};
 import bevy_elements::noise::{perlin3_d, fbm3, seed_offset};
 import bevy_elements::terrain::common::{TerrainParams, ground_detail, rock_material, scree_scatter, terrain_live, turf_palette};
 import bevy_elements::terrain::textures::{LayerMaps, layer_maps, height_lift, height_sharpness, DETAIL_GATE};
-import bevy_elements::surface_cover::{weather_surface, wet_canopy, canopy_share, ripple_weights, ripple_offset, overcast_relief};
+import bevy_elements::surface_cover::{weather_surface, wet_canopy, canopy_share, graded, ripple_weights, ripple_offset, overcast_relief};
 import bevy_elements::trails::surface::{TrailHit, trail_fade, trail_march, trail_none};
 import bevy_pbr::render::{
     mesh_functions,
@@ -59,6 +59,8 @@ struct TerrainMaterialParams {
     // the sand, the soil and the grass, all zero without a texture set; w the share of the
     // procedural grain kept under them (1 without a set).
     ground: vec4<f32>,
+    // The game's grade of the bare ground (`TerrainLook`): xyz the tint, w the saturation.
+    look: vec4<f32>,
     // World units to the metre (`ElementsUnits`): the shader divides the positions Bevy gives it
     // by this and multiplies the ones it hands back.
     units: f32,
@@ -691,6 +693,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // registers here anyway: the layer weights were not, and carrying them across the rock's
     // material cost 5-20 % of the pass (`docs/research/wet-ground.md`).
     let canopy = canopy_share(albedo);
+    // The game's grade of the bare ground (`TerrainLook`, `docs/research/terrain-look.md`): after
+    // the canopy has read the ground's own colour, before the cover, so snow and standing water
+    // keep their colours. The default skips it, so the ground is as before to the bit.
+    albedo = graded(albedo, material.look);
     albedo = wet_canopy(albedo, wet * canopy);
     let surface = weather_surface(
         albedo, rough, 0.0, pbr_input.material.reflectance, n, wet * (1.0 - canopy), puddle, snow_cover, ripple,

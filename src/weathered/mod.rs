@@ -238,6 +238,10 @@ pub struct WeatheredExtension {
     /// The stone grain's feature size, m: 0 for none ([`with_grain`](Self::with_grain)).
     #[uniform(100)]
     grain_m: f32,
+    /// A colour grade of the base colour (tint, saturation): the identity, except on the crate's
+    /// scattered rocks, which carry [`TerrainLook`](crate::TerrainLook).
+    #[uniform(100)]
+    pub(crate) look: Vec4,
     #[storage(101, read_only, visibility(fragment))]
     pub(crate) globals: Handle<ShaderBuffer>,
     #[texture(102)]
@@ -262,6 +266,7 @@ impl WeatheredExtension {
             exposure,
             trails: 0.0,
             grain_m: 0.0,
+            look: Vec4::ONE,
             globals: ELEMENTS_GLOBALS_BUFFER,
             cloud_shadow: None,
             trail: None,
