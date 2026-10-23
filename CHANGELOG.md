@@ -279,6 +279,24 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ### Added
 
+- **PBR detail textures for the terrain's ground.** Underfoot the meadow was a soft green felt.
+  `GroundTextures { image, tile_m, grain }` lays physically based detail maps over the owned
+  terrain's sand, soil and grass: an albedo detail (a multiplier with mean 1, so the
+  landscape's colour does not move), a height, a normal and an occlusion, two layers of a 2D
+  array texture per ground layer. They are hex-tiled (Mikkelsen 2022: offset taps in eight
+  orientations, so a tile never repeats), blended between the layers by their heights (grass
+  blades stand out of the soil), and band-limited by the pixel's footprint, so nothing sparkles
+  and from 12 m on the ground is the procedural one (within 0.1 DN); a layer whose `tile_m` is
+  zero stays procedural. `GroundTextures::load` loads a set with the settings it needs (linear,
+  repeating, anisotropic). `tools/ground-textures/prep.py` packs any albedos (photographs, golem
+  generations, a stylised set) into the KTX2 array with every mip level, tileable, de-lit, with
+  the height, normal and occlusion derived. The examples load a golem-generated soil and grass
+  set from `assets/ground/` (excluded from the package; `ELEMENTS_GROUND_TEXTURES=0` turns it
+  off); the sand waits for wind ripples. Cost: the textured path is compiled only into the
+  pipeline of a material that has a set (`TerrainExtensionKey`), so without one the ground costs
+  what it did; with one the eye-level meadow's opaque pass rises 26 % (4K, interleaved, P5
+  clocks). See `docs/research/ground-textures.md`.
+
 - **Rocks on the ground.** The crate's ground was an empty carpet: every stone in it was
   painted into the terrain's material, so nothing on a meadow, a hillside or below a cliff had a
   silhouette or cast a shadow. `RocksPlugin` (in `ElementsPlugins`) scatters boulders and stones
