@@ -13,20 +13,21 @@ Extra instructions for this run (a focus such as "clouds only") come from the in
 
 State lives in `docs/loop-log.md`; rules and traps live in `AGENTS.md`. Follow them; do not re-derive them.
 
-## Your work is committed even if you are killed — read this before you start
+## Your work is saved even if you are killed — read this before you start
 
-**The driver commits and pushes whatever you leave uncommitted when your pass ends**, marked
-`WIP(pass N): work the pass did not get to commit`. That is not permission to leave the tree dirty:
-a `WIP` commit has **not been through your gates**, so the next pass must verify it before building on
-it. Two consequences:
+**The driver saves whatever you leave uncommitted, without touching your branch.** Every ten minutes
+it records the whole tree to a snapshot ref (`refs/wiggum/pass-N-...`), and again when the pass ends.
+Your `git status`, your index and your branch are unchanged — so this is not a substitute for your own
+commit step, which is still the only thing that puts work on `main`.
+Recover a killed pass's tree with `git -C <repo> log --all --oneline --grep='WIP(pass'` then
+`git show <ref>`.
 
 1. **Commit as you go, not once at the end.** Your commit step is last, behind implement, gates and
    benchmark, so a pass killed at the ceiling never reaches it. Commit the research note alone before
    writing code; then the implementation; then the docs and log. Each commit that lands is work a
    killed pass cannot lose.
-2. **Start every pass by looking for a `WIP(pass N)` commit** from a previous pass on your branch
-   (`git log --oneline -5`). If one is there, its work was never gated: run your gates on it first,
-   then either finish it or `git revert` it before you start your own item. Never silently build on it.
+2. **A snapshot ref is not a commit on your branch.** `git log` will not show it. Do not look for
+   one; if an earlier pass was killed, its tree is in `refs/wiggum/` and nobody's gate ran on it.
 
 ## 1. Orient
 
