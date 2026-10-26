@@ -25,11 +25,15 @@ const TONES: [Vec3; 4] = [
     Vec3::new(1.214, 1.270, 1.256),
     Vec3::new(0.715, 0.632, 0.603),
 ];
-/// How much of a tone a whole rock wears. The cliff mixes its palette through its beds and
-/// fragments, so no large area wears one tone at full strength; a whole rock in the basalt tone
-/// read as a painted blue-grey against the warm ground (`/tmp/i42/r2/crop_rocks.png`). A lerp
-/// towards 1 keeps the palette's mean exactly 1.
-const TONE_STRENGTH: f32 = 0.6;
+/// How much of a tone a **facet** wears: all of it. A stone is a piece of the cliff, and the
+/// cliff's own fragments wear their rock at full strength (`rock-palette.md` Model 2); the
+/// variety that keeps a stone from reading as one painted colour comes from its *facets* taking
+/// different tones, not from washing each tone out (`docs/research/stone-material.md`, Model 4).
+const TONE_STRENGTH: f32 = 1.0;
+
+/// The facet index of a vertex the bounding sphere carries rather than a joint plane: a rounded
+/// rock's worn end is a piece of the rock of its own.
+const SPHERE: usize = usize::MAX;
 
 /// The axis ratios each family draws from (Verdian 2021: b:a 0.57–0.64 and c:a 0.26–0.36
 /// measured on talus, 0.67 and 0.45 in theory).
@@ -178,6 +182,19 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// The tone each of a shape's `count` facets wears: the palette's rocks, assigned round-robin
+/// from a draw on the shape's seed, so the pieces of one stone are different rocks and their mean
+/// is as close to the palette's (exactly 1) as the count allows.
+///
+/// The **start** of the round-robin is the shape's own draw, so two stones do not lay their
+/// colours on their joints the same way; the order is then fixed, which is what bounds the mean.
+fn facet_tones(count: usize, seed: u64) -> Vec<Vec3> {
+    let start = (unit(mix64(seed ^ 0x70)) * TONES.len() as f32) as usize % TONES.len();
+    (0..count)
+        .map(|k| Vec3::ONE.lerp(TONES[(start + k) % TONES.len()], TONE_STRENGTH))
+        .collect()
+}
+
 /// The geometry of shape `shape` (0..[`SHAPES`]) on an icosphere of `subdivisions`. The same
 /// shape at two subdivisions has the same silhouette: the near and far meshes of one rock.
 pub(crate) fn rock_geometry(shape: usize, subdivisions: u32) -> RockGeometry {
@@ -243,29 +260,38 @@ pub(crate) fn rock_geometry(shape: usize, subdivisions: u32) -> RockGeometry {
     // facing it, `min − w·ln Σ exp(−(t − min)/w)`, then the roughness. The surface's own normal is the
     // same soft minimum's blend of the planes' normals (the sphere's is the direction): exactly a
     // plane's on a face, turning only within the rounding's width at an edge.
-    let (mut points, mut analytic): (Vec<Vec3>, Vec<Vec3>) = directions
-        .iter()
-        .map(|&d| {
-            let mut terms = vec![(sphere, d)];
-            for &(n, offset) in &planes {
-                let facing = d.dot(n);
-                if facing > 1e-3 {
-                    terms.push((offset / facing, n));
-                }
+    // Each vertex's **facet**: the plane that carries the soft minimum, which is the piece of
+    // rock that vertex sits on (`SPHERE` where the bounding sphere wins, so a rounded rock's
+    // curved end is its own facet).
+    let mut points = Vec::with_capacity(directions.len());
+    let mut analytic = Vec::with_capacity(directions.len());
+    let mut facets = Vec::with_capacity(directions.len());
+    for &d in &directions {
+        let mut terms = vec![(sphere, d, SPHERE)];
+        for (i, &(n, offset)) in planes.iter().enumerate() {
+            let facing = d.dot(n);
+            if facing > 1e-3 {
+                terms.push((offset / facing, n, i));
             }
-            let min = terms.iter().map(|t| t.0).fold(f32::MAX, f32::min);
-            let mut sum = 0.0;
-            let mut normal = Vec3::ZERO;
-            for &(t, n) in &terms {
-                let w = (-(t - min) / round).exp();
-                sum += w;
-                normal += n * w;
-            }
-            let r = min - round * sum.ln();
-            let lumps = 1.0 + rough * (fbm3(d * 2.2, seed) - 0.5) * 2.0;
-            (d * r * lumps, normal.normalize_or(d))
-        })
-        .unzip();
+        }
+        let min = terms.iter().map(|t| t.0).fold(f32::MAX, f32::min);
+        let mut sum = 0.0;
+        let mut normal = Vec3::ZERO;
+        for &(t, n, _) in &terms {
+            let w = (-(t - min) / round).exp();
+            sum += w;
+            normal += n * w;
+        }
+        let facet = terms
+            .iter()
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map_or(SPHERE, |t| t.2);
+        let r = min - round * sum.ln();
+        let lumps = 1.0 + rough * (fbm3(d * 2.2, seed) - 0.5) * 2.0;
+        points.push(d * r * lumps);
+        analytic.push(normal.normalize_or(d));
+        facets.push(facet);
+    }
     // Squash to the drawn axis ratios: the long axis along X, 1 long; the middle along Z; the
     // short one up, so the rock lies on its largest face.
     let (lo, hi) = points.iter().fold((Vec3::MAX, Vec3::MIN), |(lo, hi), p| {
@@ -296,16 +322,37 @@ pub(crate) fn rock_geometry(shape: usize, subdivisions: u32) -> RockGeometry {
     for (n, a) in normals.iter_mut().zip(&analytic) {
         *n = 2.0 * *a + n.normalize_or(*a);
     }
-    // Colour: the shape's tone, a mottle, and the base's darkening above the buried line.
-    let tone = Vec3::ONE.lerp(TONES[shape % TONES.len()], TONE_STRENGTH);
+    // Colour: the **facet's** tone, a mottle, and the base's darkening above the buried line.
+    //
+    // A stone is a piece of the cliff, and on the cliff each *fragment* is one rock of the
+    // palette (`rock-palette.md`, Model 3) — not the whole body. The facets are the shape's own
+    // joint planes, so the colour changes at a joint, which is where a rock's colour changes.
+    //
+    // The tones are assigned **round-robin from the shape's own draw**, so a shape's facets are
+    // as evenly spread over the four rocks as its facet count allows: the palette's mean is
+    // exactly 1, and a free draw would drift a shape's mean by up to 12 % and move the scatter's
+    // (`docs/research/stone-material.md`, Model 3).
+    let facets_present = {
+        let mut seen: Vec<usize> = facets.clone();
+        seen.sort_unstable();
+        seen.dedup();
+        seen
+    };
+    let tones = facet_tones(facets_present.len(), seed);
+    let tone_of = |facet: usize| {
+        facets_present
+            .binary_search(&facet)
+            .map_or(Vec3::ONE, |k| tones[k])
+    };
     let colours = points
         .iter()
-        .map(|p| {
+        .zip(&facets)
+        .map(|(p, &facet)| {
             let mottle = 0.88 + 0.24 * fbm3(*p * 3.0 + 5.0, seed ^ 0xC0);
             let height = (p.y + c * 0.5) / c;
             let base =
                 BASE_DARK + (1.0 - BASE_DARK) * smoothstep(BASE_RISE[0], BASE_RISE[1], height);
-            let rgb = tone * mottle * base;
+            let rgb = tone_of(facet) * mottle * base;
             [rgb.x, rgb.y, rgb.z, 1.0]
         })
         .collect();
@@ -427,5 +474,103 @@ mod tests {
         // rock's albedo.
         let mean = (0..SHAPES).map(|s| TONES[s % TONES.len()]).sum::<Vec3>() / SHAPES as f32;
         assert!((mean - Vec3::ONE).abs().max_element() < 1e-3, "{mean}");
+    }
+
+    #[test]
+    fn a_stones_facets_wear_different_rocks_of_the_palette() {
+        // A stone is the cliff's rock, and on the cliff each *fragment* is one rock of the
+        // palette. The facets are the shape's joint planes, so each shape wears several tones
+        // and the colours change at a joint. The tone is recovered exactly by dividing out the
+        // mottle and the base's darkening, both of which are functions the module has.
+        for shape in 0..SHAPES {
+            let seed = mix64(0x5EED_0000 + shape as u64);
+            let g = rock_geometry(shape, NEAR_SUBDIVISIONS);
+            let mut worn: Vec<[i64; 3]> = Vec::new();
+            for (p, colour) in g.positions.iter().zip(&g.colours) {
+                let p = Vec3::from_array(*p);
+                let mottle = 0.88 + 0.24 * fbm3(p * 3.0 + 5.0, seed ^ 0xC0);
+                let height = (p.y + g.info.c * 0.5) / g.info.c;
+                let base =
+                    BASE_DARK + (1.0 - BASE_DARK) * smoothstep(BASE_RISE[0], BASE_RISE[1], height);
+                let tone = Vec3::new(colour[0], colour[1], colour[2]) / (mottle * base);
+                let (index, distance) = TONES
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| (i as i64, (*t - tone).length()))
+                    .fold((0, f32::MAX), |a, b| if b.1 < a.1 { b } else { a });
+                assert!(
+                    distance < 1e-3,
+                    "shape {shape}: tone {tone} is no palette rock ({distance} off)"
+                );
+                worn.push([index, 0, 0]);
+            }
+            worn.sort_unstable();
+            worn.dedup();
+            assert!(
+                worn.len() >= 2,
+                "shape {shape}: one tone over the whole body ({worn:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn a_facets_colour_changes_only_at_its_joints() {
+        // A rock's colour changes where it is *broken*, not across its middle: every vertex on
+        // one facet wears the same rock. The facets are recovered from the mesh's colours by
+        // grouping the vertices whose tone agrees.
+        for shape in 0..SHAPES {
+            let seed = mix64(0x5EED_0000 + shape as u64);
+            let g = rock_geometry(shape, NEAR_SUBDIVISIONS);
+            // Facets are contiguous patches in the icosphere, so neighbours on a shared edge
+            // mostly agree; count the transitions instead of grouping. A whole-body tone has
+            // none, and a per-vertex draw has one at nearly every edge.
+            let mut transitions = 0;
+            let mut edges = 0;
+            for t in g.indices.chunks(3) {
+                for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                    edges += 1;
+                    if tone_of_vertex(&g, a, seed) != tone_of_vertex(&g, b, seed) {
+                        transitions += 1;
+                    }
+                }
+            }
+            let share = transitions as f32 / edges as f32;
+            assert!(
+                (0.05..0.5).contains(&share),
+                "shape {shape}: {share} of the edges cross a tone"
+            );
+        }
+    }
+
+    /// The palette index a vertex wears, recovered from its colour.
+    fn tone_of_vertex(g: &RockGeometry, i: u32, seed: u64) -> i64 {
+        let p = Vec3::from_array(g.positions[i as usize]);
+        let mottle = 0.88 + 0.24 * fbm3(p * 3.0 + 5.0, seed ^ 0xC0);
+        let height = (p.y + g.info.c * 0.5) / g.info.c;
+        let base = BASE_DARK + (1.0 - BASE_DARK) * smoothstep(BASE_RISE[0], BASE_RISE[1], height);
+        let c = g.colours[i as usize];
+        let tone = Vec3::new(c[0], c[1], c[2]) / (mottle * base);
+        TONES
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (i as i64, (*t - tone).length()))
+            .fold((0, f32::MAX), |a, b| if b.1 < a.1 { b } else { a })
+            .0
+    }
+
+    #[test]
+    fn every_shapes_tones_average_to_the_palettes_mean() {
+        // The crate's rule: the mean does not move. The round-robin bounds a shape's mean by the
+        // one tone a count not divisible by four cannot balance.
+        for count in 1..=16 {
+            let tones = facet_tones(count, 0x5EED_0000 + count as u64);
+            let mean = tones.iter().sum::<Vec3>() / count as f32;
+            let bound = (count % TONES.len()) as f32 / count as f32;
+            let deviation = (mean - Vec3::ONE).abs().max_element();
+            assert!(
+                deviation <= TONE_STRENGTH * bound + 1e-4,
+                "count {count}: mean {mean} deviates {deviation}"
+            );
+        }
     }
 }
