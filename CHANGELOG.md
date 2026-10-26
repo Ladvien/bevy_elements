@@ -4,6 +4,24 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ## [Unreleased]
 
+### Added
+
+- **Roads and paths: routes a game lays across the terrain, worn into its ground** (the user's
+  ask across iterations 52-55). `PathNetwork` holds `Path`s — a polyline of world XZ points, a half
+  width, a `PathKind` (`Earth`, `Gravel`, `Stone`, a packed `Snow` track) and a rut depth — which
+  `PathsPlugin` (in `ElementsPlugins`) rasterises once, off the frame, into an **8-bit coverage
+  distance field** over the terrain's extent: four texels across the narrowest route, sampled
+  bilinearly, so a 70 cm footpath's edge is smooth at any zoom. The terrain material reads it per
+  fragment and draws the ground the route has worn: the turf gives way to bare, compacted earth with
+  the route's own grain (a per-texel speckle the mask carries at its own resolution plus noise up
+  close), a dish cross-section whose verge stands proud and catches a grazing sun, snow cleared
+  where traffic runs, and each wheel line's rut as a dark, compacted, smoother groove. A route is the
+  ground it crosses, worn — trodden sand on a dune, the snow's own colour in snow, the route's earth
+  or stone only on turf and soil. `PathState` publishes the mask for custom shaders. The block is
+  compiled only into a terrain whose network has routes (`PATHS`), so a terrain without paths pays
+  nothing (measured within ±2 % of the same scene with no network). See `docs/research/paths.md`;
+  the `trails` example takes `ELEMENTS_PATHS=lane|track|road|all`, `bench_elements` too.
+
 ### Changed
 
 - **Breaking: `TerrainSnapshot` carries the sediment.** The terrain's readback now copies the

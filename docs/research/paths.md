@@ -104,9 +104,25 @@ implementation is not in the tree**: it was built, made to render, and reverted 
 
 Not in the store (cited by the synthesis and recorded rather than read): Cessford 1995, Newsome et al. 2004, Pickering et al. 2010, Olive & Marion 2009, Marion 2006, Settergren & Cole 1970. Every other source above is in the corpus.
 
-## State of the implementation (iteration 54)
+## State of the implementation (iteration 55)
 
-Built, rendering, and **reverted at the visual gate**: the surfaces, kinds, widths, edges, dish,
-junction and cost were right; the near-field stone and the wheel ruts were not (Deviations 6a and
-6b). Working sources kept at `/tmp/i54/keep/`; `docs/loop-log.md` "Iteration 54" has the round log,
-the evidence files and the two fixes.
+**Shipped.** The two flaws iteration 54 left — no stone in the near field, invisible wheel ruts —
+are fixed, and two more found in this pass's review are fixed too:
+
+- **Stone**: the mask's alpha channel carries a **per-texel grain** at the mask's own resolution
+  (0.175 m for a footpath, 0.5-1 m for a road), blended into `path_grain`'s noise. A road keeps its
+  speckle past the band limit that drops the octaves. (The edge fade, which the alpha used to hold,
+  is derived from the route's half width, published in `PathState::half_width_m` and the terrain
+  uniform's `path_scale.x`.)
+- **Ruts**: the band is 0.10 of the half width (was 0.16), and the floor is compacted — a `0.62`
+  albedo multiplier and 0.72 roughness — so two dark wheel lines read on a cart track and a road.
+- **Snow** (found here): a route vanished under a real snowfall. A travelled route is now cleared of
+  snow (90 % off a lane, road or track; 35 % for a packed snow track), which is what traffic and
+  wind do.
+- **Sand** (found here): routes were grey imported earth across a dune. The route's colour is now the
+  ground it crosses, worn — trodden sand on sand, the snow's own on snow, the route's earth or stone
+  only on turf and soil.
+
+Evidence in `docs/loop-log.md` "Iteration 55": the before/after crops of the stone, the ruts, the
+snowed-in road and the desert track, the eight review angles, and the cost measurement (the path
+block within ±2 % of the same scene with no network, `PATHS` compiling it only when there is one).

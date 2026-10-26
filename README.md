@@ -29,6 +29,7 @@ Every system was studied in the home-still paper library first. The note for eac
 | `RocksPlugin` | `rocks` | Boulders and stones on the terrain as meshes, with silhouettes and cast shadows: sized by Golombek's exponential rock-abundance law, angular talus blocks below cliffs (in heaps), rounded rocks in patches over the meadow and more on steep hillsides, none on sand or on the cliffs; each seated on the surface the CDLOD patches draw and drawn to a distance in proportion to its size, shrinking away at the end of its range; `WeatheredMaterial` with a stone grain, so the rocks take snow, rain and cloud shadows; `RockSettings`, `ScatteredRock` (for a game's colliders) and `RockStats` |
 | `DustPlugin` | `dust` | Wind-blown sand on the terrain's `sediment` layer: a capacity `k u² (u − u_t)` from the 10 m wind with Venturi speed-up and 15° lee shadow (Paris et al. 2019), a line scan that relaxes the flux over the saturation length and moves the bed by the flux divergence (conserving sand exactly), then hydrology's thermal kernels avalanche it at 34°; runs only while the wind can exceed 8 m/s. `Weather::dust` also fills 40 % of the precipitation particle buffer with tan sprites (`kind = 2`) and tints the ground fog |
 | `TrailsPlugin` | `trails` | Footprints, ruts and tracks: `Imprint` components press a centimetre field that follows the focus to their Bekker–Wong sinkage (CRREL's compaction limit in snow) with a rim of the displaced material, sweeping the path between frames; new snow fills it, wind smooths it, sand and mud slump; on the crate's terrain or a game's own ground (`TrailGround`); the terrain and ground materials and `WeatheredMaterial::with_trails()` draw it per pixel with parallax occlusion mapping and a soft self-shadow; `Environment::trail_depth`; `TrailState` for custom shaders |
+| `PathsPlugin` | `paths` | Roads and paths laid across the terrain: a `PathNetwork` of `Path`s — a polyline, a half width, a `PathKind` (earth, gravel, stone or a packed snow track) and a rut depth — rasterised once into an **8-bit coverage distance field** over the terrain (`rgba8unorm`, its alpha a per-texel grain), which the terrain material reads per fragment: the turf gives way to bare, compacted earth with its own grain and a dish cross-section whose verge catches a grazing sun, snow cleared where traffic runs, and the ruts pressed along the route's wheel lines; the block is compiled only into a terrain whose network has routes, so a terrain without paths pays nothing; `PathState` for custom shaders |
 | `WavesPlugin` | `waves` | Ripples and wakes: `WaterContact` ellipsoids press the hydrology's water with the pressure head of their column and their entry's impact; a dispersive capillary-gravity wave field in three camera-following cascades (iWave with a kernel fitted to Airy's dispersion) reflects off the shores, slows in the shallows, follows the current, breaks into foam; drawn by the water's passes; `WaveState` for custom shaders |
 | `VoxelPlugin` (feature `isomesh`) | `voxel` | Snow on `bevy_isomesh` voxel volumes: `VoxelGround` on a `VoxelVolume` scans the column tops into an external `Terrain` the snow, wetness and hydrology maps run on, and `SnowyField` adds the snow depth back as a slab over the tops, swapped per column when it moves half a voxel, remeshing only the chunks that changed; tunnels stay clear; erosion is off for voxel ground |
 | `ElementsFloraPlugin` (feature `flora`) | `flora` | Drives `bevy_flora`'s wind, gusts, season and wetness, and `FloraGround` from the terrain's height snapshot |
@@ -386,6 +387,36 @@ The stripped upwind edge of the sand sheet, 10 s and 70 s into the `dust_storm` 
 
 ![Edge of the sand sheet at 10 s](docs/dust_front_10s.png) ![Edge of the sand sheet at 70 s](docs/dust_front_70s.png)
 
+### Paths and roads
+
+`PathsPlugin` lays the routes a game draws across its terrain. A `Path` is a polyline of world XZ points, a half width, a `PathKind` and a rut depth:
+
+```rust
+# use bevy::prelude::*;
+# use bevy_elements::*;
+fn village_roads(mut commands: Commands) {
+    commands.insert_resource(PathNetwork::new([
+        // A gravel road with the wheels' ruts.
+        Path::new(
+            [Vec3::new(-120.0, 0.0, -40.0), Vec3::new(-20.0, 0.0, -10.0), Vec3::new(90.0, 0.0, -30.0)],
+            2.5,
+            PathKind::Gravel,
+        )
+        .with_ruts(0.03),
+        // A trodden footpath to the well.
+        Path::new(
+            [Vec3::new(-20.0, 0.0, -10.0), Vec3::new(-4.0, 0.0, 8.0), Vec3::new(12.0, 0.0, 14.0)],
+            0.35,
+            PathKind::Earth,
+        ),
+    ]));
+}
+```
+
+The crate rasterises the network once — off the frame, on `AsyncComputeTaskPool` — into an **8-bit coverage distance field** over the terrain's extent, at four texels across the narrowest route (0.175 m for a footpath, a metre for a road) and sampled bilinearly, so a 70 cm path's edge is smooth at any zoom rather than stepping at the texel grid (Green 2007; RTR4 §15.4.3). The terrain's own material reads it at every fragment: the turf gives way to bare, compacted ground with the route's grain (a per-texel speckle the mask carries at its own resolution, plus noise up close), a dish cross-section a few centimetres deep whose verge stands proud and catches a grazing sun, snow cleared where traffic runs (90 % off a lane, road or track; a snow track keeps a packed 65 %), and each wheel line's rut as a dark, compacted, smoother groove. A route is the **ground it crosses, worn**: trodden sand on a dune, the snow's own colour in snow, the route's earth or stone only on turf and soil. The whole block is compiled only into a terrain whose `PathNetwork` has routes (`PATHS`), so a terrain without paths pays nothing — measured within ±2 % of the same scene with no network. See [`docs/research/paths.md`](docs/research/paths.md); the `trails` example takes `ELEMENTS_PATHS=lane|track|road|all`.
+
+![The same hillside. Left, before: a bare meadow, no route anywhere. Right, after: a gravel road with its wheel ruts, a cart track branching from it and a trodden footpath running down to the right, each worn to its own width and surface, crossing at a junction](docs/paths.png)
+
 ### Trails
 
 `TrailsPlugin` presses footprints, ruts and tracks into the ground. Put an `Imprint { half_extents, load_n }` on anything that touches the ground (a foot, a hoof, a wheel, a body lying down): while its translation (the sole) is within 0.1 m of the undisturbed surface it sinks as deep as the ground gives under its load (Bekker–Wong pressure–sinkage with Wong's constants; in snow no deeper than the snow compacts to 500 kg/m³, CRREL 90-9; never deeper than a 0.30 m loose layer), and pushes up a rim of what it displaced but could not compress (a tenth of the volume in snow, all of it in dry sand). A 77.5 kg walker on a 10 × 26 cm sole leaves 24 cm in 30 cm of fresh powder, 3.4 cm in dry sand, half a centimetre in dry soil and the full 30 cm in mud. Between frames an imprint carves the whole path it swept, so a fast wheel leaves an unbroken rut. The weather takes the trails back: new snow fills a trench by exactly what the cover map gained, melt and settling clamp it to the snow, the snow drift and the sand flux smooth it as diffusion, and dry sand slumps to 34°, wet sand to 10° and mud to 63°.
@@ -672,6 +703,7 @@ Native (Vulkan, Metal, DX12) and wasm WebGPU. WebGL2 is unsupported: the simulat
 - [Lightning](docs/research/lightning.md) — Reed & Wyvill 1994, Kim & Lin 2004, Poelman et al. 2021, Rakov, Tatarchuk 2006.
 - [Fog](docs/research/fog.md) — Wronski 2014, Hillaire 2015, Wenzel 2006, Real-Time Rendering.
 - [Terrain](docs/research/terrain.md) — Strugar 2009 (CDLOD), Andersson 2007, Musgrave et al. 1989, Galin et al. 2019, Mei et al. 2007.
+- [Paths and roads](docs/research/paths.md) — Pouyat et al. 2020 (the trail impacts: bared soil, compaction, vegetation loss), Andersson 2007 (mask-based terrain compositing), Green 2007 via RTR4 §15.4.3 (coverage distance fields), Sumner et al. 1999, Tatarchuk 2006.
 - [Terrain level of detail under an orthographic camera](docs/research/orthographic-lod.md) — Strugar 2009, Asirvatham & Hoppe 2005 (clipmaps centred on the viewer), Luebke et al. 2003 and Lindstrom et al. 1996 (screen-space error), the Unreal and Unity terrain docs (a vertex on every height sample).
 - [Precipitation](docs/research/precipitation.md) — Marshall–Palmer drops, Garg & Nayar, Langer et al., Wang & Wade, Kanazawa & Uchida, Rasmussen et al., Tatarchuk.
 - [Clouds](docs/research/clouds.md) — Schneider 2015 and 2017 (Horizon Zero Dawn, Nubis), Hillaire 2016 and 2020, Högfeldt 2016, Patry 2021, Real-Time Rendering, Kasten & Czeplak 1980.
