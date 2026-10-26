@@ -152,6 +152,15 @@ spawned, how far they are faded and which child mesh is shown. No shader, no bin
 5. **The ring does not explode.** At `ELEMENTS_ORTHO=400` the spawned count stays under the cap's
    population, and the build stays under the existing scatter's cost.
 
+## What great looks like
+
+An isometric town view, 18 m of ground top to bottom, in the mountains: the talus at the cliff's
+foot is a scatter of stones and blocks with silhouettes and contact shadows, as it is through a
+perspective camera — not a painted sheet. Walking the focus does not pop stones in and out at the
+edge of the frame: they arrive small, at the ring's edge, and grow as they come. A wide region view
+shows the rocky ground densely enough to read as talus from above without the frame budget moving.
+The same scene through a perspective camera is exactly as it was.
+
 ## Deviations from this plan
 
 1. **The mesh switch under an orthographic camera is made by the crate, not by `VisibilityRange`**
@@ -163,6 +172,15 @@ spawned, how far they are faded and which child mesh is shown. No shader, no bin
    main-view cull.
 3. **The cap.** Model 3's magnification is unbounded: a 4 km view would spawn every rock class to
    its own range, which is millions. The cap is the crate's, and is logged rather than derived.
+4. **The perspective capture that differs is a real bug the first cut had.** The first version
+   cached the fade centre on each `RockSeat` at spawn, so a *moving* perspective camera never
+   re-faded its rocks: the 6 m-above-ground capture differed from the baseline in 2.8 % of its
+   pixels (rocks at the frame's edge kept full scale). The centre is now passed to
+   `seat_transform` each pass. The still perspective capture is identical to the byte.
+5. **A rock is drawn by diameter, not by distance, under an orthographic view** — so a *very* wide
+   view draws nothing at all rather than a field of sub-pixel meshes: at 4 km of view height a
+   3.6 m boulder is one pixel. The ring is empty in that case, which is what `ring_radius` returns
+   and `a_wide_orthographic_view_draws_only_the_stones_that_read` asserts.
 
 ## Pending index
 
@@ -170,12 +188,3 @@ Nothing new: the note reuses `rock-scatter.md`'s and `view-anchor.md`'s sources,
 already in the corpus (`bo/book_real_time_rendering_4th_akenine`,
 `bo/book_level_of_detail_3d_graphics_luebke`, `10.1080_2151237x.2009.10129287`,
 `10.1145_1015706.1015799`, `10.1145_237170.237217`).
-
-## What great looks like
-
-An isometric town view, 18 m of ground top to bottom, in the mountains: the talus at the cliff's
-foot is a scatter of stones and blocks with silhouettes and contact shadows, as it is through a
-perspective camera — not a painted sheet. Walking the focus does not pop stones in and out at the
-edge of the frame: they arrive small, at the ring's edge, and grow as they come. A wide region view
-(1200 m) shows the rocky ground densely enough to read as talus from above without the frame
-budget moving. The same scene through a perspective camera is exactly as it was.

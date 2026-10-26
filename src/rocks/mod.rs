@@ -156,8 +156,123 @@ const FADE: f32 = 0.2;
 /// Diameter bins per class for the draw ranges: few distinct [`VisibilityRange`]s, so Bevy's
 /// table (64 entries where storage buffers are scarce) holds them all.
 const RANGE_BINS: usize = 6;
+/// The vertical field of view the per-metre range factors are calibrated for, radians: Bevy's own
+/// default perspective view (`PerspectiveProjection::default()`). A rock's draw range `c · D` is
+/// the distance at which a rock of diameter `D` is a fixed share of the view's height. Under an
+/// orthographic view the same share is reached at the distance a perspective camera of this field
+/// of view would need, so the two projections agree about what is worth drawing
+/// (`docs/research/orthographic-rocks.md` Model 1).
+const REFERENCE_FOV: f32 = std::f32::consts::FRAC_PI_3;
+/// Largest ring the scatter's magnification may reach under an orthographic view, m: a 4 km
+/// region view shows its rocks, but the whole world's are not built for it.
+const ORTHO_RING_MAX_M: f32 = 1200.0;
 
-/// The meshes and the material every rock shares.
+/// How far rocks are drawn this frame.
+///
+/// A perspective camera draws a rock out to `range_per_m · D` (metres per metre of diameter),
+/// which is a constant screen size: at that distance a rock of diameter `D` subtends the view's
+/// height over `2 · range_per_m · tan(θ/2)` of it, whatever `D` is. Under an orthographic camera
+/// distance says nothing about a rock's size on screen — "objects maintain the same size
+/// regardless of distance to the camera" (Akenine-Möller et al. §4.7.1) — so the same screen size
+/// is a threshold on the rock's **diameter** instead, and everything within the view is equally
+/// far (`docs/research/orthographic-rocks.md` Model 1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ViewScale {
+    /// A perspective camera: draw a rock out to `range_per_m · D`.
+    Distance { range_per_m: f32 },
+    /// An orthographic camera: draw a rock whose diameter is at least `min_diameter_m` anywhere
+    /// within `ring_m` of the view's centre, and the near mesh from `near_diameter_m` up.
+    Diameter {
+        min_diameter_m: f32,
+        near_diameter_m: f32,
+        ring_m: f32,
+    },
+}
+
+impl ViewScale {
+    /// The ring a size class spanning up to `class_max_m` of diameter is built out to, m: zero
+    /// where the view does not draw that class at all.
+    fn ring_radius(&self, class_max_m: f32) -> f32 {
+        match *self {
+            Self::Distance { range_per_m, .. } => range_per_m * class_max_m,
+            Self::Diameter {
+                min_diameter_m,
+                ring_m,
+                ..
+            } => {
+                if class_max_m >= min_diameter_m {
+                    ring_m
+                } else {
+                    0.0
+                }
+            }
+        }
+    }
+
+    /// Whether the view draws a rock of diameter `d` at all.
+    fn draws(&self, d: f32) -> bool {
+        match *self {
+            Self::Distance { range_per_m, .. } => range_per_m > 0.0,
+            Self::Diameter { min_diameter_m, .. } => d >= min_diameter_m,
+        }
+    }
+
+    /// Whether the rock of diameter `d` takes the near mesh.
+    fn near_mesh(&self, d: f32) -> bool {
+        match *self {
+            // Bevy's `VisibilityRange` switches the meshes at `NEAR_PER_M · d` from the camera.
+            Self::Distance { .. } => true,
+            Self::Diameter {
+                near_diameter_m, ..
+            } => d >= near_diameter_m,
+        }
+    }
+
+    /// The discriminant and values a scatter is built for: a change rebuilds it.
+    fn key(&self) -> [f32; 4] {
+        match *self {
+            Self::Distance { range_per_m, .. } => [0.0, range_per_m, 0.0, 0.0],
+            Self::Diameter {
+                min_diameter_m,
+                ring_m,
+                ..
+            } => [1.0, min_diameter_m, ring_m, 0.0],
+        }
+    }
+}
+
+/// This frame's [`ViewScale`] for a followed camera of `projection`, whose rocks are measured from
+/// the frame's centre (the terrain's morph centre: the eye under a perspective view, the focus
+/// under an orthographic one) and whose view spans `footprint_m` of ground across.
+fn view_scale(
+    projection: Option<&Projection>,
+    range_per_m: f32,
+    footprint_m: f32,
+    units: &ElementsUnits,
+) -> ViewScale {
+    let height_m = match projection {
+        Some(Projection::Orthographic(o)) => units.metres(o.area.height()),
+        _ => f32::NAN,
+    };
+    if !(height_m.is_finite() && height_m > 0.0) {
+        return ViewScale::Distance { range_per_m };
+    }
+    // The distance at which a perspective camera of [`REFERENCE_FOV`] spans `height_m`: the
+    // screen size a rock of diameter `d` reaches at range `R` is `d / (2 R tan(θ/2))` of the
+    // view's height, so the ranges `range_per_m · d` are the diameter thresholds
+    // `height_m / (2 · range_per_m · tan(θ/2))`.
+    let threshold = 2.0 * (0.5 * REFERENCE_FOV).tan();
+    // The ring is where a rock has *gone*: the fade runs over the last [`FADE`] of the range, so
+    // the ring must reach past the view's ground by that much or the fade is drawn inside the
+    // frame — stones at the corners shrink to nothing while a player watches.
+    let ground_m = 0.5 * footprint_m / (1.0 - FADE);
+    ViewScale::Diameter {
+        min_diameter_m: height_m / (range_per_m * threshold),
+        near_diameter_m: height_m / (NEAR_PER_M * threshold),
+        ring_m: ground_m.min(ORTHO_RING_MAX_M),
+    }
+}
+
 #[derive(Resource)]
 struct RockAssets {
     /// Per shape: the near and the far mesh.
@@ -213,7 +328,9 @@ struct FieldKey {
     grid_y0: f32,
     cover: CoverParams,
     seed: u64,
-    range_per_m: f32,
+    /// The view's scale: a camera that zooms or a focus that moves to another orthographic view
+    /// changes what is drawn, so the scatter is rebuilt.
+    view: [f32; 4],
     units: f32,
 }
 
@@ -241,7 +358,7 @@ struct RockSeat {
     lift_m: f32,
     /// The mesh's scale, m (its long axis's length).
     scale_m: f32,
-    /// Where it has shrunk away, m from the eye.
+    /// Where it has shrunk away, m from the view's centre.
     far_m: f32,
     /// The two surfaces the patches draw here, the camera's distance morphing between them;
     /// read at the surface `version`, from the patch levels when `patched`.
@@ -302,6 +419,19 @@ fn binned_diameter(class: usize, diameter_m: f32) -> f32 {
     a * (b / a).powf((bin + 0.5) / RANGE_BINS as f32)
 }
 
+/// The ground a followed orthographic camera spans across, m: the diagonal of its footprint, its
+/// width by the height it covers over the sine of its look-down angle (`precipitation` sizes its
+/// box the same way, `docs/research/view-anchor.md` Deviation 4).
+fn footprint_m(projection: &Projection, transform: &GlobalTransform, units: &ElementsUnits) -> f32 {
+    let Projection::Orthographic(o) = projection else {
+        return 0.0;
+    };
+    let down = (-transform.forward().y).clamp(0.2, 1.0);
+    units
+        .metres(o.area.width())
+        .hypot(units.metres(o.area.height()) / down)
+}
+
 /// Build the tiles that entered each class's ring and drop the ones that left it.
 #[allow(clippy::too_many_arguments)]
 fn scatter(
@@ -310,6 +440,7 @@ fn scatter(
     quality: Res<ElementsQuality>,
     units: Res<ElementsUnits>,
     view: Res<ElementsView>,
+    cameras: Query<(&Projection, &GlobalTransform)>,
     snapshot: Res<EnvironmentSnapshot>,
     terrain: Option<Res<TerrainRuntime>>,
     assets: Option<Res<RockAssets>>,
@@ -330,6 +461,19 @@ fn scatter(
     let cover = settings.cover();
     let range_per_m = quality.rock_range() * settings.range_scale.max(0.0);
     let u = units.per_metre();
+    // What the terrain's patches are selected and morphed about: the eye, or an orthographic
+    // camera's focus. The rocks fade, ring and seat about it, so a rock is culled by the same
+    // centre as the ground it sits on (`docs/research/orthographic-rocks.md` Model 2).
+    let centre = terrain.map_or(view.eye, |t| t.morph_centre(view.eye));
+    let camera = view.entity.and_then(|e| cameras.get(e).ok());
+    let scale = view_scale(
+        camera.map(|(projection, _)| projection),
+        range_per_m,
+        camera.map_or(0.0, |(projection, transform)| {
+            footprint_m(projection, transform, &units)
+        }),
+        &units,
+    );
     let key = FieldKey {
         grid_origin: snap.grid.origin,
         grid_cell: snap.grid.cell_m,
@@ -337,28 +481,36 @@ fn scatter(
         grid_y0: snap.grid.y0,
         cover,
         seed: settings.seed,
-        range_per_m,
+        view: scale.key(),
         units: u,
     };
     if field.key.as_ref() != Some(&key) {
         clear(&mut commands, &mut field, &mut stats);
         field.lattices = (0..CLASSES.len())
-            .map(|class| ClassLattice::new(class, cover.max_cover(), range_per_m))
+            .map(|class| {
+                ClassLattice::with_radius(
+                    class,
+                    cover.max_cover(),
+                    scale.ring_radius(CLASSES[class].1),
+                )
+            })
             .collect();
         field.key = Some(key);
     }
     if cover.max_cover() <= 0.0 || range_per_m <= 0.0 {
         return;
     }
-    let eye = view.eye;
-    let centre = terrain.map_or(eye, |t| t.morph_centre(eye));
-    let eye_xz = eye.xz();
+    // A class the view does not draw keeps an empty lattice, so nothing is built for it.
+    if field.lattices.iter().all(|lattice| lattice.radius_m <= 0.0) {
+        return;
+    }
+    let centre_xz = centre.xz();
     // Drop the tiles that left their ring by more than a tile (the margin keeps a camera on a
     // tile's edge from rebuilding it every frame).
     let lattices = field.lattices.clone();
     field.tiles.retain(|&(class, tile), &mut (entity, rocks)| {
         let lattice = &lattices[class];
-        if lattice.tile_distance(tile, eye_xz) > lattice.radius_m + lattice.tile_m() {
+        if lattice.tile_distance(tile, centre_xz) > lattice.radius_m + lattice.tile_m() {
             commands.entity(entity).despawn();
             stats.rocks = stats.rocks.saturating_sub(rocks);
             stats.tiles = stats.tiles.saturating_sub(1);
@@ -369,31 +521,43 @@ fn scatter(
     });
     let mut wanted: Vec<(f32, usize, IVec2)> = lattices
         .iter()
+        // A class the view does not draw has no ring, and `tiles_near` would still offer the
+        // tile under the centre: skipping it here keeps `TILES_PER_FRAME` for real tiles.
+        .filter(|lattice| lattice.radius_m > 0.0)
         .flat_map(|lattice| {
             lattice
-                .tiles_near(eye_xz, 0.0)
+                .tiles_near(centre_xz, 0.0)
                 .into_iter()
-                .map(move |tile| (lattice.tile_distance(tile, eye_xz), lattice.class, tile))
+                .map(move |tile| (lattice.tile_distance(tile, centre_xz), lattice.class, tile))
         })
         .filter(|(_, class, tile)| !field.tiles.contains_key(&(*class, *tile)))
         .collect();
     wanted.sort_by(|a, b| a.0.total_cmp(&b.0));
     for &(_, class, tile) in wanted.iter().take(TILES_PER_FRAME) {
         let lattice = &lattices[class];
+        if lattice.radius_m <= 0.0 {
+            continue;
+        }
         let rocks = tile_rocks(snap, &cover, lattice, tile, settings.seed);
-        let count = rocks.len() as u32;
         let parent = commands
             .spawn((RockTile, Transform::IDENTITY, Visibility::default()))
             .id();
+        // Counted as drawn, not as placed: an orthographic view drops the rocks below its
+        // diameter threshold, and `RockStats` reports what is on the ground.
+        let mut count = 0;
         for rock in &rocks {
+            if !scale.draws(rock.diameter_m) {
+                continue;
+            }
+            count += 1;
             let child = spawn_rock(
                 &mut commands,
                 &assets,
                 class,
                 rock,
-                range_per_m,
+                scale,
                 u,
-                (eye, centre),
+                centre,
                 snap,
                 field.levels.as_ref(),
             );
@@ -405,17 +569,17 @@ fn scatter(
     }
 }
 
-/// Spawn one rock and its two meshes, seated on the surface the patches draw for an eye and a
-/// morph centre `(eye, centre)` (metre frame).
+/// Spawn one rock and its two meshes, seated on the surface the patches draw about `centre`
+/// (metre frame), drawn as this frame's [`ViewScale`] says (`docs/research/orthographic-rocks.md`).
 #[allow(clippy::too_many_arguments)]
 fn spawn_rock(
     commands: &mut Commands,
     assets: &RockAssets,
     class: usize,
     rock: &Placed,
-    range_per_m: f32,
+    scale: ViewScale,
     units: f32,
-    (eye, centre): (Vec3, Vec3),
+    centre: Vec3,
     snap: &TerrainSnapshot,
     levels: Option<&PatchLevels>,
 ) -> Entity {
@@ -432,16 +596,44 @@ fn spawn_rock(
         up,
         lift_m: height_m * (0.5 - rock.bury),
         scale_m,
-        far_m: range_per_m * d,
+        far_m: match scale {
+            ViewScale::Distance { range_per_m, .. } => range_per_m * d,
+            // An orthographic view draws the whole ring at one distance: the fade is over the
+            // last fifth of the ring instead, so a rock still arrives small at the edge.
+            ViewScale::Diameter { ring_m, .. } => ring_m,
+        },
         lattices: Lattices::at(snap, levels, rock.xz),
         version: snap.version,
         patched: levels.is_some(),
     };
     let surface = seat.lattices.height(levels, centre, rock.xz);
-    let (translation, scale) = seat_transform(&seat, surface, eye, units);
-    let near = NEAR_PER_M * d * units;
-    let far = seat.far_m * units;
+    let (translation, rock_scale) = seat_transform(&seat, surface, centre, units);
     let [near_mesh, far_mesh] = assets.meshes[rock.shape].clone();
+    // Bevy's `VisibilityRange` measures from the camera, which under an orthographic view is one
+    // distance for the whole scene: the near and far children would take the same verdict and a
+    // rock would never switch mesh (Model 4). There the crate picks the mesh itself.
+    let (near_range, far_range, near_shown, far_shown) = match scale {
+        ViewScale::Distance { .. } => (
+            VisibilityRange::abrupt(0.0, NEAR_PER_M * d * units),
+            VisibilityRange::abrupt(NEAR_PER_M * d * units, seat.far_m * units),
+            Visibility::Inherited,
+            Visibility::Inherited,
+        ),
+        ViewScale::Diameter { .. } => (
+            VisibilityRange::abrupt(0.0, f32::MAX),
+            VisibilityRange::abrupt(0.0, f32::MAX),
+            if scale.near_mesh(d) {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            },
+            if scale.near_mesh(d) {
+                Visibility::Hidden
+            } else {
+                Visibility::Inherited
+            },
+        ),
+    };
     commands
         .spawn((
             ScatteredRock {
@@ -452,7 +644,7 @@ fn spawn_rock(
             Transform {
                 translation,
                 rotation,
-                scale: Vec3::splat(scale),
+                scale: Vec3::splat(rock_scale),
             },
             Visibility::default(),
         ))
@@ -460,24 +652,29 @@ fn spawn_rock(
             r.spawn((
                 Mesh3d(near_mesh),
                 MeshMaterial3d(assets.material.clone()),
-                VisibilityRange::abrupt(0.0, near),
+                near_range,
+                near_shown,
             ));
             r.spawn((
                 Mesh3d(far_mesh),
                 MeshMaterial3d(assets.material.clone()),
-                VisibilityRange::abrupt(near, far),
+                far_range,
+                far_shown,
             ));
         })
         .id()
 }
 
-/// The rock's translation and scale (world units) on a surface at `surface_m` for an eye at
-/// `eye` (metre frame): it shrinks to nothing over the last fifth of its range, about its
-/// buried base, so a shrinking rock stays in the ground.
-fn seat_transform(seat: &RockSeat, surface_m: f32, eye: Vec3, units: f32) -> (Vec3, f32) {
+/// The rock's translation and scale (world units) on a surface at `surface_m` (metre frame): it
+/// shrinks to nothing over the last fifth of its range, about its buried base, so a shrinking
+/// rock stays in the ground. The range is measured from `view` — the frame's own centre, the
+/// same one the terrain's patches morph about — not from where the camera stands.
+fn seat_transform(seat: &RockSeat, surface_m: f32, view: Vec3, units: f32) -> (Vec3, f32) {
     let ground = Vec3::new(seat.xz.x, surface_m, seat.xz.y);
+    // Distance from what the view shows, not from where the camera stands: an isometric camera
+    // stands hundreds of metres back from every rock it draws (`docs/research/orthographic-rocks.md`).
     let t =
-        ((eye.distance(ground) - seat.far_m * (1.0 - FADE)) / (seat.far_m * FADE)).clamp(0.0, 1.0);
+        ((view.distance(ground) - seat.far_m * (1.0 - FADE)) / (seat.far_m * FADE)).clamp(0.0, 1.0);
     // Never exactly zero: a zero scale has no inverse for the normals.
     let fade = (1.0 - t * t * (3.0 - 2.0 * t)).max(1e-3);
     (
@@ -515,6 +712,8 @@ fn seat_rocks(
     let moved = last.is_none_or(|(at, about, _)| {
         at.distance(eye) > SEAT_STEP_M || about.distance(centre) > SEAT_STEP_M
     });
+    // The morph centre is what a rock fades about, so a moved centre re-fades every rock even
+    // when the eye itself has not moved (an orthographic camera walks its focus, not its eye).
     let levels_changed = std::mem::take(&mut field.levels_changed);
     if !moved && !surface_changed && !levels_changed {
         return;
@@ -536,12 +735,179 @@ fn seat_rocks(
             seat.patched = levels.is_some();
         }
         let surface = seat.lattices.height(levels, centre, seat.xz);
-        let (translation, scale) = seat_transform(&seat, surface, eye, u);
+        let (translation, scale) = seat_transform(&seat, surface, centre, u);
         if transform.translation.distance(translation) > tolerance
             || (transform.scale.x - scale).abs() > tolerance
         {
             transform.translation = translation;
             transform.scale = Vec3::splat(scale);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const U: ElementsUnits = ElementsUnits {
+        units_per_metre: 1.0,
+    };
+
+    /// An orthographic view spanning `height_m` of ground top to bottom, its area set as Bevy's
+    /// `camera_system` sets it from a 16:9 viewport.
+    fn orthographic(height_m: f32) -> Projection {
+        let mut projection = OrthographicProjection {
+            scaling_mode: bevy::camera::ScalingMode::FixedVertical {
+                viewport_height: height_m,
+            },
+            ..OrthographicProjection::default_3d()
+        };
+        projection.area = bevy::math::Rect::from_center_size(
+            Vec2::ZERO,
+            Vec2::new(height_m * 16.0 / 9.0, height_m),
+        );
+        Projection::from(projection)
+    }
+
+    #[test]
+    fn a_perspective_view_draws_a_rock_at_the_same_range_as_before() {
+        // The change is a no-op for a perspective camera: the per-metre range factor, measured
+        // from the eye.
+        let scale = view_scale(None, 100.0, 0.0, &U);
+        assert_eq!(scale, ViewScale::Distance { range_per_m: 100.0 });
+        // A 0.25 m stone is drawn to 25 m, a 3.6 m boulder to 360 m: unchanged.
+        assert!((scale.ring_radius(CLASSES[0].1) - 50.0).abs() < 1e-4);
+        assert!((scale.ring_radius(CLASSES[3].1) - 360.0).abs() < 1e-3);
+        assert!(scale.draws(0.25));
+        assert!(scale.near_mesh(0.25));
+    }
+
+    #[test]
+    fn an_orthographic_view_draws_the_same_screen_size_a_perspective_one_would() {
+        // A rock is drawn while it covers at least the share of the view's height a perspective
+        // camera of the reference field of view gives it at its own range.
+        let height_m = 18.0;
+        let range_per_m = 100.0;
+        let scale = view_scale(Some(&orthographic(height_m)), range_per_m, 40.0, &U);
+        let ViewScale::Diameter {
+            min_diameter_m,
+            near_diameter_m,
+            ring_m,
+            ..
+        } = scale
+        else {
+            panic!("an orthographic view must take the diameter rule: {scale:?}");
+        };
+        // The threshold is the diameter that a perspective camera of the reference field of view
+        // draws at its own range, as a share of the view's height.
+        let tan_half = (0.5 * REFERENCE_FOV).tan();
+        let perspective_share = 1.0 / (2.0 * range_per_m * tan_half);
+        assert!(
+            (min_diameter_m / height_m - perspective_share).abs() < 1e-6,
+            "{min_diameter_m} {height_m} {perspective_share}"
+        );
+        // 18 m over 2·100·tan(30°) is a 16 cm stone: the smallest class (25 cm and up) is drawn,
+        // where before every rock was shrunk to nothing at 457 m from the eye.
+        assert!((min_diameter_m - 0.1559).abs() < 1e-3, "{min_diameter_m}");
+        assert!(scale.draws(CLASSES[0].0));
+        assert!(!scale.draws(0.1));
+        // The near mesh, for a rock whose facets a game can see: 18 over 2·22·tan(30°) = 0.71 m.
+        assert!((near_diameter_m - height_m / (2.0 * NEAR_PER_M * tan_half)).abs() < 1e-5);
+        assert!(!scale.near_mesh(0.4));
+        assert!(scale.near_mesh(1.0));
+        // The ring reaches past the half footprint by the fade, so the shrink happens outside
+        // the frame: 20 m of ground is a 25 m ring. Every class is built out to it.
+        assert!((ring_m - 25.0).abs() < 1e-4, "{ring_m}");
+        assert!((scale.ring_radius(CLASSES[3].1) - 25.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_wide_orthographic_view_draws_only_the_stones_that_read() {
+        // A rock is worth a mesh only while it is a few pixels tall: a 200 m view keeps every
+        // class, a 2 km one only the boulders, and a 4 km one none at all (a 3.6 m boulder is
+        // 1 px there). The ring is capped, so no view builds the world.
+        let ring = |height_m: f32| {
+            let scale = view_scale(Some(&orthographic(height_m)), 100.0, 9e3, &U);
+            (
+                scale.draws(CLASSES[0].0),
+                scale.draws(CLASSES[3].1),
+                scale.ring_radius(CLASSES[3].1),
+            )
+        };
+        // The threshold is `height / (2 · 100 · tan 30°)` = `height / 115.47`: 22 cm at the
+        // isometric 18 m view, so the smallest class (25 cm and up) is drawn; 26 cm at 30 m, so
+        // it is not; 1.7 m at 200 m; 17 m at 2 km and 35 m at 4 km, where no class is drawn and
+        // the ring is empty.
+        assert_eq!(ring(18.0), (true, true, ORTHO_RING_MAX_M));
+        assert_eq!(ring(28.0), (true, true, ORTHO_RING_MAX_M));
+        assert_eq!(ring(30.0), (false, true, ORTHO_RING_MAX_M));
+        assert_eq!(ring(200.0), (false, true, ORTHO_RING_MAX_M));
+        assert_eq!(ring(2000.0), (false, false, 0.0));
+        assert_eq!(ring(4000.0), (false, false, 0.0));
+    }
+
+    #[test]
+    fn a_world_in_feet_sizes_the_view_in_metres() {
+        // The view's area is in world units; the conversion is the units resource's.
+        let feet = ElementsUnits {
+            units_per_metre: 3.280_84,
+        };
+        let metres = view_scale(Some(&orthographic(18.0)), 100.0, 40.0, &U);
+        // `footprint_m` is already in metres (the caller converts with the same units).
+        let in_feet = view_scale(
+            Some(&orthographic(18.0 * 3.280_84)),
+            100.0,
+            40.0,
+            &feet,
+        );
+        assert_eq!(metres, in_feet);
+    }
+
+    #[test]
+    fn a_rock_fades_about_the_focus_not_the_eye() {
+        // The isometric camera stands 457 m back: measuring from the eye faded every rock to the
+        // floor. From the focus, a rock at the focus is at full scale and one at the ring's edge
+        // is at the floor.
+        let centre = Vec3::new(45.0, 12.0, 52.0);
+        let scale = view_scale(Some(&orthographic(18.0)), 100.0, 40.0, &U);
+        let seat = |xz: Vec2, far_m: f32| RockSeat {
+            xz,
+            up: Vec3::Y,
+            lift_m: 0.0,
+            scale_m: 1.0,
+            far_m,
+            lattices: Lattices {
+                level: 0,
+                fine: 12.0,
+                coarse: 12.0,
+            },
+            version: 0,
+            patched: false,
+        };
+        let ViewScale::Diameter { ring_m, .. } = scale else {
+            panic!("an orthographic view must take the diameter rule");
+        };
+        let (_, at_focus) = seat_transform(&seat(centre.xz(), ring_m), 12.0, centre, 1.0);
+        let (_, at_edge) = seat_transform(
+            &seat(centre.xz() + Vec2::new(ring_m, 0.0), ring_m),
+            12.0,
+            centre,
+            1.0,
+        );
+        assert!((at_focus - 1.0).abs() < 1e-4, "{at_focus}");
+        assert!(at_edge < 2e-3, "{at_edge}");
+        // Monotone between: nearer is never smaller.
+        let mut last = 0.0;
+        for step in 0..=10 {
+            let d = ring_m * 0.5 * step as f32 / 10.0;
+            let (_, s) = seat_transform(
+                &seat(centre.xz() + Vec2::new(d, 0.0), ring_m),
+                12.0,
+                centre,
+                1.0,
+            );
+            assert!(s >= last - 1e-6, "{s} {last}");
+            last = s;
         }
     }
 }

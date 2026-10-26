@@ -281,7 +281,10 @@ impl ElementsQuality {
     }
 
     /// How far scattered rocks are drawn, m per m of a rock's diameter: a rock vanishes at the
-    /// same size on screen whatever its size (`docs/research/rock-scatter.md` Deviation 3).
+    /// same size on screen whatever its size (`docs/research/rock-scatter.md` Deviation 3). Under
+    /// an orthographic camera the same factor is read as that screen size, which is a threshold
+    /// on a rock's diameter instead of a distance from the eye
+    /// (`docs/research/orthographic-rocks.md` Model 1).
     pub fn rock_range(self) -> f32 {
         match self {
             Self::Low => 60.0,

@@ -4,6 +4,19 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ## [Unreleased]
 
+### Fixed
+
+- **Scattered rocks are drawn under an orthographic camera.** An isometric game saw none of them:
+  every rock was seated, then shrunk to nothing, because the fade measured from `ElementsView::eye`
+  and an isometric camera stands 457 m back from everything in view (a 0.25 m stone's range is 25 m).
+  Bevy's `VisibilityRange` culls by the same camera distance, so even a rock that kept its scale
+  would not have drawn. The measure is now the view's own: under a perspective camera the
+  per-metre range is unchanged; under an orthographic one the same screen size is a threshold on the
+  rock's **diameter** (distance says nothing about a rock's size under that projection), the ring is
+  the view's ground footprint capped at 1200 m, and the fade and the near/far mesh choice are taken
+  from the terrain's LOD centre — the same `ElementsFocus` the patches are selected about — so a
+  rock is culled by the rule the ground under it is drawn by. `docs/research/orthographic-rocks.md`.
+
 ### Added
 
 - **Roads and paths: routes a game lays across the terrain, worn into its ground** (the user's

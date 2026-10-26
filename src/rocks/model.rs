@@ -271,13 +271,14 @@ pub(crate) struct ClassLattice {
 }
 
 impl ClassLattice {
-    /// The lattice of `class` for the densest cover `k_max` and the range factor `c` (m of range
-    /// per m of diameter).
-    pub(crate) fn new(class: usize, k_max: f32, range_per_m: f32) -> Self {
+    /// The lattice of `class` for the densest cover `k_max` and a ring of `radius_m`. An
+    /// orthographic view has no distance at which a rock's screen size falls (`docs/research/
+    /// orthographic-rocks.md` Model 1), so its ring is the view's own footprint rather than a
+    /// multiple of the class's diameter.
+    pub(crate) fn with_radius(class: usize, k_max: f32, radius_m: f32) -> Self {
         let (a, b) = CLASSES[class];
         let density = count_density(k_max.max(1e-3), a, b).max(1e-6);
         let cell_m = (1.0 / density).sqrt();
-        let radius_m = range_per_m * b;
         let tile_cells = ((radius_m / (3.0 * cell_m)).round() as i32).max(1);
         Self {
             class,
@@ -292,17 +293,17 @@ impl ClassLattice {
         self.cell_m * self.tile_cells as f32
     }
 
-    /// The tiles whose square comes within the ring around `eye` (metre-frame XZ).
-    pub(crate) fn tiles_near(&self, eye: Vec2, margin_m: f32) -> Vec<IVec2> {
+    /// The tiles whose square comes within the ring around `centre` (metre-frame XZ).
+    pub(crate) fn tiles_near(&self, centre: Vec2, margin_m: f32) -> Vec<IVec2> {
         let t = self.tile_m();
         let reach = self.radius_m + margin_m;
-        let lo = ((eye - reach) / t).floor().as_ivec2();
-        let hi = ((eye + reach) / t).floor().as_ivec2();
+        let lo = ((centre - reach) / t).floor().as_ivec2();
+        let hi = ((centre + reach) / t).floor().as_ivec2();
         let mut out = Vec::new();
         for z in lo.y..=hi.y {
             for x in lo.x..=hi.x {
                 let tile = IVec2::new(x, z);
-                if self.tile_distance(tile, eye) <= reach {
+                if self.tile_distance(tile, centre) <= reach {
                     out.push(tile);
                 }
             }
@@ -310,12 +311,12 @@ impl ClassLattice {
         out
     }
 
-    /// Distance from `eye` to the nearest point of a tile's square, m.
-    pub(crate) fn tile_distance(&self, tile: IVec2, eye: Vec2) -> f32 {
+    /// Distance from `centre` to the nearest point of a tile's square, m.
+    pub(crate) fn tile_distance(&self, tile: IVec2, centre: Vec2) -> f32 {
         let t = self.tile_m();
         let lo = tile.as_vec2() * t;
-        let nearest = eye.clamp(lo, lo + t);
-        nearest.distance(eye)
+        let nearest = centre.clamp(lo, lo + t);
+        nearest.distance(centre)
     }
 }
 
@@ -564,7 +565,8 @@ mod tests {
         class: usize,
         half: i32,
     ) -> Vec<Placed> {
-        let lattice = ClassLattice::new(class, params.max_cover(), 100.0);
+        let lattice =
+            ClassLattice::with_radius(class, params.max_cover(), 100.0 * CLASSES[class].1);
         let mut all = Vec::new();
         for z in -half..half {
             for x in -half..half {
@@ -588,7 +590,8 @@ mod tests {
         let snap = plane(2.0, 0.0);
         let mut measured = 0.0;
         for class in [2usize, 3] {
-            let lattice = ClassLattice::new(class, uniform.max_cover(), 100.0);
+            let lattice =
+                ClassLattice::with_radius(class, uniform.max_cover(), 100.0 * CLASSES[class].1);
             let half = (300.0 / lattice.tile_m()).ceil() as i32;
             let covered: f32 = rocks_in(&snap, &uniform, class, half)
                 .iter()
@@ -674,7 +677,8 @@ mod tests {
         // of the same density, 1/(2√ρ). A lattice reads 2.15; a clumped field reads below 1.
         let snap = plane(26.0, 0.0);
         let class = 0;
-        let lattice = ClassLattice::new(class, params().max_cover(), 100.0);
+        let lattice =
+            ClassLattice::with_radius(class, params().max_cover(), 100.0 * CLASSES[class].1);
         let rocks = rocks_in(&snap, &params(), class, 3);
         let side = 6.0 * lattice.tile_m();
         let rho = rocks.len() as f32 / (side * side);
@@ -705,7 +709,7 @@ mod tests {
     #[test]
     fn a_tile_built_twice_holds_the_same_rocks() {
         let snap = plane(26.0, 0.0);
-        let lattice = ClassLattice::new(1, params().max_cover(), 100.0);
+        let lattice = ClassLattice::with_radius(1, params().max_cover(), 100.0 * CLASSES[1].1);
         let a = tile_rocks(&snap, &params(), &lattice, IVec2::new(3, -2), 7);
         let b = tile_rocks(&snap, &params(), &lattice, IVec2::new(3, -2), 7);
         assert!(!a.is_empty());
