@@ -345,6 +345,8 @@ fn deep_wet_snow(mut commands: Commands) {
 
 Each rock sits on the surface the CDLOD patches actually draw (the readback on the covering patch's lattice, morphed by the camera's distance like the vertex shader does), so a distant rock does not float over a coarse patch. A rock of diameter `D` is drawn to `ElementsQuality::rock_range() · D` metres (100 m per metre at High) and shrinks away over the last fifth of that, so it vanishes at the same size on screen whatever its size and does not pop; a near and a far mesh (1280 and 320 triangles) switch at `22·D`. Under an **orthographic** camera the same screen size is a threshold on the rock's diameter instead of a distance from the eye — distance says nothing about a rock's size under that projection — and the ring, the fade and the mesh choice are measured from the terrain's own LOD centre (the camera's `ElementsFocus`), so an isometric game draws the talus in its view (`docs/research/orthographic-rocks.md`). They are drawn with `WeatheredMaterial` and a stone grain (`WeatheredExtension::with_grain`), so they take snow on their tops, wetness and cloud shadows.
 
+![The same isometric 18 m view, 457 m from the eye: before the change no stone is drawn anywhere; with it the talus and the meadow stones are](docs/rocks_orthographic.png)
+
 ```rust
 # use bevy::prelude::*;
 # use bevy_elements::*;

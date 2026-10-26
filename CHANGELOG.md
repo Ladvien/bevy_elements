@@ -16,6 +16,9 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
   the view's ground footprint capped at 1200 m, and the fade and the near/far mesh choice are taken
   from the terrain's LOD centre — the same `ElementsFocus` the patches are selected about — so a
   rock is culled by the rule the ground under it is drawn by. `docs/research/orthographic-rocks.md`.
+- **`RockStats` counts the rocks drawn, not the rocks placed**, so a game reading it under an
+  orthographic camera (which drops rocks below its diameter threshold) gets the number that is on
+  the ground.
 
 ### Added
 

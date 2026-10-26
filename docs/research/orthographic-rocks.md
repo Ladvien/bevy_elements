@@ -182,6 +182,24 @@ The same scene through a perspective camera is exactly as it was.
    3.6 m boulder is one pixel. The ring is empty in that case, which is what `ring_radius` returns
    and `a_wide_orthographic_view_draws_only_the_stones_that_read` asserts.
 
+## Outcome (measured, iteration 57)
+
+Every target above was checked on the built crate, `terrain_tour`, 1280×720, 200 frames, on the
+RTX 3090, against the same scene at the pre-change commit:
+
+| Target | Result |
+|---|---|
+| 1. Drawn at the isometric camera | 2.91 % of the frame changed, 151 blobs ≥ 6 px, median side **10.0 px** (p90 20.6, max 43.7) |
+| 1. A 60 m view drops the finest class | 2.75 % at 40 m, **1.61 %** at 60 m (threshold 0.52 m there, above the 0.25-0.5 m class) |
+| 2. A perspective view unchanged | `m_persp9` **max diff 0**, 0.000 % of pixels; from 6 m AGL max 1 in 0.049 % (dither) |
+| 3. The fade is about the focus | radial bands of the difference: 0.39 % at r ≥ 0.9, **3.01 %** in the outermost band of the heading-0 frame; monotone |
+| 4. Nothing culled | the corner bands above hold stone, so the ring reaches the frame's corners |
+| 5. The ring does not explode | a 1200 m view draws none (1 px boulders), frame byte-identical to the baseline |
+| A pan arrives small | 61 frames at 10 m/s: p99 change flat at 22-23 levels, `>40`-level ≤ 0.24 % |
+
+The cost is measured in `docs/loop-log.md` (iteration 57): the isometric scene with the scatter off
+against the same scene on, at 4K, interleaved.
+
 ## Pending index
 
 Nothing new: the note reuses `rock-scatter.md`'s and `view-anchor.md`'s sources, all of which are
