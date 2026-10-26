@@ -4308,3 +4308,66 @@ Evidence: `docs/orthographic_lod.png` (before: most posts end in grass; after: e
 3. **The weather's precipitation climatology** (iteration 49): the temperate preset rains 2-13× an observed wet station's totals.
 4. **Stylistic variants of the ground** (the user's ask): golem sets in other styles taking their own colour, with a capture tour.
 5. **A drawn-surface query** for figures on rugged ground (the level-0 triangles, not the bilinear: the mountains' residual); textures on the rock.
+
+## Iteration 52 - 2026-10-26 - Paths and roads: researched, NOT YET, not shipped
+
+**Commits:** `c46540e` (the research note `docs/research/paths.md`, committed alone before the code), this log. **The implementation was reverted**: `src/lib.rs`, `src/plugin.rs`, `src/terrain/{material,mod}.rs`, `src/terrain/render.wesl`, `examples/trails.rs`, `tools/wesl-check/src/main.rs` are back at `main`, and `src/paths.rs`/`src/paths.wesl` are deleted. **Issue:** none open. **Sibling repos:** none. **Not released.**
+
+### Why this item (and the runner-up)
+
+The user's instruction for this run: "Can we please focus on roads, path, trails, etc." The crate presses what a *point* does to the ground (`Imprint`, the trails field) and has **nothing** for the ground a *route* wears: the baseline captures (`/tmp/i52/before/snow_eye.png`, `mud_close.png`, `sand_noon.png`) show the terrain's meadow, snow and sand with only the walker's and the vehicle's own marks, and no lane, path or road anywhere. The runner-up was the backlog's first item (the orthographic camera's shadow bands, iteration 51), which is a smaller, narrower defect than a whole missing domain.
+
+### What was built, and what it did
+
+The full design is in `docs/research/paths.md` (`Model adopted`, `Parameters`, `GPU mapping`, `Validation targets`, `What great looks like`). Built and working:
+
+- `Path` (`points`, `half_width_m`, `PathKind::{Earth, Gravel, Stone, Snow}`, `rut_depth_m`), `PathNetwork` (resource), `PathsPlugin` (in `ElementsPlugins`), `PathState`.
+- A CPU rasteriser into a **coverage distance field** (`rgba16float`: signed edge distance, kind + packed rut depth, lateral offset as a fraction of the half width, edge fade), off the frame on `AsyncComputeTaskPool`; six unit tests (the signed field, the coverage's edge, a diagonal route's isotropic edge, crossing routes and determinism, clipping, the half conversion) — all passing.
+- The mask resolution follows the **narrowest** route (four texels across it), and that was the iteration's central discovery: at a metre a texel a 70 cm footpath is a fraction of one sample and simply cannot be drawn (`/tmp/i52/smoke_mud.png` showed a texel staircase; at 0.175 m texels it was smooth, `smoke_lane_close.png`).
+- The terrain material's `path` lane, a `PATHS` pipeline key and shader def, the `bevy_elements::paths` WESL library (`path_at`, `path_colour`, `path_grain`, ruts and a cart track's grassy crown), and a block in `render.wesl` that mixes the worn surface into the albedo, relief and roughness.
+- The example laid three routes (`ELEMENTS_PATHS=lane|track|road|all`).
+
+It **rendered**: `/tmp/i52/smoke_lane_close.png` shows a trodden brown lane winding up the hill with a soft ragged edge, and `track_flat4.png` shows a cart track's two rut lines running to the horizon. But the final rounds' capture (`/tmp/i52/diag3.png`) shows the track as **two pale-blue scratches on grass with no bare earth**, while the CPU mirror of the same shader reports `BARE 1.000` across the whole route (`paths::probe_track_cover`). `specialize` logs `paths true` and pushes `PATHS`, and `update_materials` logs the mask reaching the material (`4096 texels at 0.5 m`), so the disagreement is in what the fragment reads, not in the wiring.
+
+### Rounds (`/tmp/i52/critique.md` was not written: the feature never reached a verdict)
+
+| Round | Change | Finding |
+|---|---|---|
+| 1 | Mask at a metre a texel, tint = soil × colour | The lane was a **transparent smear**: a 0.35 m lane is a fraction of a 1 m texel (`smoke_paths.png`). |
+| 2 | The lane's fade made width-relative | Still a smear: a metre's texel cannot resolve a footpath at all. |
+| 3 | Mask resolution from the narrowest route | **The lane rendered** (`smoke_lane_close.png`): brown, soft-edged, winding. |
+| 4 | Absolute path colours (a dry-earth brown, pale gravel) | The gravel read as **cobblestone** (chips too coarse and too contrasty); fixed to 2 cm chips. |
+| 5 | A cart track's grassy crown between its ruts | The track became two **thin pale scratches** (`track_flat4.png`): the bare surface between the wheels vanished with the crown. |
+| 6 | The wheel bands bared regardless of the crown | No change: the bare colour still did not appear. |
+| 7 | The path block moved after the canopy | No change. |
+| 8-10 | Instrumentation: the mask reaches the material, `specialize` gets `paths true` | The fragment's `path.cover` or its `uv` is wrong while the CPU mirror says `BARE 1.0` — **not found in the rounds spent**. |
+
+**Verdict: NOT YET.** The feature is reverted rather than shipped, per the loop's rule after five failed rounds on one feature: "log the blocker, the remaining flaws and your best hypothesis, and revert to the last GREAT state rather than shipping something weaker."
+
+### The blocker and the next attempt's hypotheses
+
+The terrain draws the path **rut** (which comes from the pressed trail field) but not the path's **bare surface** (which comes from the mask sample in the fragment), although the same formula gives 1.0 on the CPU. Hypotheses, in the order to test them:
+
+1. **The sampled `uv` is outside `[0, 1]`** and `path_at` returns `path_none()` before the coverage is computed: print `material.path` and `uv` from the shader once (`debug_printf` or a debug colour output) rather than reasoning on the CPU. The lane is `(origin, texel_m, texels)`, 4096 texels at 0.5 m over the terrain's 2048 m extent; the fragment's `pv.xz` is *displaced and morphed* — if `pv` is not the metre frame the mask was built in, every `uv` falls off the mask. The trail field's own `trail_fade` uses the same convention and does draw, which points at the `uv`'s **origin** difference rather than its scale.
+2. `path.colour` mixes *before* `weather_surface` and is overwritten: ruled out by reading `weather_surface` (it takes `base_color` and returns it), but a capture with `snow = 0, wet = 0` would settle it in one frame.
+3. The `PATHS` def is pushed but the *bound* pipeline is another variant (the ground material's, or the prepass): the block is in the forward fragment only, and the terrain uses one shader for all its pipelines (`render.wesl`), so a prepass-only path would show exactly this.
+
+A cheaper and more robust alternative, if (1) is confirmed: **bake the worn surface into the terrain's layer colours on the CPU** — a per-cell `worn` lane in the terrain's own readback/`terrain_cells` buffer, written by the rasteriser at the simulation grid's resolution (4 m at High, too coarse for an edge, but enough for "this hillside is trodden") — and keep the *shape* (edge and ruts) in the masks. That trades the sub-texel edge for a pipeline the crate already proves works, and would want its own research pass.
+
+### Measurements
+
+- The mask rasterises 4096² in about 40 ms on the async pool (one thread, measured in the example's first frames); the coverage tests all pass.
+- **No performance gate was run** on the reverted code: it does not exist in the tree.
+- Baseline captures (`/tmp/i52/before/`, 9 shots: snow at 10.5 h and 15.6 h, sand at noon and 17.5 h, mud, a game's own mesh, and an aerial) confirm the domain is absent, not broken.
+
+### Sources
+
+- Pouyat et al. 2020 (corpus `10.1007_978-3-030-45216-2`): the trail-impact paragraph (bared soil, compaction, drying, vegetation loss, traffic concentrating); Andersson 2007 (corpus `10.1145_1281500.1281668`): mask-based terrain compositing and the 4 px/m destruction mask; Green 2007 via RTR4 §15.4.3: coverage distance fields; Sumner et al. 1999; Tatarchuk 2006; Barré-Brisebois 2014. The full list and what each contributes is in `docs/research/paths.md`.
+
+### The next five items, ranked
+
+1. **Finish paths and roads** with the hypotheses above; the research note, the rasteriser and its six tests are already committed, so the next pass starts at the shader sample.
+2. **Shadow bands on the rock under an orthographic camera** (iteration 51's first item, unchanged).
+3. **Scattered rocks under an orthographic camera**: none are drawn.
+4. **The weather's precipitation climatology** (iteration 49).
+5. **Stylistic variants of the ground** (the user's ask).
