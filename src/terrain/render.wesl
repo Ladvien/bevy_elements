@@ -12,6 +12,7 @@ import bevy_elements::terrain::common::{TerrainParams, ground_detail, last_sampl
 import bevy_elements::terrain::textures::{LayerMaps, layer_maps, height_lift, height_sharpness, DETAIL_GATE};
 import bevy_elements::surface_cover::{weather_surface, wet_canopy, canopy_share, graded, ripple_weights, ripple_offset, overcast_relief};
 import bevy_elements::trails::surface::{TrailHit, trail_fade, trail_march, trail_none};
+import bevy_elements::paths::{PathGrain, PathSample, path_at, path_bare, path_colour, path_grain, path_none};
 import bevy_pbr::render::{
     mesh_functions,
     mesh_view_bindings::{view, lights},
@@ -67,6 +68,11 @@ struct TerrainMaterialParams {
     colours: array<vec4<f32>, 3>,
     // The game's grade of the bare ground (`TerrainLook`): xyz the tint, w the saturation.
     look: vec4<f32>,
+    // Paths (`PathNetwork`): xy the mask's minimum corner (metre frame), z its texel edge (m),
+    // w its texels a side; w below 0.5 is no mask.
+    path: vec4<f32>,
+    // x: the narrowest route's half width, m (the shader's fade and cross-section scale).
+    path_scale: vec4<f32>,
     // World units to the metre (`ElementsUnits`): the shader divides the positions Bevy gives it
     // by this and multiplies the ones it hands back.
     units: f32,
@@ -87,6 +93,10 @@ struct TerrainMaterialParams {
 // shader alone, at its own cost.
 @group(constants::MATERIAL_BIND_GROUP) @binding(107) var ground_maps: texture_2d_array<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(108) var ground_maps_sampler: sampler;
+// The path mask: an 8-bit distance field over the terrain's extent (`paths.wesl`). Compiled only
+// into a pipeline whose network has routes (`PATHS`, `TerrainExtension::specialize`).
+@group(constants::MATERIAL_BIND_GROUP) @binding(109) var path_mask: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(110) var path_sampler: sampler;
 @if(GROUND_TEXTURES)
 const GROUND_TEXTURED: bool = true;
 @else
@@ -609,7 +619,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let soil_base = soil_colour();
     let plain = mix(w.x * ROCK + w.y * sand_colour() + w.z * soil_base + w.w * grass_colour(), soil_base, trench);
     var albedo = select(plain, mix(w.x * ROCK + maps.colour, soil_base, trench), maps_on);
-    let rough = mix(0.9, 0.95, w.z) * maps.roughness_scale;
+    var rough = mix(0.9, 0.95, w.z) * maps.roughness_scale;
 
     // The ground's detail, and the rock's own material (`docs/research/rock-material.md`).
     // The ground's grain is turf, soil and sand: it belongs on the near-horizontal surfaces,
@@ -738,6 +748,52 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // keep their colours. The default skips it, so the ground is as before to the bit.
     albedo = graded(albedo, material.look);
     albedo = wet_canopy(albedo, wet * canopy);
+    // Paths (`docs/research/paths.md`): a route a game laid wears the ground bare and compact, its
+    // kind its own colour. Compiled only into a terrain whose network has routes (`PATHS`): a
+    // terrain without paths pays nothing, not even the sample.
+    @if(PATHS)
+    {
+        let path = path_at(path_mask, path_sampler, pv.xz, material.path, material.path_scale.x);
+        if path.cover > 0.0 {
+            // A cart track's crown keeps its turf between the wheels; its wheel bands bare the
+            // ground whichever way the crown falls (a rut is trodden earth, not grass in a groove).
+            let in_rut = select(1.0, 0.0, path.rut <= 0.0);
+            let rut_share = select(0.0, 1.0, path.rut > 0.0) * clamp(path.rut / 0.03, 0.0, 1.0);
+            let bare = path_bare(path.kind) * path.cover * max(1.0 - path.crown, in_rut);
+            // A route is *travelled*, so it is cleared of snow: the traffic packs it and the wind
+            // scours it. Without this the whole surface is buried under a white blanket at any real
+            // snow depth and the roads vanish (`/tmp/i55/after/snow.png`). A snow track keeps its
+            // snow but packed: the cover is thinned, not removed, and the surface darkens.
+            let cleared = path.cover * (1.0 - path.crown);
+            snow_cover = snow_cover * (1.0 - cleared * select(0.9, 0.35, path.kind > 2.5));
+            // The route's own grain: the mask's per-texel value at its own resolution (0.175 m for a
+            // footpath), so a road keeps its stone past the band limit that drops the noise
+            // octaves, plus the finer noise up close.
+            let grain = path_grain(pv.xz, path.kind, footprint, path.grain);
+            // A route is the *ground it crosses*, worn — not a strip of imported earth. On sand a
+            // track is trodden sand (a little darker, finer), on snow it keeps the snow's colour,
+            // and only on turf and soil does the route's own earth or stone show. `ground_tint` is
+            // the layers' own colour here, so a desert track follows the dune it crosses
+            // (`/tmp/i55/after/sand.png`: grey lines on yellow sand were wrong).
+            let sandness = clamp(w.y + w.x * 0.5, 0.0, 1.0);
+            let snowness = snow_cover;
+            let own = path_colour(path.kind) * grain.albedo;
+            let crossed = mix(own, albedo * mix(0.78, 0.94, 1.0 - path.cover * 0.5) * grain.albedo, sandness);
+            var worn = mix(crossed, mix(albedo, vec3<f32>(0.93, 0.95, 1.0) * albedo * 0.92, 0.5) * grain.albedo, snowness);
+            // A rut's floor is compacted and damper than the crown: darker, and smoother where the
+            // wheels polished it (`docs/research/paths.md`, "What great looks like").
+            worn = worn * mix(vec3<f32>(1.0), vec3<f32>(0.62, 0.60, 0.58), rut_share);
+            albedo = mix(albedo, worn, bare);
+            // Compacted: the turf's clods flatten (the ground's grain goes), the route's own grain
+            // takes over, and the surface is finer.
+            grad = mix(grad, grain.grad, bare);
+            rough = mix(rough, mix(0.86, 0.72, rut_share), bare);
+            // The route's cross-section: a dish pressed into the ground, its shallow wall rising to
+            // the verge. `wall` is d(dish)/d(metre across) and `away` the world direction it rises
+            // in, so the verge stands proud of the worn middle and a low sun rakes the edge.
+            grad = grad + vec3<f32>(path.away.x, 0.0, path.away.y) * path.wall;
+        }
+    }
     let surface = weather_surface(
         albedo, rough, 0.0, pbr_input.material.reflectance, n, wet * (1.0 - canopy), puddle, snow_cover, ripple,
     );

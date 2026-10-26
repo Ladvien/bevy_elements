@@ -13,6 +13,7 @@ mod fog;
 mod gpu;
 mod hydrology;
 mod lightning;
+mod paths;
 mod plugin;
 mod precipitation;
 mod query;
@@ -103,6 +104,9 @@ pub use cover::{CoverState, CoverStats, GroundCoverPlugin, SnowSettings, Wetness
 
 // Trails: footprints, ruts and tracks in snow, sand and mud.
 pub use trails::{Imprint, TrailGround, TrailSettings, TrailState, TrailsPlugin};
+
+// Paths: routes laid across the terrain, worn into its ground.
+pub use paths::{Path, PathKind, PathNetwork, PathState, PathsPlugin};
 
 // Waves: ripples and wakes from bodies in the water.
 pub use waves::{WaterContact, WaveSettings, WaveState, WavesPlugin};

@@ -73,6 +73,7 @@ const MODULES: &[&str] = &[
     "bevy_elements::hydrology::water",
     "bevy_elements::hydrology::water_normals",
     "bevy_elements::noise",
+    "bevy_elements::paths",
     "bevy_elements::precipitation::common",
     "bevy_elements::precipitation::draw",
     "bevy_elements::precipitation::precip",

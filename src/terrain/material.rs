@@ -79,6 +79,11 @@ pub struct TerrainMaterialParams {
     pub(crate) colours: [Vec4; 3],
     /// The game's grade of the bare ground ([`TerrainLook`]): xyz the tint, w the saturation.
     pub(crate) look: Vec4,
+    /// Paths ([`PathNetwork`](crate::PathNetwork)): xy the mask's minimum corner (metre frame),
+    /// z its texel edge (m), w its texels a side; w below 0.5 is no mask.
+    pub(crate) path: Vec4,
+    /// x: the narrowest route's half width (m), the shader's fade and cross-section scale.
+    pub(crate) path_scale: Vec4,
     /// World units to the metre ([`ElementsUnits`](crate::ElementsUnits)): the vertex and
     /// fragment stages divide the positions Bevy gives them by it and multiply the ones they
     /// hand back.
@@ -102,6 +107,8 @@ impl Default for TerrainMaterialParams {
             ground: Vec4::W,
             colours: [Vec4::ZERO; 3],
             look: Vec4::ONE,
+            path: Vec4::ZERO,
+            path_scale: Vec4::ZERO,
             units: 1.0,
         }
     }
@@ -132,6 +139,11 @@ pub struct TerrainExtension {
     #[texture(107, dimension = "2d_array")]
     #[sampler(108)]
     pub(crate) ground: Option<Handle<Image>>,
+    /// The path mask (`PathState::mask`): an `rgba8unorm` distance field over the terrain, its
+    /// rgb the field and its a a per-texel grain for the near field (`docs/research/paths.md`).
+    #[texture(109)]
+    #[sampler(110)]
+    pub(crate) path: Option<Handle<Image>>,
 }
 
 /// The pipeline key of [`TerrainExtension`]: whether a texture set
@@ -148,6 +160,8 @@ pub struct TerrainExtensionKey {
     pub ground_textures: bool,
     /// A layer of the set takes its own colour (`GroundLayerTextures::colour` above 0).
     pub ground_colours: bool,
+    /// A path mask is bound: the worn-ground block compiles only into that pipeline.
+    pub paths: bool,
 }
 
 impl From<&TerrainExtension> for TerrainExtensionKey {
@@ -156,6 +170,7 @@ impl From<&TerrainExtension> for TerrainExtensionKey {
         Self {
             ground_textures,
             ground_colours: ground_textures && extension.params.colours.iter().any(|c| c.w > 0.0),
+            paths: extension.path.is_some(),
         }
     }
 }
@@ -197,6 +212,11 @@ impl MaterialExtension for TerrainExtension {
             if key.bind_group_data.ground_colours {
                 fragment.shader_defs.push("GROUND_COLOURS".into());
             }
+        }
+        if key.bind_group_data.paths
+            && let Some(fragment) = descriptor.fragment.as_mut()
+        {
+            fragment.shader_defs.push("PATHS".into());
         }
         Ok(())
     }
@@ -465,6 +485,7 @@ pub(super) fn update_materials(
     textures: Res<GroundTexturePack>,
     images: Res<Assets<Image>>,
     look: Res<TerrainLook>,
+    paths: Option<Res<crate::PathState>>,
 ) {
     let (shadow, light, map) = shadow_inputs(shadows.as_deref());
     let absorption = water.map_or(Vec4::ZERO, |w| w.absorption.extend(w.refractive_index));
@@ -482,6 +503,19 @@ pub(super) fn update_materials(
     );
     let (trail_window, trail_light, field) = trail_inputs(trails.as_deref(), live);
     let (ground, colours, ground_maps) = ground_inputs(&textures, &images);
+    let (path_lane, path_map) = paths
+        .as_ref()
+        .filter(|p| images.contains(&p.mask))
+        .map_or((Vec4::ZERO, None), |p| {
+            (
+                p.origin.extend(p.texel_m).extend(p.texels as f32),
+                Some(p.mask.clone()),
+            )
+        });
+    let path_scale = paths
+        .as_ref()
+        .filter(|p| images.contains(&p.mask))
+        .map_or(Vec4::ZERO, |p| Vec4::new(p.half_width_m, 0.0, 0.0, 0.0));
 
     if let (Some(state), Some(config)) = (state.as_ref(), runtime.lod.as_ref()) {
         let (lod, top) = lod_uniform(config);
@@ -500,6 +534,8 @@ pub(super) fn update_materials(
             ground,
             colours,
             look: look.packed(),
+            path: path_lane,
+            path_scale,
             units: units.per_metre(),
         };
         let ids: Vec<_> = terrain_materials.iter().map(|(id, _)| id).collect();
@@ -513,7 +549,8 @@ pub(super) fn update_materials(
                 || e.cover != cover_cells
                 || e.cloud_shadow != map
                 || e.trail != field
-                || e.ground != ground_maps)
+                || e.ground != ground_maps
+                || e.path != path_map)
                 && let Some(mut material) = terrain_materials.get_mut(id)
             {
                 material.extension.params = params;
@@ -522,6 +559,7 @@ pub(super) fn update_materials(
                 material.extension.cloud_shadow = map.clone();
                 material.extension.trail = field.clone();
                 material.extension.ground = ground_maps.clone();
+                material.extension.path = path_map.clone();
             }
         }
     }
