@@ -22,6 +22,17 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
   nothing (measured within ±2 % of the same scene with no network). See `docs/research/paths.md`;
   the `trails` example takes `ELEMENTS_PATHS=lane|track|road|all`, `bench_elements` too.
 
+- **Asking a game where its roads are: `Environment::surface_at`, `nearest_path`, `on_path`**
+  (`docs/research/path-query.md`). Iteration 55 shipped laying routes; a game could not ask about
+  them. `surface_at(xz)` answers a `PathSurface` — the nearest route's `kind`, its `coverage` (1
+  inside, 0 past its edge: the *shader's own* smoothstep, so the answer and the picture cannot
+  disagree), `half_width_m`, `rut_depth_m` and `rut` (0-1, the shader's Gaussian about the wheel
+  lines) — the surface classification shipping engines call a *collision material* (Gregory 2018).
+  `nearest_path(xz)` adds the signed distance to the route's **edge** and the nearest point of its
+  centre line; `on_path(xz)` is the predicate. Exact and current (the network is CPU data, not a
+  readback), and 1000 queries over a 40-route village cost 1.04 ms. Both new types carry `serde` and
+  `Reflect`.
+
 ### Changed
 
 - **Breaking: `TerrainSnapshot` carries the sediment.** The terrain's readback now copies the
@@ -465,6 +476,17 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
   from **2.44 DN to 14.06 DN**, and the noon capture is unchanged (143.03 against 142.62, a
   0.41 DN difference, the standard deviation within 0.03). See `docs/research/game-lights.md`.
 
+- **Asking a game where its roads are: `Environment::surface_at`, `nearest_path`, `on_path`**
+  (`docs/research/path-query.md`). Iteration 55 shipped laying routes; a game could not ask about
+  them. `surface_at(xz)` answers a `PathSurface` — the nearest route's `kind`, its `coverage` (1
+  inside, 0 past its edge: the *shader's own* smoothstep, so the answer and the picture cannot
+  disagree), `half_width_m`, `rut_depth_m` and `rut` (0-1, the shader's Gaussian about the wheel
+  lines) — the surface classification shipping engines call a *collision material* (Gregory 2018).
+  `nearest_path(xz)` adds the signed distance to the route's **edge** and the nearest point of its
+  centre line; `on_path(xz)` is the predicate. Exact and current (the network is CPU data, not a
+  readback), and 1000 queries over a 40-route village cost 1.04 ms. Both new types carry `serde` and
+  `Reflect`.
+
 ### Changed
 
 - **The night sky is blue, not brown.** The sky at 22 h with no moon was **sepia**: its linear
@@ -695,6 +717,17 @@ Everything from 0.2 through 0.5 lands in one release. Every system was studied i
 - **Weathered materials (`WeatheredPlugin`).** `WeatheredMaterial` for any mesh: wet darkening and gloss, rain streaks, up-facing snow on flora's curve, and the cloud shadows, fed by one shared `ElementsGlobals` buffer with a per-material `exposure` for shelter.
 - **Dust storms (`DustPlugin`).** Aeolian transport on the terrain's sediment layer: Paris et al.'s capacity with Venturi speed-up and a lee shadow, a flux line scan that conserves sand exactly, and hydrology's thermal kernels avalanching at the sand's repose angle; dust sprites in the precipitation buffer and a fog tint while `Weather::dust` is up.
 - **Snow on voxel volumes (feature `isomesh`, `VoxelPlugin`).** `VoxelGround` on a `bevy_isomesh` `VoxelVolume` scans the column tops into a crate-internal `Terrain` (`TerrainRender::External`) the snow, wetness and hydrology run on, and a `SnowyField` adds the snow depth back as a slab over the tops, swapped per column when it moves half a voxel and remeshing only the chunks that changed; tunnels stay clear. Erosion is off for voxel ground. Needs `isomesh`/`bevy_isomesh` 0.0.11.
+
+- **Asking a game where its roads are: `Environment::surface_at`, `nearest_path`, `on_path`**
+  (`docs/research/path-query.md`). Iteration 55 shipped laying routes; a game could not ask about
+  them. `surface_at(xz)` answers a `PathSurface` — the nearest route's `kind`, its `coverage` (1
+  inside, 0 past its edge: the *shader's own* smoothstep, so the answer and the picture cannot
+  disagree), `half_width_m`, `rut_depth_m` and `rut` (0-1, the shader's Gaussian about the wheel
+  lines) — the surface classification shipping engines call a *collision material* (Gregory 2018).
+  `nearest_path(xz)` adds the signed distance to the route's **edge** and the nearest point of its
+  centre line; `on_path(xz)` is the predicate. Exact and current (the network is CPU data, not a
+  readback), and 1000 queries over a 40-route village cost 1.04 ms. Both new types carry `serde` and
+  `Reflect`.
 
 ### Changed
 

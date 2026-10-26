@@ -417,6 +417,30 @@ The crate rasterises the network once — off the frame, on `AsyncComputeTaskPoo
 
 ![The same hillside. Left, before: a bare meadow, no route anywhere. Right, after: a gravel road with its wheel ruts, a cart track branching from it and a trodden footpath running down to the right, each worn to its own width and surface, crossing at a junction](docs/paths.png)
 
+**Asking about them.** `Environment::surface_at(xz)` answers a `PathSurface` — the nearest route's
+`kind`, the `coverage` (1 inside, 0 past its edge, the shader's own curve), the route's
+`half_width_m`, its `rut_depth_m` and how deep in a wheel line the point is as `rut` (0-1) — which a
+game maps to its footstep and tyre sounds, a movement speed, dust or a print's depth, as shipping
+engines do with *collision materials* and Unreal's *physical materials*. `nearest_path(xz)` adds the
+signed distance to the route's **edge** and the nearest point of its centre line, so a prop placed
+3 m clear measures what it means; `on_path(xz)` is the cheap predicate. Unlike the snapshot queries
+these are **exact and current** — the network is the game's own CPU data — and 1000 queries over a
+village's 40 routes cost 1.04 ms (`docs/research/path-query.md`).
+
+```rust
+# use bevy::prelude::*;
+# use bevy_elements::*;
+fn footstep(env: Environment, at: Vec2) {
+    match env.surface_at(at) {
+        Some(surface) if surface.coverage > 0.5 => {
+            let _sound = (surface.kind, surface.rut); // gravel crunch, earth thud, grit in a rut
+            let _speed = match surface.kind { PathKind::Gravel => 1.1, _ => 0.9 };
+        }
+        _ => { /* the meadow */ }
+    }
+}
+```
+
 ### Trails
 
 `TrailsPlugin` presses footprints, ruts and tracks into the ground. Put an `Imprint { half_extents, load_n }` on anything that touches the ground (a foot, a hoof, a wheel, a body lying down): while its translation (the sole) is within 0.1 m of the undisturbed surface it sinks as deep as the ground gives under its load (Bekker–Wong pressure–sinkage with Wong's constants; in snow no deeper than the snow compacts to 500 kg/m³, CRREL 90-9; never deeper than a 0.30 m loose layer), and pushes up a rim of what it displaced but could not compress (a tenth of the volume in snow, all of it in dry sand). A 77.5 kg walker on a 10 × 26 cm sole leaves 24 cm in 30 cm of fresh powder, 3.4 cm in dry sand, half a centimetre in dry soil and the full 30 cm in mud. Between frames an imprint carves the whole path it swept, so a fast wheel leaves an unbroken rut. The weather takes the trails back: new snow fills a trench by exactly what the cover map gained, melt and settling clamp it to the snow, the snow drift and the sand flux smooth it as diffusion, and dry sand slumps to 34°, wet sand to 10° and mud to 63°.

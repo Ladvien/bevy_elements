@@ -134,7 +134,21 @@ depends on the camera, the readback cadence or the mask's resolution.
 
 ## Deviations from this plan
 
-None yet: the note precedes the implementation. Recorded here as they are found.
+1. **`nearest_path` answers at any distance; `None` means no network.** The plan said the query
+   would answer `None` beyond every route's edge. In practice the useful shape is what a game needs
+   for "how far to the nearest road": the nearest route at any distance with a positive
+   `distance_m`, and `None` only when there is no network at all. The predicate is
+   `on_path(position)` (coverage above 0), and the rustdoc says so. This is the same shape as the
+   crate's other queries: `terrain_height` answers across its grid, `water_depth` outside it.
+2. **The rut is published as a 0-1 depth in the wheel line, not as a depth in metres.** A game asks
+   "is this footstep in a rut" more often than "how deep is it here"; the route's `rut_depth_m`
+   gives the metres, and `rut` the share. It is the shader's own Gaussian, so the two agree.
+3. **A capture that shows a feature absent is checked against the *verified* camera before it is
+   read as a regression.** Iteration 56 nearly logged the shipped paths as missing: the road runs
+   through z −10..−24 and the review camera had been placed at z −22 looking away from it.
+   Reproducing iteration 55's own camera showed the road, the cart track and the footpath drawing
+   exactly as signed off. Recorded because the cost of the mistake (a false regression report) is
+   high and the check is one command.
 
 ## Pending index
 
