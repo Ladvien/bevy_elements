@@ -10,7 +10,7 @@
 
 import bevy_elements::grid::{GridParams, grid_taps};
 import bevy_elements::noise::perlin3;
-import bevy_elements::terrain::common::TerrainParams;
+import bevy_elements::terrain::common::{TerrainParams, last_sample, morph_centre};
 import bevy_pbr::render::{
     mesh_functions,
     mesh_view_bindings::{view, globals},
@@ -28,6 +28,9 @@ struct WaterParams {
     lod: array<vec4<f32>, 16>,
     // x: coarsest level.
     top: vec4<f32>,
+    // What the vertices morph about: xyz a metre-frame point, w 1 to use it (an orthographic
+    // followed camera's centre), 0 for the view's own `lod_view_world_position`.
+    lod_centre: vec4<f32>,
     // xy: cloud shadow map origin (metre-frame XZ), z: its extent, w: the lights' mean transmittance.
     shadow: vec4<f32>,
     // xyz: unit direction toward the light the map was made for. w: 1 when a map is bound.
@@ -120,9 +123,10 @@ fn water_vertex_position(local: vec3<f32>, instance_index: u32) -> vec4<f32> {
     let gi = round(local.xz * 32.0);
     let step = water.terrain.grid.cell * f32(1u << lod);
     var wxz = origin.xz + gi * step;
-    let d = distance(view.lod_view_world_position / water.units, vec3<f32>(wxz.x, origin.y + terrain_height(wxz), wxz.y));
+    let centre = morph_centre(view.lod_view_world_position, water.lod_centre, water.units);
+    let d = distance(centre, vec3<f32>(wxz.x, origin.y + terrain_height(wxz), wxz.y));
     let odd = gi - 2.0 * floor(gi * 0.5);
-    wxz = wxz - odd * step * morph_k(d, lod);
+    wxz = min(wxz - odd * step * morph_k(d, lod), last_sample(water.terrain.grid));
     return vec4<f32>(wxz.x, origin.y + terrain_height(wxz) + water_depth_at(wxz) + LIFT, wxz.y, 1.0);
 }
 

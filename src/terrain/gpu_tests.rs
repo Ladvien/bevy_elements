@@ -774,3 +774,129 @@ fn a_look_written_every_frame_compiles_nothing() {
     );
     finish(&mut app);
 }
+
+/// Issue #36, acceptance 1 and 4 (`docs/research/orthographic-lod.md` Validation 1 and 4): under
+/// an orthographic `ElementsCamera` 457 m back from its `ElementsFocus`, pitched 35.26°, the
+/// patches are selected about the focus (level 0 under it) and every terrain material morphs
+/// about it; and a view 400 m high, which puts the morph band on screen, draws the terrain over
+/// every pixel: no main-pass fragment fails the depth test against a prepass displaced about
+/// another centre, which would leave the clear colour.
+#[test]
+#[ignore = "needs a GPU"]
+fn an_orthographic_camera_selects_and_draws_about_its_focus() {
+    use bevy::camera::{RenderTarget, ScalingMode};
+    use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
+    use bevy::render::render_resource::TextureUsages;
+
+    use super::{TerrainMaterial, TerrainRuntime};
+    use crate::ElementsFocus;
+
+    const SIZE: u32 = 256;
+    const BACK_M: f32 = 457.0;
+    #[derive(Resource)]
+    struct Target(Handle<Image>);
+
+    let _lock = serial();
+    let forward = Vec3::new(0.5, -0.5, 0.5).normalize();
+    let mut app = App::new();
+    app.add_plugins((support::headless_plugins(), ElementsPlugins))
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )))
+        .insert_resource(ElementsQuality::High)
+        .add_systems(
+            Startup,
+            move |mut commands: Commands, mut images: ResMut<Assets<Image>>| {
+                let mut target =
+                    Image::new_target_texture(SIZE, SIZE, TextureFormat::Rgba8UnormSrgb, None);
+                target.texture_descriptor.usage |= TextureUsages::COPY_SRC;
+                let target = images.add(target);
+                commands.insert_resource(Target(target.clone()));
+                let focus = Vec3::new(100.0, 0.0, -50.0);
+                commands.spawn((
+                    Camera3d::default(),
+                    Camera {
+                        clear_color: ClearColorConfig::Custom(Color::srgb(1.0, 0.0, 1.0)),
+                        ..default()
+                    },
+                    RenderTarget::Image(target.into()),
+                    // The plain clear colour behind the terrain: no sky, no fog; single-sampled
+                    // like every crate-dressed camera.
+                    ElementsCamera {
+                        msaa_off: true,
+                        ..ElementsCamera::bare()
+                    },
+                    Tonemapping::None,
+                    DebandDither::Disabled,
+                    Projection::from(OrthographicProjection {
+                        scaling_mode: ScalingMode::FixedVertical {
+                            viewport_height: 400.0,
+                        },
+                        far: 2.0 * BACK_M,
+                        ..OrthographicProjection::default_3d()
+                    }),
+                    Transform::from_translation(focus - forward * BACK_M)
+                        .looking_to(forward, Vec3::Y),
+                    ElementsFocus::Point(focus),
+                ));
+                commands.spawn(Terrain::procedural(ProceduralTerrain::hills(42)));
+            },
+        );
+    support::finish(&mut app);
+    run_until(&mut app, "the bounds readback", |app| {
+        app.world().resource::<TerrainRuntime>().bounds_version > 0
+    });
+    // Put the focus on the ground and the camera behind it.
+    let xz = Vec2::new(100.0, -50.0);
+    let ground = height_at(&mut app, xz).expect("the focus is on the terrain");
+    let focus = Vec3::new(xz.x, ground, xz.y);
+    let camera = app
+        .world_mut()
+        .query_filtered::<Entity, With<ElementsCamera>>()
+        .single(app.world())
+        .expect("one camera");
+    app.world_mut().entity_mut(camera).insert((
+        ElementsFocus::Point(focus),
+        Transform::from_translation(focus - forward * BACK_M).looking_to(forward, Vec3::Y),
+    ));
+    for _ in 0..20 {
+        app.update();
+    }
+    let (centre, lod, selected) = {
+        let runtime = app.world().resource::<TerrainRuntime>();
+        (
+            runtime.lod_centre,
+            runtime.lod.expect("a quadtree"),
+            runtime.selected.clone(),
+        )
+    };
+    assert_eq!(centre, Some(focus), "the patches' centre is the focus");
+    // The patch drawn over the focus, on the vertex lattice (terrain-local XZ).
+    let grid = state(&app).expect("state").grid;
+    let local = focus.xz() - grid.origin - Vec2::splat(lod.sample_offset());
+    let under = selected
+        .iter()
+        .find(|p| {
+            let s = lod.node_m(p.level);
+            let lo = Vec2::new(p.ix as f32, p.iz as f32) * s;
+            local.cmpge(lo).all() && local.cmplt(lo + s).all()
+        })
+        .expect("a patch covers the focus");
+    assert_eq!(under.level, 0, "the focus is drawn at {under:?}");
+    for (_, material) in app.world().resource::<Assets<TerrainMaterial>>().iter() {
+        assert_eq!(material.extension.params.lod_centre, focus.extend(1.0));
+    }
+    let target = app.world().resource::<Target>().0.clone();
+    let pixels = support::read_texture(&mut app, target, SIZE as usize * 4, SIZE as usize);
+    let clear = pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| p[0] >= 250 && p[1] <= 5 && p[2] >= 250)
+        .count();
+    assert_eq!(
+        clear, 0,
+        "{clear} pixels show the clear colour through the terrain"
+    );
+    finish(&mut app);
+}

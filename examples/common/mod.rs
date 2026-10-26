@@ -161,11 +161,11 @@ impl Plugin for ExampleHarness {
         .add_systems(Update, texture_terrain)
         .add_systems(
             Update,
-            (grow_weather, fly, clock_keys, weather_keys).before(ElementsSystems::Clock),
+            (grow_weather, fly, ortho_rig, clock_keys, weather_keys).before(ElementsSystems::Clock),
         )
         .add_systems(
             Update,
-            (settle_on_ground, status, capture_frames).after(ElementsSystems::Readback),
+            (settle_on_ground, plant_pins, status, capture_frames).after(ElementsSystems::Readback),
         )
         .add_systems(Update, run_limit.after(capture_frames))
         .add_systems(PostStartup, scale_projections);
@@ -327,6 +327,172 @@ fn settle_on_ground(
             commands.entity(entity).remove::<StandOnGround>();
         }
     }
+}
+
+/// How far an [`ortho_camera`] stands back from its focus, m: Sanctuary's town camera, 1500 ft.
+pub const ORTHO_BACK_M: f32 = 457.0;
+
+/// An orthographic camera rig ([`ortho_camera`]): the focus on the ground it looks at, the view
+/// direction, and the speed the focus walks at along the view's heading, m/s.
+#[derive(Component)]
+pub struct OrthoRig {
+    focus: Vec3,
+    forward: Vec3,
+    speed: f32,
+}
+
+/// `ELEMENTS_ORTHO=18`: an orthographic camera that shows that many metres of ground top to
+/// bottom and stands [`ORTHO_BACK_M`] back from its [`ElementsFocus`], a point on the ground at
+/// `look`'s XZ (an isometric town view, issue #36). `ELEMENTS_PITCH` is the angle below the
+/// horizon (default 35.26°, the isometric angle), `ELEMENTS_HEADING` the compass heading of the
+/// view (default 45°; 0 looks toward −Z, 90° toward +X), and `ELEMENTS_WALK=1.4` walks the focus
+/// along that heading at 1.4 m/s, on the ground, the camera keeping its place behind it.
+pub fn ortho_camera(look: Vec3) -> Option<impl Bundle> {
+    let zoom: f32 = std::env::var("ELEMENTS_ORTHO").ok()?.parse().ok()?;
+    let env_f32 = |name: &str, default: f32| {
+        std::env::var(name)
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(default)
+    };
+    let pitch = env_f32("ELEMENTS_PITCH", 35.26).to_radians();
+    let heading = env_f32("ELEMENTS_HEADING", 45.0).to_radians();
+    let forward = Vec3::new(
+        heading.sin() * pitch.cos(),
+        -pitch.sin(),
+        -heading.cos() * pitch.cos(),
+    );
+    let u = units();
+    let focus = look * u;
+    Some((
+        Camera3d::default(),
+        ElementsCamera::default(),
+        Projection::from(OrthographicProjection {
+            scaling_mode: bevy::camera::ScalingMode::FixedVertical {
+                viewport_height: zoom * u,
+            },
+            far: 2.0 * ORTHO_BACK_M * u,
+            ..OrthographicProjection::default_3d()
+        }),
+        Transform::from_translation(focus - forward * ORTHO_BACK_M * u)
+            .looking_to(forward, Vec3::Y),
+        ElementsFocus::Point(focus),
+        OrthoRig {
+            focus,
+            forward,
+            speed: env_f32("ELEMENTS_WALK", 0.0) * u,
+        },
+    ))
+}
+
+/// Walk an [`OrthoRig`]'s focus, keep it on the ground, and keep the camera behind it.
+fn ortho_rig(
+    env: Environment,
+    time: Res<Time>,
+    mut rigs: Query<(&mut Transform, &mut ElementsFocus, &mut OrthoRig)>,
+) {
+    let u = units();
+    for (mut transform, mut focus, mut rig) in &mut rigs {
+        let heading = (rig.forward * Vec3::new(1.0, 0.0, 1.0)).normalize_or_zero();
+        let step = heading * rig.speed * time.delta_secs();
+        rig.focus += step;
+        if let Some(ground) = env.terrain_height(rig.focus.xz()) {
+            rig.focus.y = ground;
+        }
+        transform.translation = rig.focus - rig.forward * ORTHO_BACK_M * u;
+        *focus = ElementsFocus::Point(rig.focus);
+    }
+}
+
+/// `ELEMENTS_PINS=1`: thin posts standing on [`Environment::terrain_height`] every
+/// [`PIN_SPACING_M`] over a square [`PIN_FIELD_M`] wide around a point, each with a red foot
+/// [`PIN_FOOT_M`] tall, kept on the query every frame as a game keeps its figures (the ground
+/// erodes as the scene runs). Where the drawn ground is not the height the query answers, a foot
+/// sinks out of sight or stands above the ground.
+#[derive(Resource)]
+pub struct Pins {
+    centre: Vec2,
+    planted: bool,
+}
+
+/// One piece of a pin: the world XZ it stands at and the height of its centre above the ground.
+#[derive(Component)]
+struct Pin {
+    xz: Vec2,
+    lift: f32,
+}
+
+/// The pins' spacing, the width of their field and the height of a red foot, m.
+pub const PIN_SPACING_M: f32 = 2.0;
+pub const PIN_FIELD_M: f32 = 40.0;
+pub const PIN_FOOT_M: f32 = 0.10;
+
+/// [`Pins`] around `centre` (world XZ in metres, scaled by [`units`]) when `ELEMENTS_PINS` is set.
+pub fn pins(centre: Vec3) -> Option<Pins> {
+    std::env::var("ELEMENTS_PINS").ok()?;
+    Some(Pins {
+        centre: centre.xz() * units(),
+        planted: false,
+    })
+}
+
+fn plant_pins(
+    mut commands: Commands,
+    env: Environment,
+    pins: Option<ResMut<Pins>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut planted: Query<(&Pin, &mut Transform)>,
+) {
+    let Some(mut pins) = pins else {
+        return;
+    };
+    if pins.planted {
+        for (pin, mut transform) in &mut planted {
+            if let Some(ground) = env.terrain_height(pin.xz) {
+                transform.translation.y = ground + pin.lift;
+            }
+        }
+        return;
+    }
+    if env.terrain_height(pins.centre).is_none() {
+        return;
+    }
+    let u = units();
+    let post_m = 1.7;
+    let post = meshes.add(Cuboid::new(0.06 * u, post_m * u, 0.06 * u));
+    let foot = meshes.add(Cuboid::new(0.08 * u, PIN_FOOT_M * u, 0.08 * u));
+    let white = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.85, 0.85, 0.85),
+        perceptual_roughness: 0.8,
+        ..default()
+    });
+    let red = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.85, 0.04, 0.04),
+        perceptual_roughness: 0.8,
+        ..default()
+    });
+    let n = (PIN_FIELD_M / PIN_SPACING_M) as i32;
+    for iz in -n / 2..=n / 2 {
+        for ix in -n / 2..=n / 2 {
+            let xz = pins.centre + Vec2::new(ix as f32, iz as f32) * PIN_SPACING_M * u;
+            let Some(ground) = env.terrain_height(xz) else {
+                continue;
+            };
+            for (mesh, material, lift) in [
+                (foot.clone(), red.clone(), 0.5 * PIN_FOOT_M * u),
+                (post.clone(), white.clone(), (PIN_FOOT_M + 0.5 * post_m) * u),
+            ] {
+                commands.spawn((
+                    Mesh3d(mesh),
+                    MeshMaterial3d(material),
+                    Transform::from_xyz(xz.x, ground + lift, xz.y),
+                    Pin { xz, lift },
+                ));
+            }
+        }
+    }
+    pins.planted = true;
 }
 
 fn fly(

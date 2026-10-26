@@ -48,6 +48,10 @@ pub struct TerrainMaterialParams {
     pub(crate) lod: [Vec4; MAX_LEVELS],
     /// x: coarsest level.
     pub(crate) top: Vec4,
+    /// What the vertex stage morphs about: xyz a point in the metre frame, w 1 to morph about
+    /// it (an orthographic followed camera's centre), 0 about the view's own
+    /// `lod_view_world_position` (`docs/research/orthographic-lod.md` Model 2).
+    pub(crate) lod_centre: Vec4,
     /// Cloud shadow map origin xy (metre frame), extent, the lights' mean transmittance.
     pub(crate) shadow: Vec4,
     /// Unit direction toward the light; w = 1 with a map.
@@ -87,6 +91,7 @@ impl Default for TerrainMaterialParams {
             terrain: TerrainParamsGpu::default(),
             lod: [Vec4::ZERO; MAX_LEVELS],
             top: Vec4::ZERO,
+            lod_centre: Vec4::ZERO,
             shadow: Vec4::ZERO,
             light: Vec4::ZERO,
             absorption: Vec4::ZERO,
@@ -397,6 +402,12 @@ pub(crate) fn lod_uniform(config: &LodConfig) -> ([Vec4; MAX_LEVELS], Vec4) {
     )
 }
 
+/// The morph centre lane of both uniforms: `(centre, 1)` for an orthographic followed camera's
+/// centre, zero for Bevy's per-view `lod_view_world_position` (the eye).
+pub(crate) fn lod_centre_uniform(centre: Option<Vec3>) -> Vec4 {
+    centre.map_or(Vec4::ZERO, |c| c.extend(1.0))
+}
+
 /// The cover part of both uniforms: the live flag, the rain intensity and the puddle depths, and
 /// the ripple phases (frozen at zero while it does not rain, so a dry scene re-prepares nothing).
 fn cover_inputs(
@@ -478,6 +489,7 @@ pub(super) fn update_materials(
             terrain: terrain_params,
             lod,
             top,
+            lod_centre: lod_centre_uniform(runtime.lod_centre),
             shadow,
             light,
             absorption,

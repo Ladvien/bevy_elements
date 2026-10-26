@@ -25,6 +25,24 @@ fn terrain_live(params: TerrainParams) -> bool {
 }
 
 // ---------------------------------------------------------------------------------------------
+// The CDLOD patches (`docs/research/orthographic-lod.md`)
+// ---------------------------------------------------------------------------------------------
+
+/// The last height sample on each axis, metre-frame XZ. A patch's vertices sit on the samples
+/// (its translation is half a cell in from the node's tile), so a vertex past the last one is
+/// clamped onto it and the drawn terrain spans the cell centres.
+fn last_sample(grid: GridParams) -> vec2<f32> {
+    return grid.origin + (vec2<f32>(grid.size) - 0.5) * grid.cell;
+}
+
+/// What a patch vertex morphs about, metre frame: the uniform's `centre` when its w is set (an
+/// orthographic followed camera's focus, the same in every view), else the view's own LOD
+/// position `lod_view` (world units, `units` to the metre).
+fn morph_centre(lod_view: vec3<f32>, centre: vec4<f32>, units: f32) -> vec3<f32> {
+    return select(lod_view / units, centre.xyz, centre.w > 0.5);
+}
+
+// ---------------------------------------------------------------------------------------------
 // Ground detail (`docs/research/ground-detail.md`)
 // ---------------------------------------------------------------------------------------------
 
