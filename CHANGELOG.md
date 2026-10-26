@@ -161,6 +161,28 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ### Fixed
 
+- **Under an orthographic camera the terrain near the focus is drawn at full detail, on the
+  height map's own samples** (issue #36). The CDLOD patches were selected by distance from the
+  camera's eye and morphed by Bevy's `lod_view_world_position`, the eye too; an isometric
+  camera stands hundreds of metres back from what it shows, so the ground on screen was drawn
+  in level-1 and level-2 patches and level 0 never appeared, and figures standing on the
+  height map sank into it: in an isometric view of the hills a quarter of the posts standing
+  on `Environment::terrain_height` had their 10 cm foot swallowed, half on the mountains. Under
+  an orthographic followed camera the patches are now selected and morphed about its
+  `ElementsFocus` (without one, about where its view ray first meets the ground), in every
+  view — the main pass, the depth prepass and the shadow views read the same centre from the
+  terrain's and the water's uniform, and the scattered rocks seat on the same surface. A
+  perspective camera selects and morphs about its eye, as before.
+
+  The patches' vertices also moved half a cell, onto the height samples (the cell centres
+  that `terrain_height`'s bilinear interpolates): before, a level-0 vertex sat on a cell's
+  corner and was the mean of four samples, so even level 0 drew a smoothed map, 0.15 m off
+  the bilinear at the 90th percentile on the hills (4 m cells) and 0.62 m on the mountains.
+  On the samples the drawn surface is the bilinear at every vertex and departs from it only
+  inside a quad, by at most a quarter of the quad's twist: 0.047 m at the 90th percentile on
+  the hills, 0.20 m on the mountains. The drawn terrain now spans the cell centres, half a cell
+  inside the grid's extent on each side. See `docs/research/orthographic-lod.md`.
+
 - **Wet ground is no longer a mirror.** Every surface the crate wets went to roughness 0.1 at
   full wetness, so in rain a meadow became a choppy grey lake, the hills at dusk looked
   snow-covered, a cliff turned to crumpled chrome and the dunes went white in the middle
