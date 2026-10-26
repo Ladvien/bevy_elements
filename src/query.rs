@@ -79,6 +79,8 @@ pub struct Environment<'w> {
     exposure: Option<Res<'w, ElementsExposure>>,
     /// The record of recent days; absent without the climate plugin (no days then).
     history: Option<Res<'w, ClimateHistory>>,
+    /// The routes the game laid; absent without the paths plugin.
+    paths: Option<Res<'w, crate::PathNetwork>>,
 }
 
 impl Environment<'_> {
@@ -218,6 +220,42 @@ impl Environment<'_> {
             .trails
             .as_ref()
             .and_then(|t| t.depth_at(self.xz_to_metres(position)))
+    }
+
+    /// What the ground under `position` (world XZ) is, nearest a route a game laid
+    /// ([`PathNetwork`](crate::PathNetwork)): its kind, the coverage (1 inside the route, 0 past its
+    /// edge, the shader's own curve), the route's half width and rut depth, and how deep in a wheel
+    /// line the point is ([`PathSurface`](crate::PathSurface)). `None` only when there is no network
+    /// at all: beyond a route's edge the coverage is 0, and the answer is still the nearest route
+    /// (use [`on_path`](Self::on_path) for the predicate).
+    ///
+    /// Unlike the snapshot queries this one is **exact and current**: the network is the game's own
+    /// CPU data, so a route inserted this frame answers this frame, and the answer does not depend
+    /// on the camera or the mask's resolution. A game maps it to its footstep and tyre sounds, a
+    /// movement speed, dust, or a print's depth — the *collision material* of shipping engines
+    /// (`docs/research/path-query.md`).
+    pub fn surface_at(&self, position: Vec2) -> Option<crate::PathSurface> {
+        self.nearest_path(position).map(|hit| hit.surface)
+    }
+
+    /// The route nearest to `position` (world XZ) and the surface there
+    /// ([`PathHit`](crate::PathHit)): the signed distance to the route's **edge** (negative inside,
+    /// positive outside), the nearest point of its centre line, and the surface. `None` with no
+    /// network.
+    ///
+    /// The distance is to the edge and not the centre line, so a game placing a prop 3 m clear of a
+    /// road measures what it means, and it is exact and current like
+    /// [`surface_at`](Self::surface_at).
+    pub fn nearest_path(&self, position: Vec2) -> Option<crate::PathHit> {
+        let network = self.paths.as_ref()?;
+        crate::paths::nearest(&network.paths, self.xz_to_metres(position))
+    }
+
+    /// Whether `position` (world XZ) is on a route's drawn surface — inside its edge, where the
+    /// coverage is above 0 — the cheap predicate for placement and spawn checks.
+    pub fn on_path(&self, position: Vec2) -> bool {
+        self.nearest_path(position)
+            .is_some_and(|hit| hit.surface.coverage > 0.0)
     }
 
     /// Direct transmittance of the clouds toward the sun (the moon once the sun is 4° below the

@@ -4542,3 +4542,49 @@ The user's focus, fourth run: "Can we please focus on roads, path, trails, etc."
 3. **The weather's precipitation climatology** (iteration 49): the temperate preset rains 2-13x an observed wet station's totals.
 4. **Stylistic variants of the ground** (the user's ask): golem sets taking their own colour.
 5. **Textures on the rock**: a triplanar PBR detail over the procedural rock material.
+
+## Iteration 56 - 2026-10-26 - Path surfaces: asking a game where its roads are
+
+**Commits:** the research note `docs/research/path-query.md` (alone, first), the implementation, the docs and changelog, this log. **Issue:** none. **Sibling repos:** none.
+
+### Why this item
+
+The user's focus, fifth run: "Can we please focus on roads, path, trails, etc." Iteration 55 shipped *laying* routes; nothing let a game *ask* about them. `Environment` answers `terrain_height`, `water_depth`, `snow_depth`, `wetness`, `trail_depth` and `cloud_shadow_at` — and nothing for paths. Every game that lays a road needs three answers every frame: which surface is underfoot (footstep and tyre sounds, movement speed, dust, print depth), where the nearest road is (AI, placement), and whether a point is on one. The runner-up was the orthographic shadow bands (iteration 51), a narrower defect than a missing query the new feature created.
+
+### What changed
+
+- **`Environment::surface_at(xz) -> Option<PathSurface>`**: the nearest route's `kind`, `coverage`, `half_width_m`, `rut_depth_m` and `rut` (0-1).
+- **`Environment::nearest_path(xz) -> Option<PathHit>`**: the above plus the signed distance **to the route's edge** and the nearest point of its centre line.
+- **`Environment::on_path(xz) -> bool`**: the predicate.
+- **The query and the shader share their maths**: `coverage` and `rut_at` moved out of `#[cfg(test)]` into `paths.rs`, so the picture and the answer cannot drift. The query walks the game's own polylines with the rasteriser's `route_query`, so it is exact and current (no readback), unlike the snapshot queries.
+- The example gains `ELEMENTS_PATHS_MARK=1`: posts placed by the query, each `half_width` out from its own nearest point and then 2 m further, tracing every verge at one constant offset.
+
+### Rounds (`/tmp/i56/critique.md`)
+
+| Round | Finding |
+|---|---|
+| 1 | The query's coverage equals the shader's formula **exactly** (same function); the rut equals its Gaussian |
+| 2 | Inside / edge / outside and two crossing routes correct; 4 m off a 2.5 m road reports **+1.5 m to the edge** |
+| 3 | **The shipped paths looked missing from a 10 m camera — they were not.** A false regression: the road runs through z −10..−24 and the review eye sat at z −22 looking away from it. Iteration 55's own camera showed road, track and footpath drawing exactly as signed off |
+| 4 | 1000 queries over a 40-route village: **1.04 ms** on bmb |
+| 5 | Validation 7 visually: 26 posts trace the road's verge at a constant 2 m; the query's distance at the point it computed as the verge is **9.5e-7 m** |
+
+**Verdict: GREAT** for the queries.
+
+### Measurements
+
+- Tests: **3** new (the query answers the shader's own curve; the nearest route and its edge; 1000 queries under 1.6 ms). Lib suite **325** (was 322). Measured cost of 1000 queries over 40 routes: **1.04 ms**.
+- Gates 1-4 on **bmb** (`cargo +1.98.0`): build, `cargo test` (25 suites, 0 failed), examples, clippy `-D warnings`, `cargo doc -D warnings`, wasm32. Gate 5 locally as iteration 55 (the shader and every GPU kernel are untouched by this change).
+- **No fragment cost**: the shader is unchanged, so iteration 55's measurement stands (±2 % with a network).
+
+### Sources
+
+`docs/research/path-query.md`: Gregory 2018, *Game Engine Architecture* 3rd ed. (corpus `Ga/Game Engine Architecture…`): animation event triggers for footstep sounds (§12), *collision materials* ("many games implement a collision shape categorization mechanism … sound and particle effects, physical properties like coefficient of restitution or friction"), Unreal's *physical materials*, Naughty Dog's *polygon attributes*; Pouyat et al. 2020 (`10.1007_978-3-030-45216-2`, compaction and speed); Green 2007 via RTR4 §15.4.3 (the coverage curve).
+
+### The next five items, ranked
+
+1. **Shadow bands on the rock under an orthographic camera** (iteration 51): dark bands across the mountain rock in the isometric view, diagonal and stronger at 9 h.
+2. **Scattered rocks under an orthographic camera**: none are drawn (their ranges count from the eye).
+3. **The weather's precipitation climatology** (iteration 49): the temperate preset rains 2-13x an observed wet station's totals.
+4. **Stylistic variants of the ground** (the user's ask): golem sets taking their own colour.
+5. **Textures on the rock**: a triplanar PBR detail over the procedural rock material.
