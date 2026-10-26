@@ -4263,3 +4263,47 @@ No issue was open. The user asked twice for the ground's PBR textures to be sett
 3. **Textures on the rock** (the user: PBR into everything, especially terrain): a triplanar PBR detail on the cliffs over the procedural rock material, settable like the ground's.
 4. **A long-bladed meadow from a scanned set**: CC0 scanned grasses are short swards; a set's detail over the crate's rust-brown soil reads as red flecks where the soil shows — a soil-layer contrast limit or a colour share for the soil alone.
 5. **Puddle shorelines follow the micro-relief**; the sand's ripple field.
+
+## Iteration 51 - 2026-10-25 - The terrain under an orthographic camera is drawn at full detail on its own samples (issue #36)
+
+**Commits:** `4a28dad`, `11f0e2d` (the research note `docs/research/orthographic-lod.md` and its amendment, each committed alone before the code), `d7f3bd8` (the LOD centre, the uniform lanes, the vertices on the samples, the rocks' seat, tests, the capture path in the examples), `2c8f55b` (README, changelog, `AGENTS.md`, `terrain.md` Deviation 21, `docs/orthographic_lod.png`), this log. **Issue:** #36, closed with the merge. **Sibling repos:** none. **Not released.**
+
+### Why this item
+
+Issue #36 was the one open issue, and the user asked (iteration 47) that open issues come before other enhancements. It is also a visible defect in a consumer's game: Sanctuary's figures sink into the ground its isometric camera draws ("Is it meant to be mud?"). The runner-up, the backlog's stylistic ground variants, is a beauty gap with no consumer blocked on it.
+
+### What changed
+
+- **The LOD centre.** Under an orthographic followed camera the CDLOD patches are selected and morphed about its `ElementsFocus`; without one, about where its forward ray first meets the ground (marched over the height readback every half cell between the terrain's lowest and highest surface, 16 bisections; `TerrainSnapshot::ray_hit`); a view that meets no ground keeps the eye. A perspective camera selects and morphs about its eye, as before. `TerrainRuntime::lod_centre` is found in `ElementsSystems::Simulation`, so `update_patches` (PostUpdate) and the materials agree in the frame.
+- **One centre in every view.** `TerrainMaterialParams::lod_centre` and `WaterParams::lod_centre` (xyz the centre, w 1) replace `view.lod_view_world_position` in the vertex stage (`morph_centre` in `terrain/common.wesl`), so the main pass, the depth prepass and the shadow views displace the same vertices. A walking focus rewrites the uniform every frame, as the rain's ripple phases already do.
+- **The vertices on the height samples.** A patch's grid started at the grid's corner, half a cell off the cell-centred samples, so a level-0 vertex was the mean of four samples and even level 0 drew a smoothed map: p90 0.15 m off the bilinear on the hills at 4 m cells, 0.62 m on the mountains. `patch_transform` now places patches half a cell in, the vertex stage clamps a vertex past the last sample onto it (`last_sample`), and the node boxes move with the vertices: level 0 draws the samples themselves, the bilinear at every vertex and within a quarter of a quad's twist between them (p90 0.047 m hills, 0.20 m mountains). The drawn terrain spans the cell centres, half a cell inside the extent.
+- **The scattered rocks** seat on the shifted lattice and morph their seat about the same centre.
+- **The capture path** (examples): `terrain_tour` and `bench_elements` take `ELEMENTS_ORTHO=<view m>` (an isometric orthographic camera 457 m back from a focus on the ground, `ELEMENTS_PITCH`, `ELEMENTS_HEADING`, `ELEMENTS_WALK`) and `ELEMENTS_PINS=1` (posts on `terrain_height` every 2 m with 10 cm red feet, kept on the query every frame); `bench_elements`' scene line ends with the frame's mean time.
+
+### Rounds (`/tmp/i51/critique.md`)
+
+| Round | State | Finding | Verdict |
+|---|---|---|---|
+| 1 | Focus centre, uniform lanes, vertices on the samples, rocks | Hidden feet: hills 24 → 0 %, second site 16 → 3 %, seed 7 21 → 1 %, 29 m view 26 → 1 %, 9 m 5 → 0 %, dunes 14 → 0 %, plains 0 → 0 %, mountains 45 → 22 % (the rugged rock's in-quad residual: CPU estimate 14 % of the posts > 8 cm under, 19 % on slopes > 45°); walks keep the feet on; 400 m views and 20 m/s walks: no crack, hills motion-compensated frame change p99 1.6 vs 1.5; perspective set unchanged but for silhouettes | GREAT on every angle (mountains: GREAT for the contract, the residual logged) |
+
+Evidence: `docs/orthographic_lod.png` (before: most posts end in grass; after: every post on its red foot), `/tmp/i51/pair_hills2.png`, `pair_dawn.png`, `cmp_mtn.png`, `diff_hills_12.png`.
+
+### Measurements
+
+- **The drawn level-`k` surface minus the bilinear**, 200 000 points, `High` (512 cells of 4 m): see `orthographic-lod.md` Parameters (level 0 on corners p90 0.151 / on samples 0.047 m on the hills; level 1 0.31, level 2 0.85).
+- **Feet** (`feet.py`, posts kept on `terrain_height`): the table in Rounds; every walk frame sampled.
+- **Temporal** (`comp.py`, frame change blurred 15 px, global shift removed): hills 400 m walk at 20 m/s, before p99 1.5 / max 1.7, after 1.6 / 1.6; underlay red in no frame of any walk or wide view. The mountains' 400 m walk has local spikes (22 before, 40 after) only where the example's far plane (914 m) cuts the massif, absent with a still camera.
+- **Cost** (`bench_elements`, 4K, interleaved with `main`; the GPU shared, so every kept run sat in P2 at 1740-1935 MHz, logged per run): eye-level meadow (perspective), opaque 2.510 / 2.602 ms against 2.560 / 2.561 (opaque over early prepass 69.7 / 74.3 against 73.1 / 73.2), shadow 0.137 / 0.096 against 0.095 / 0.094 — unchanged; the isometric view (`ELEMENTS_ORTHO=18`), opaque 3.070 / 2.898 against 2.781 / 3.123, prepass 0.012 / 0.011 against 0.012 / 0.013, shadow 0.029 / 0.027 against 0.033 / 0.032 (+4 µs: the shadow view now draws the level-0 patches about the focus). Runs in mismatched P-states (P5/P8 against P2) discarded. The ray march (orthographic camera without a focus) costs 2 µs a frame on the CPU (1000 rays over the mountains); with a focus there is none. The frame mean under Xvfb at 4K is presentation-bound (228-684 ms) and says nothing.
+- Tests: `an_orthographic_focus_is_drawn_at_level_0_on_the_samples`, `walking_the_focus_neither_pops_nor_cracks` (12 walks of 100 m), the crack and no-pop tests on the shifted lattice (helpers shared), `a_view_ray_meets_the_ground_where_it_first_crosses_it`, the rocks' seat on a non-separable surface, and the GPU test `an_orthographic_camera_selects_and_draws_about_its_focus` (centre = focus, level 0 under it, every material's lane, no clear-colour pixel in a 400 m view). Gates 1-4 pass (clippy after one fix, `as_chunks`); gate 5: the integration binaries ok, `clouds` 10, `terrain` 10 (the new GPU test), `cover` 8, `dust` 6 and `the_horizon_sky` 1.
+
+### Sources
+
+- Issue #36; Strugar 2009 (CDLOD; one vertex per texel, objects floating or intersecting under unpredictable LOD, the shadow map's LOD from the main camera); Asirvatham & Hoppe 2005 (clipmaps centred on the viewer); Luebke et al. 2003 Eq. 3.1 and Lindstrom et al. 1996 (screen-space error; orthographic: independent of distance); RTR4 §4.7.1; Epic's Landscape Technical Guide and Unity's terrain settings (a vertex on every height sample); Bevy 0.20 `bevy_render/src/view/mod.rs:1244-1276`.
+
+### The next five items, ranked
+
+1. **Shadow bands on the rock under an orthographic camera** (pre-existing, both trees): dark bands 5-12 levels deep across the mountain rock in the isometric view, diagonal and stronger at 9 h (`/tmp/i51/bands_h9.png`), absent at heading 135°: the single orthographic cascade against the rock's relief, to be found and fixed.
+2. **Scattered rocks under an orthographic camera**: none are drawn (their `VisibilityRange` and shrink count from the eye 457 m back); range and fade about the focus.
+3. **The weather's precipitation climatology** (iteration 49): the temperate preset rains 2-13× an observed wet station's totals.
+4. **Stylistic variants of the ground** (the user's ask): golem sets in other styles taking their own colour, with a capture tour.
+5. **A drawn-surface query** for figures on rugged ground (the level-0 triangles, not the bilinear: the mountains' residual); textures on the rock.
