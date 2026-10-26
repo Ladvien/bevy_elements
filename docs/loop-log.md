@@ -4496,3 +4496,49 @@ All compilation moved to **bmb** (local load 17/24 from other tenants; sib unrea
 3. **Scattered rocks under an orthographic camera**: none are drawn.
 4. **The weather's precipitation climatology** (iteration 49).
 5. **Stylistic variants of the ground** (the user's ask).
+
+## Iteration 55 - 2026-10-26 - Roads and paths, shipped
+
+**Commits:** the research note's new `## State of the implementation (iteration 55)`; the implementation (`PathNetwork`, `Path`, `PathKind`, `PathState`, `PathsPlugin`, the in-crate rasteriser, the mask's grain channel, the terrain material's `path`/`path_scale` lanes and `PATHS` key, the fragment block, the `trails`/`bench_elements` hooks); the README, changelog and `docs/paths.png`; this log. **Issue:** none. **Sibling repos:** none.
+
+### Why this item
+
+The user's focus, fourth run: "Can we please focus on roads, path, trails, etc." Iteration 54 got paths rendering and named exactly two flaws with fixes; this pass finished them and found two more in review.
+
+### What changed
+
+- **The mask's alpha channel now carries a per-texel grain**, at the mask's own resolution (0.175 m for a footpath, 0.5-1 m for a road). `path_grain` blends it with the noise octaves, so a road keeps its stone past the band limit that drops them. The edge fade, which the alpha used to hold, is now derived from the route's half width, published in `PathState::half_width_m` and the terrain uniform's `path_scale.x`.
+- **The wheel ruts read**: the band narrowed from 0.16 to 0.10 of the half width, and the floor is compacted — a 0.62 albedo multiplier and 0.72 roughness — so two dark wheel lines show on a cart track and on a road.
+- **Snow no longer buries the routes** (found in this pass's review): a travelled route is cleared of snow, 90 % off a lane, road or track and 35 % for a packed snow track, which is what traffic and wind do. Before, a real snowfall left a white blanket with no roads at all.
+- **A route is the ground it crosses, worn** (found here): on a dune it is trodden sand, in snow the snow's own colour, and the route's earth or stone shows only on turf and soil. Before, grey imported earth crossed yellow sand.
+- `bench_elements` gains `ELEMENTS_PATHS` so the block's cost is measured on the same scene with and without a network.
+
+### Rounds (`/tmp/i55/critique.md`)
+
+| Round | Change | Result |
+|---|---|---|
+| 1 | The mask's grain in alpha; the width published | The road shows real speckle: `/tmp/i55/z_pair.png` (flat band above, speckled stone below) |
+| 2 | Rut band 0.10, compacted darker floor | Two dark wheel lines: `/tmp/i55/z_ruts.png` |
+| 3 | Snow cleared where traffic runs | Brown travelled tracks through the white: `/tmp/i55/after/snow3.png` |
+| 4 | A route takes the colour of the ground it crosses | Tan tracks in the dunes: `/tmp/i55/after/sand3.png` |
+
+**Verdict: GREAT**, every angle. `/tmp/i55/after/`: `a_high` (three routes at three widths, junction, gravel texture), `a_noon` (the lane a dark earthy line at the highest sun), `a_dawn` (worn lines with the verge catching the grazing light), `a_low` (the dish's wall raking, the track pressed in), `a_near` (ground level: a textured band with a ragged edge), `a_away` (seed 9), `snow3`, `sand3`; crops `z_pair`, `z_ruts`, `z_lane_noon`. `docs/paths.png` is the before/after for the README: a bare meadow against a road, a cart track and a footpath.
+
+### Measurements
+
+- **Cost** (`bench_elements`, 4K hills at eye level, interleaved, all runs in **P2 at 1860-1875 MHz**): the opaque pass over the early prepass — no network 74.5 and 72.7, with a gravel road, a lane and a cart track 74.2 and 74.6. **Within ±2 %**: the `PATHS` block compiles and samples only when a network exists.
+- Tests: **9** new unit tests (the signed distance field and its spacing, the coverage's edge and direction, a diagonal route's isotropic edge, the wheel-line lateral offsets, crossing routes and determinism, clipping, the resolution rule, the fade from the width, the 8-bit round trip of distance, lateral and grain). Lib suite **322** (was 313).
+- Gates 1-4 passed on **bmb** (`cargo +1.98.0`): build, `cargo test` (all suites ok), examples, clippy `-D warnings` (after fixing five lints: the CPU mirror made `#[cfg(test)]`, three `from_ref` slices, a `clamp`, an indexed loop), `cargo doc -D warnings`, wasm32. Gate 5 locally: the integration binaries ok, `clouds` 10, `terrain` 10, `cover` 8, `dust` 6, `the_horizon_sky` 1.
+- **Build offload:** all compiling went to bmb (local load 17/24 from other tenants; sib unreachable). ~2 min lib, ~1 min examples at 1100 % CPU.
+
+### Sources
+
+`docs/research/paths.md`: Pouyat et al. 2020 (`10.1007_978-3-030-45216-2`: bared soil, compaction, vegetation loss, traffic concentrating); Andersson 2007 (`10.1145_1281500.1281668`: mask-based terrain compositing, the 4 px/m destruction mask); Green 2007 via RTR4 §15.4.3 (coverage distance fields); Sumner et al. 1999 (`10.48550_arxiv.2302.08683`); Tatarchuk 2006 (`s2006-advances-materials-10`).
+
+### The next five items, ranked
+
+1. **Shadow bands on the rock under an orthographic camera** (iteration 51): dark bands across the mountain rock in the isometric view, diagonal and stronger at 9 h.
+2. **Scattered rocks under an orthographic camera**: none are drawn (their ranges count from the eye).
+3. **The weather's precipitation climatology** (iteration 49): the temperate preset rains 2-13x an observed wet station's totals.
+4. **Stylistic variants of the ground** (the user's ask): golem sets taking their own colour.
+5. **Textures on the rock**: a triplanar PBR detail over the procedural rock material.

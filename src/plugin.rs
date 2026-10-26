@@ -21,6 +21,7 @@ use crate::fog::FogPlugin;
 use crate::gpu::readback::ReadbackPlugin;
 use crate::hydrology::{HydrologyPlugin, WaterPlugin};
 use crate::lightning::LightningPlugin;
+use crate::paths::PathsPlugin;
 use crate::precipitation::PrecipitationPlugin;
 use crate::query::EnvironmentSnapshot;
 use crate::rocks::RocksPlugin;
@@ -53,6 +54,7 @@ impl PluginGroup for ElementsPlugins {
             .add(GroundCoverPlugin)
             .add(DustPlugin)
             .add(TrailsPlugin)
+            .add(PathsPlugin)
             .add(WavesPlugin)
             .add(FogPlugin)
             .add(CloudPlugin)
@@ -464,6 +466,8 @@ impl Plugin for ElementsGpuCorePlugin {
         // The trail field's sampling and parallax, imported by the terrain and ground materials
         // whether or not `TrailsPlugin` is added.
         load_shader_library!(app, "trails/surface.wesl");
+        // The path mask's distance field, imported by the terrain and ground materials.
+        load_shader_library!(app, "paths.wesl");
         app.init_resource::<CameraNeeds>()
             .add_plugins(ReadbackPlugin)
             .add_observer(dress_camera)

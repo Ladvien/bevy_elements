@@ -295,6 +295,54 @@ fn setup(
             if let Some(look) = terrain_look_env() {
                 commands.insert_resource(look);
             }
+            // `ELEMENTS_PATHS=road|all`: routes across the bench terrain, so the path block's cost
+            // is measured on the same scene as the baseline with none (`docs/research/paths.md`).
+            if let Ok(which) = std::env::var("ELEMENTS_PATHS") {
+                let all = which.eq_ignore_ascii_case("all");
+                let mut paths = Vec::new();
+                if all || which.eq_ignore_ascii_case("road") {
+                    paths.push(
+                        Path::new(
+                            vec![
+                                Vec3::new(-120.0, 0.0, -60.0),
+                                Vec3::new(-40.0, 0.0, -20.0),
+                                Vec3::new(40.0, 0.0, -30.0),
+                                Vec3::new(140.0, 0.0, -70.0),
+                            ],
+                            2.5,
+                            PathKind::Gravel,
+                        )
+                        .with_ruts(0.03),
+                    );
+                }
+                if all {
+                    paths.push(Path::new(
+                        vec![
+                            Vec3::new(-100.0, 0.0, 40.0),
+                            Vec3::new(-20.0, 0.0, 10.0),
+                            Vec3::new(60.0, 0.0, 20.0),
+                            Vec3::new(150.0, 0.0, 30.0),
+                        ],
+                        0.35,
+                        PathKind::Earth,
+                    ));
+                    paths.push(
+                        Path::new(
+                            vec![
+                                Vec3::new(-60.0, 0.0, 120.0),
+                                Vec3::new(0.0, 0.0, 60.0),
+                                Vec3::new(90.0, 0.0, -10.0),
+                            ],
+                            1.0,
+                            PathKind::Earth,
+                        )
+                        .with_ruts(0.06),
+                    );
+                }
+                if !paths.is_empty() {
+                    commands.insert_resource(PathNetwork::new(paths));
+                }
+            }
             commands.spawn((
                 WaterSource {
                     rate_m3_s: 50.0,

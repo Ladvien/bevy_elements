@@ -172,7 +172,7 @@ fn main() {
             preset,
             mesh,
         })
-        .add_systems(Startup, setup)
+        .add_systems(Startup, (setup, lay_paths))
         .add_systems(
             Update,
             (settle_weather, walk, drive).after(ElementsSystems::Readback),
@@ -398,5 +398,63 @@ fn drive(
         };
         *transform = Transform::from_xyz(xz.x, y - 0.05, xz.y)
             .looking_to(Vec3::new(along.x, 0.0, along.y), Vec3::Y);
+    }
+}
+
+/// `ELEMENTS_PATHS`: the routes a game lays across this ground (`docs/research/paths.md`).
+fn lay_paths(mut commands: Commands) {
+    let Ok(which) = std::env::var("ELEMENTS_PATHS") else {
+        return;
+    };
+    let which = which.to_ascii_lowercase();
+    let all = which == "all";
+    let mut paths = Vec::new();
+    if all || which == "lane" {
+        paths.push(Path::new(
+            vec![
+                Vec3::new(-24.0, 0.0, -18.0),
+                Vec3::new(-9.0, 0.0, -6.0),
+                Vec3::new(-2.0, 0.0, 2.0),
+                Vec3::new(6.0, 0.0, 9.0),
+                Vec3::new(20.0, 0.0, 15.0),
+            ],
+            0.35,
+            PathKind::Earth,
+        ));
+    }
+    if all || which == "track" {
+        paths.push(
+            Path::new(
+                vec![
+                    Vec3::new(-26.0, 0.0, 5.0),
+                    Vec3::new(-12.0, 0.0, 4.0),
+                    Vec3::new(0.0, 0.0, 3.0),
+                    Vec3::new(13.0, 0.0, 6.0),
+                    Vec3::new(26.0, 0.0, 10.0),
+                ],
+                1.0,
+                PathKind::Earth,
+            )
+            .with_ruts(0.06),
+        );
+    }
+    if all || which == "road" {
+        paths.push(
+            Path::new(
+                vec![
+                    Vec3::new(-30.0, 0.0, -24.0),
+                    Vec3::new(-16.0, 0.0, -14.0),
+                    Vec3::new(-4.0, 0.0, -10.0),
+                    Vec3::new(10.0, 0.0, -12.0),
+                    Vec3::new(26.0, 0.0, -20.0),
+                ],
+                2.5,
+                PathKind::Gravel,
+            )
+            .with_ruts(0.03),
+        );
+    }
+    if !paths.is_empty() {
+        commands.insert_resource(PathNetwork::new(paths));
     }
 }

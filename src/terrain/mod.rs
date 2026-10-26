@@ -703,6 +703,7 @@ fn ensure_terrain(
                 cloud_shadow: None,
                 trail: None,
                 ground: None,
+                path: None,
             },
         });
         // Hidden until the first selection puts a patch in a slot.
