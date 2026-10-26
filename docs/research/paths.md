@@ -68,8 +68,45 @@ A gravel road crossing the hills: a 5 m band of pale grey stone over the turf, i
 
 ## Deviations from this plan
 
-None yet: the note precedes the implementation. Deviations found in the capture review are recorded here as they are fixed.
+Found over four passes (iterations 52-54), each by capture review or by a GPU readout. **The
+implementation is not in the tree**: it was built, made to render, and reverted at the visual gate
+(NOT YET) after the loop's five-round rule; the working sources are kept at
+`/tmp/i54/keep/{paths.rs,paths.wesl,trails.rs}` and the log records the state.
+
+1. **The coverage direction.** The mask stored the signed distance (negative inside) and the shader
+   computed `smoothstep(0, fade, -distance)` — which is *positive* outside a route, so every path was
+   transparent in its middle and opaque outside, leaving a faint rim. It cost iterations 52 and 53
+   two full passes and ten rounds of instrumentation. Correct: `smoothstep(0, -fade, distance)`, the
+   fade running **inward from the edge**. A CPU mirror of the formula gave the same wrong answer
+   (`coverage(−0.2, 0.825) = 0.148`), so only a *readout from the GPU* settled it.
+2. **The mask must be `rgba8unorm`.** An `rgba16float` mask read `0.0` at every `uv` **and** at the
+   texture's own centre, in `Rgba16Float`, `Rgba32Float`, `RENDER_WORLD`, `TEXTURE_BINDING|COPY_DST`,
+   and with a constant forced field (`AGENTS.md` carried the trail field as the precedent; the
+   ground-texture array of iteration 50 is the one this material is proven to sample, and it is
+   8-bit). With `Rgba8Unorm` the field arrives.
+3. **The mask resolves the narrowest route, not the extent.** A 70 cm footpath at a metre a texel is a
+   fraction of one sample: it renders as a smear or a staircase. Four texels across the narrowest
+   path's full width (0.175 m for a footpath) is the rule; `mask_resolution`.
+4. **A route's colour is absolute, not a multiplier on the crate's layers.** `SOIL` is 0.073 (a wet
+   forest floor); a worn lane multiplied from it is black. The surfaces: earth 0.058, gravel 0.115,
+   stone 0.150 (linear).
+5. **A route needs a cross-section.** A colour-only path reads as paint. A dish — 3 cm at a lane's
+   centre, 1.8 cm on a road — with the wall's tilt taken from the field's own gradient, makes the
+   verge stand proud and the low sun rake it.
+6. **Two flaws remain, and they are what the next pass starts with.** (a) *No stone in the near
+   field*: `path_grain`'s band limit drops the chip octaves by ~10 m, and wide octaves are too
+   smooth to read as gravel; the fix is a per-texel grain in a **second** mask channel texture (the
+   mask's four channels are all used) at its 0.175 m texel scale. (b) *The wheel ruts do not read*:
+   the rut band is 0.16 of the half width and even at a 37° wall a low sun does not show it; the fix
+   is a narrower, deeper band and a compacted, darker floor.
 
 ## Pending index
 
 Not in the store (cited by the synthesis and recorded rather than read): Cessford 1995, Newsome et al. 2004, Pickering et al. 2010, Olive & Marion 2009, Marion 2006, Settergren & Cole 1970. Every other source above is in the corpus.
+
+## State of the implementation (iteration 54)
+
+Built, rendering, and **reverted at the visual gate**: the surfaces, kinds, widths, edges, dish,
+junction and cost were right; the near-field stone and the wheel ruts were not (Deviations 6a and
+6b). Working sources kept at `/tmp/i54/keep/`; `docs/loop-log.md` "Iteration 54" has the round log,
+the evidence files and the two fixes.
