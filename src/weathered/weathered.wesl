@@ -73,7 +73,10 @@ const COMPACTED_SNOW_TINT: vec3<f32> = vec3<f32>(0.86, 0.91, 0.97);
 // The albedo's swing per unit of each normalised field, and the relief's height per metre of
 // each feature size.
 const STONE_MOTTLE_ALBEDO: f32 = 1.2;
-const STONE_SPECKLE_ALBEDO: f32 = 2.0;
+/// The speckle is the mineral grain, not static: at 2.0 a stone's albedo swung twice as hard per
+/// pixel as the cliff face it fell from (high-pass sd 8.84 DN against the face's 2.69) and read
+/// as a grey mottle rather than as stone (`docs/research/stone-material.md`, Deviation 2).
+const STONE_SPECKLE_ALBEDO: f32 = 0.5;
 const STONE_SPECKLE_SCALE: f32 = 0.125;
 const STONE_MOTTLE_RELIEF: f32 = 0.15;
 const STONE_SPECKLE_RELIEF: f32 = 0.35;
