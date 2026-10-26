@@ -4435,3 +4435,64 @@ As iteration 52 (`docs/research/paths.md`): Pouyat et al. 2020 (bared soil and c
 3. **Scattered rocks under an orthographic camera**: none are drawn.
 4. **The weather's precipitation climatology** (iteration 49).
 5. **Stylistic variants of the ground** (the user's ask).
+
+## Iteration 54 - 2026-10-26 - Paths and roads: made to render, NOT YET at the visual gate, reverted
+
+**Commits:** the research note's `Deviations` (this iteration), the three traps in `AGENTS.md`, this log. **The implementation is reverted again**: `git status --short` is empty, `main` builds. **Working sources kept at `/tmp/i54/keep/{paths.rs,paths.wesl,trails.rs}`, and the patches are reproducible from this log.** **Issue:** none open. **Sibling repos:** none.
+
+### Why this item
+
+The user's focus for the third run: "Can we please focus on roads, path, trails, etc." Iterations 52 and 53 were blocked on one unknown link; this pass found it, and the feature **rendered for the first time**.
+
+### The blocker of the last two iterations, found and fixed
+
+**The coverage was inverted.** The mask stores the signed distance to a route's edge (negative inside), and the shader computed `smoothstep(0, fade, -distance)` — which is *positive outside* a route. Every path was therefore transparent down its middle and opaque outside it: a faint rim, which is exactly what the captures showed and why three passes of reasoning about bindings, formats and pipelines found nothing. It is now `smoothstep(0, -fade, distance)`, the fade running inward from the edge. The CPU mirror of the same formula had the same defect (`coverage(-0.2, 0.825) = 0.148`), so only a GPU readout settled it — a lesson now in `AGENTS.md`.
+
+**The mask format was the second.** An `rgba16float` image bound as `#[texture] var mask: texture_2d<f32>` read `0.0` at every `uv` and at the texture's own centre, in `Rgba16Float` and `Rgba32Float`, as `RenderAssetUsages::default()` and `RENDER_WORLD`, and with a forced constant field. As `Rgba8Unorm` — the format of the terrain's own ground-texture array, the one CPU-filled image this material is proven to sample — the field arrives. (The trail field is `rgba16float` but is compute-written with `STORAGE_BINDING`; that is the difference.)
+
+### What rendered
+
+`/tmp/i54/fix_eye.png`, `/tmp/i54/a_low.png`, `/tmp/i54/paths6.png`: a **dark trodden lane 0.7 m wide** with a ragged edge thinning into the grass; a **pale grey gravel road 5 m wide** that follows the hills; the two crossing at a junction that reads; a dish cross-section so the verge stands proud and a low sun rakes the wall. Objective measure (`measure.py`): **3.6 % of the frame is path-coloured warm grey (mean 143/129/113) against 2.0 % incidental warm pixels in the pre-change baseline** — the surfaces exist and are the right colour.
+
+### Rounds (`/tmp/i54/critique.md`)
+
+| Round | Change | Result |
+|---|---|---|
+| 1 | Coverage direction fixed | Routes became visible (the blocker of 52-53) |
+| 2 | Absolute colours: earth 0.058, gravel 0.115, stone 0.150 | Earth and gravel separate |
+| 3 | Two wide grain octaves (8.8 cm, 30 cm) | The road still flat: chips dropped at 10 m, wide octaves too smooth |
+| 4 | A dish cross-section (3 cm lane, 1.8 cm road) | The verge stands proud; a low sun rakes it |
+| 5 | The wall's tilt from the field's own gradient | The lane's edge reads as worn ground, not paint |
+| 6-7 | Rut slope scaled to metres; `path_at` restructured | **The ruts still do not read** |
+| 8 | Re-capture at eye level and a low sun | Flaws persist; stopped per the five-round rule |
+
+**Verdict: NOT YET**, not shipped. The note's "What great looks like" asks for "a 5 m band of pale grey stone … loose stones at the verge" and "two wheel ruts with dark, damp floors"; the road has no stone in the near field and the ruts do not read. "Fine" is NOT YET.
+
+### The two fixes the next pass starts with
+
+1. **Stone in the near field.** `path_grain`'s band limit drops the chip octaves by ~10 m and the wide octaves are too smooth. The mask is 0.175 m a texel — the scale gravel needs — but all four of its channels are used, so the grain needs a **second** small texture (a `rgba8unorm` grain field over the same grid, its r high-frequency chips and its g a medium clump), lerped by the route's coverage. Then the band limit only ever needs to fade the *finest* octave.
+2. **Ruts that read.** The band is 0.16 of the half width (0.4 m on a 2.5 m road) and even a 37° wall is invisible under a 20-32° sun. Narrow the band (0.10) and deepen the groove (a cart track's 6 cm over 0.25 m is ~50°), and give the floor the compacted, darker albedo the note asks for.
+
+Both are texture and shading work on a pipeline now **proven to run**, which is what the last two passes could not reach.
+
+### Measurements
+
+- 10 unit tests (distance field, coverage edge and direction, isotropic diagonal edge, wheel-line offsets, crossing routes, clipping, resolution, fade, the 8-bit round trip) — passing before the revert.
+- The rasteriser: 4096² in ~40 ms on the async pool.
+- **No performance gate**: the code is not in the tree. `main` is unchanged (313 lib tests pass).
+
+### Sources
+
+As `docs/research/paths.md`: Pouyat et al. 2020, Andersson 2007, Green 2007 via RTR4 §15.4.3, Sumner et al. 1999, Tatarchuk 2006.
+
+### Build offload (user instruction, this iteration)
+
+All compilation moved to **bmb** (local load 17/24 from other tenants; sib unreachable at 192.168.1.114:22). bmb needs `cargo +1.98.0` (its default 1.94 is below Bevy 0.20's MSRV), has the wasm target, and builds the crate's release lib in ~2 min and the examples in ~1 min at 1100 % CPU. Sync: `rsync -az --delete --exclude target/ --exclude tools/target/ --exclude .git/ ./ bmb:bevy_elements_i54/`. GPU captures and benchmarks stay local (the RTX 3090).
+
+### The next five items, ranked
+
+1. **Finish paths and roads** with the two fixes above; the pipeline is proven and the sources are at `/tmp/i54/keep/`.
+2. **Shadow bands on the rock under an orthographic camera** (iteration 51).
+3. **Scattered rocks under an orthographic camera**: none are drawn.
+4. **The weather's precipitation climatology** (iteration 49).
+5. **Stylistic variants of the ground** (the user's ask).
