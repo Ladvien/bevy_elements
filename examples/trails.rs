@@ -173,6 +173,7 @@ fn main() {
             mesh,
         })
         .add_systems(Startup, (setup, lay_paths))
+        .add_systems(Update, mark_paths.after(ElementsSystems::Readback))
         .add_systems(
             Update,
             (settle_weather, walk, drive).after(ElementsSystems::Readback),
@@ -457,4 +458,96 @@ fn lay_paths(mut commands: Commands) {
     if !paths.is_empty() {
         commands.insert_resource(PathNetwork::new(paths));
     }
+    if std::env::var("ELEMENTS_PATHS_MARK").is_ok() {
+        commands.insert_resource(PathMarks { placed: false });
+    }
+}
+
+/// `ELEMENTS_PATHS_MARK=1`: posts placed by the crate's own query, each 2 m clear of the nearest
+/// route's **edge** (`nearest_path`'s distance), so a capture shows the query and the drawn verge
+/// agreeing (`docs/research/path-query.md` Validation 7).
+#[derive(Resource)]
+struct PathMarks {
+    placed: bool,
+}
+
+fn mark_paths(
+    mut commands: Commands,
+    env: Environment,
+    paths: Option<Res<PathNetwork>>,
+    marks: Option<ResMut<PathMarks>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let Some(mut marks) = marks else {
+        return;
+    };
+    let Some(network) = paths.as_deref() else {
+        return;
+    };
+    if marks.placed {
+        return;
+    }
+    let post = meshes.add(Cuboid::new(0.18, 2.4, 0.18));
+    let white = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.95, 0.95, 0.98),
+        perceptual_roughness: 0.7,
+        ..default()
+    });
+    // The proof of Validation 7: walk each route's own centre line, ask the query for the point's
+    // signed distance to the edge, and stand a post exactly 2 m beyond it. If the query and the
+    // drawn verge agree, the posts trace every verge at one constant offset.
+    let mut placed = 0;
+    {
+        for path in &network.paths {
+            for pair in path.points.windows(2) {
+                let (a, b) = (pair[0].xz(), pair[1].xz());
+                let span = a.distance(b);
+                let steps = (span / 3.0).ceil().max(1.0) as i32;
+                for k in 0..=steps {
+                    let on = a.lerp(b, k as f32 / steps as f32);
+                    let Some(hit) = env.nearest_path(on) else {
+                        continue;
+                    };
+                    // Away from the route, along the direction from its centre line to this point:
+                    // the route's normal, from the query's own nearest point.
+                    let normal = if on == hit.point {
+                        let ab = (b - a).normalize_or_zero();
+                        Vec2::new(-ab.y, ab.x)
+                    } else {
+                        (on - hit.point).normalize_or_zero()
+                    };
+                    let target = hit.point + normal * (hit.surface.half_width_m);
+                    // The verge: 2 m beyond the edge the query just measured.
+                    let Some(edge_hit) = env.nearest_path(target) else {
+                        continue;
+                    };
+                    debug_assert!(edge_hit.distance_m.abs() < 0.35, "{edge_hit:?}");
+                    let outside = target + normal * 2.0;
+                    // The example's terrain readback covers its grid; a post beyond it stands at
+                    // the crate's own ground query's answer or, failing that, the flat plane.
+                    let ground = env.terrain_height(outside).unwrap_or(0.0);
+                    commands.spawn((
+                        Mesh3d(post.clone()),
+                        MeshMaterial3d(white.clone()),
+                        Transform::from_xyz(outside.x, ground + 1.2, outside.y),
+                    ));
+                    placed += 1;
+                }
+                let _ = span;
+            }
+        }
+    }
+    eprintln!("path marks: {placed} posts placed by nearest_path");
+    // A diagnostic: the query at the road's own start point, and at a few known places.
+    for probe in [
+        Vec2::new(-30.0, -24.0),
+        Vec2::new(-4.0, -10.0),
+        Vec2::new(10.0, -12.0),
+        Vec2::new(0.0, 0.0),
+        Vec2::new(0.0, 3.0),
+    ] {
+        eprintln!("  at {probe:?}: {:?}", env.nearest_path(probe));
+    }
+    marks.placed = true;
 }

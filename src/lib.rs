@@ -106,7 +106,7 @@ pub use cover::{CoverState, CoverStats, GroundCoverPlugin, SnowSettings, Wetness
 pub use trails::{Imprint, TrailGround, TrailSettings, TrailState, TrailsPlugin};
 
 // Paths: routes laid across the terrain, worn into its ground.
-pub use paths::{Path, PathKind, PathNetwork, PathState, PathsPlugin};
+pub use paths::{Path, PathHit, PathKind, PathNetwork, PathState, PathSurface, PathsPlugin};
 
 // Waves: ripples and wakes from bodies in the water.
 pub use waves::{WaterContact, WaveSettings, WaveState, WavesPlugin};
