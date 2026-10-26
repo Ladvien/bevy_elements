@@ -4371,3 +4371,67 @@ A cheaper and more robust alternative, if (1) is confirmed: **bake the worn surf
 3. **Scattered rocks under an orthographic camera**: none are drawn.
 4. **The weather's precipitation climatology** (iteration 49).
 5. **Stylistic variants of the ground** (the user's ask).
+
+## Iteration 53 - 2026-10-26 - Paths and roads: narrowed to one fault, NOT YET, not shipped
+
+**Commits:** the research note is iteration 52's (`c46540e`); this log. **The implementation is reverted again**: `git status --short` is empty and `main` builds. **Issue:** none open. **Sibling repos:** none.
+
+### Why this item (and the runner-up)
+
+The user's focus for this run, twice now: "Can we please focus on roads, path, trails, etc." The crate presses what a *point* does to the ground (`Imprint`, the trails field) and has no route surface at all. The runner-up was iteration 51's orthographic shadow bands. Taken again because iteration 52's blocker was one unknown link, not a design problem.
+
+### What this iteration established (the value it leaves behind)
+
+Iteration 52 ended with "the fragment's `path.cover` or its `uv` is wrong while the CPU mirror says BARE 1.0 — not found in the rounds spent". This iteration **found which links are sound and which is not**, by instrumenting rather than re-deriving. Every one of these is now verified, not inferred:
+
+| Link | Verdict | Evidence |
+|---|---|---|
+| The mask is rasterised | **sound** | `paths::probe_track_cover` on the CPU: `BARE 1.000` across the route; 10 unit tests pass (signed distance, coverage edge, isotropic diagonal edge, wheel-line lateral offsets, crossing routes, clipping, resolution, fade, halves) |
+| The mask reaches the material | **sound** | `DIAG materials: 1 / has mask true lane Vec4(-1024.0, -1024.0, 0.5, 4096.0)` — the corner, the texel edge and the texels a side are all correct |
+| `PATHS` reaches the forward pipeline | **sound** | `specialize: paths, fragment true label Some("pbr_opaque_mesh_pipeline")` (and a second variant once `GROUND_TEXTURES` arrived) — the prepass gets `fragment false`, which is Bevy's own fragment and irrelevant |
+| The `PATHS`/`PATH_DEBUG` block compiles and is linked | **sound** | a planted type error inside the block produced two `parsing error` lines; removing it silenced them |
+| The block **runs** | **sound** | the debug paint replaces the frame (green, then cyan) — the block executes every fragment |
+| The uniform's lane in the fragment | **sound** | the debug shows lane-ok (green), i.e. `material.path.w > 0.5` |
+| The mask **sample** | **BROKEN** | the debug readout is `0.5 / 0.5` everywhere: `textureSampleLevel(path_mask, ...)` returns a distance of exactly 0 at the screen's own `uv` **and** at `vec2(0.5, 0.5)` |
+
+So the one remaining fault is that **the mask texture reads zero on the GPU**, whatever its contents. Tried and ruled out, each with a capture:
+
+- `Rgba16Float` and `Rgba32Float` (same zero).
+- `RenderAssetUsages::default()` and `RENDER_WORLD` (`/tmp/i53/dbg12.png`, `dbg13.png`, `dbg15.png`).
+- `TextureUsages::TEXTURE_BINDING | COPY_DST` (the trail field's own usage).
+- A mask forced to a constant "inside a route, −1 m" on the CPU (`ELEMENTS_PATHS_SELFTEST`, `/tmp/i53/dbg8.png`): still zero, so it is not the field's contents.
+- A coarse and a fine mask (the rasteriser's resolution rule works: 0.175 m texels for a footpath).
+- No GPU limit or validation error is logged; the sampler is linear, `ClampToEdge`.
+
+What was **not** ruled out, in the order to try next:
+
+1. **The bind group holds a fallback.** The `Option<Handle<Image>>` at bindings 109/110 may be resolved to Bevy's fallback image when the material's *first* bind group is built, and the later asset modification may not re-create it. The crate's ground textures use the same pattern and *do* work (iteration 50), which argues against it — but they also arrive with a full pipeline re-key. **Test:** bind a synthetic 4×4 mask **before** the terrain is spawned (insert `PathState` in `Startup` with a constant image) and see whether it reads.
+2. **A 4096² upload is silently dropped.** 4096² `rgba16float` is 128 MB (256 MB at `rgba32float`); both read zero. **Test:** a 64² mask over a small terrain (`Terrain::flat(4.0).with_extent(Vec2::splat(128.0))`), which is a 2-minute capture.
+3. **A `texture_2d<f32>` bound in a *combined* material bind group at those indices clashes** with another binding the extension also declares. The extension now declares 100-110; **test:** move the mask to the free 111/112 and re-capture.
+
+### Rounds
+
+| Round | Finding |
+|---|---|
+| 1-2 | The uniform, the mask's existence and the specialize key verified by logging. |
+| 3 | A planted shader error proved the `PATHS` block links. |
+| 4-6 | The debug paint proved the block *runs*, and that the lane is set. |
+| 7-9 | The readout proved the sample is 0.0 at the screen's `uv` **and** at the mask's centre, in `Rgba16Float`, `Rgba32Float`, `RENDER_WORLD`, and with a constant field. |
+| 10 | Stopped per the loop's rule (5 rounds), reverted. |
+
+### Measurements
+
+- The rasteriser: 4096² in ~40 ms on the async pool; 10 unit tests.
+- No performance gate (the code is not in the tree). The baseline is unchanged: `main` builds, 313 lib tests pass.
+
+### Sources
+
+As iteration 52 (`docs/research/paths.md`): Pouyat et al. 2020 (bared soil and compaction), Andersson 2007 (mask-based terrain compositing), Green 2007 via RTR4 §15.4.3 (coverage distance fields), Sumner et al. 1999, Tatarchuk 2006.
+
+### The next five items, ranked
+
+1. **Paths and roads**, now starting at the three tests above (a synthetic mask bound before the terrain; a 64² mask; the binding moved to 111/112). The design, the rasteriser, its tests and the diagnostic method are all settled.
+2. **Shadow bands on the rock under an orthographic camera** (iteration 51).
+3. **Scattered rocks under an orthographic camera**: none are drawn.
+4. **The weather's precipitation climatology** (iteration 49).
+5. **Stylistic variants of the ground** (the user's ask).
