@@ -37,8 +37,8 @@ use crate::clouds::CloudShadows;
 use crate::plugin::{ElementsUnits, ElementsView, ensure_gpu_core, needs_depth_prepass};
 use crate::terrain::lod::MAX_LEVELS;
 use crate::terrain::{
-    NO_TERRAIN, TerrainParamsGpu, TerrainRuntime, TerrainState, assign_slots, lod_uniform,
-    patch_mesh, patch_transform, shadow_inputs,
+    NO_TERRAIN, TerrainParamsGpu, TerrainRuntime, TerrainState, assign_slots, lod_centre_uniform,
+    lod_uniform, patch_mesh, patch_transform, shadow_inputs,
 };
 use crate::waves::WaveState;
 use crate::wind::WindState;
@@ -152,6 +152,8 @@ pub struct WaterParams {
     pub(crate) lod: [Vec4; MAX_LEVELS],
     /// x: coarsest level.
     pub(crate) top: Vec4,
+    /// What the vertex stage morphs about (`TerrainMaterialParams::lod_centre`).
+    pub(crate) lod_centre: Vec4,
     /// Cloud shadow map origin xy (metre frame), extent, the lights' mean transmittance.
     pub(crate) shadow: Vec4,
     /// Unit direction toward the light; w = 1 with a map.
@@ -180,6 +182,7 @@ impl Default for WaterParams {
             terrain: TerrainParamsGpu::default(),
             lod: [Vec4::ZERO; MAX_LEVELS],
             top: Vec4::ZERO,
+            lod_centre: Vec4::ZERO,
             shadow: Vec4::ZERO,
             light: Vec4::ZERO,
             absorption: Vec4::ZERO,
@@ -560,6 +563,7 @@ pub(crate) fn water_params(
         terrain,
         lod,
         top,
+        lod_centre: Vec4::ZERO,
         shadow: shadows.0,
         light: shadows.1,
         absorption: settings.absorption.extend(settings.refractive_index),
@@ -613,6 +617,7 @@ fn update_water_materials(
         wind_ms,
         units.per_metre(),
     );
+    params.lod_centre = lod_centre_uniform(terrain.lod_centre);
     let field = waves.as_deref().map(|w| w.field.clone());
     if let Some(w) = waves.as_deref() {
         params.waves = Vec4::new(w.texel_m[0], w.texels as f32, 1.0, 0.0);

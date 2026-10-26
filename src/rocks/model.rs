@@ -407,7 +407,8 @@ pub(crate) fn tile_rocks(
 pub(crate) struct PatchLevels {
     /// The simulation grid's cell, m: level 0's lattice step.
     pub cell_m: f32,
-    /// The grid's minimum corner, metre frame.
+    /// The patches' vertex lattice origin, metre frame: the grid's minimum corner plus half a
+    /// cell, so level 0's nodes are the height samples.
     pub origin: Vec2,
     /// The coarsest level.
     pub top: u32,
@@ -489,13 +490,14 @@ impl Lattices {
         }
     }
 
-    /// The height drawn at `p` for a camera at `eye`: the fine lattice blended to the coarse one
-    /// by the vertex shader's morph factor.
-    pub(crate) fn height(&self, levels: Option<&PatchLevels>, eye: Vec3, p: Vec2) -> f32 {
+    /// The height drawn at `p` for patches morphed about `centre` (the eye, or an orthographic
+    /// camera's centre): the fine lattice blended to the coarse one by the vertex shader's morph
+    /// factor.
+    pub(crate) fn height(&self, levels: Option<&PatchLevels>, centre: Vec3, p: Vec2) -> f32 {
         let Some(levels) = levels else {
             return self.fine;
         };
-        let distance = eye.distance(Vec3::new(p.x, self.fine, p.y));
+        let distance = centre.distance(Vec3::new(p.x, self.fine, p.y));
         self.fine + (self.coarse - self.fine) * levels.morph(self.level, distance)
     }
 }
@@ -714,15 +716,15 @@ mod tests {
 
     #[test]
     fn the_seat_is_the_surface_the_patches_draw() {
-        // A bumpy surface: level 0's lattice at the readback's own cell is the readback's
-        // bilinear surface at the nodes; a coarser level differs, and at the end of its morph a
-        // level is the next one.
+        // A bumpy surface: level 0's lattice is the readback's own samples at the nodes; a
+        // coarser level differs, and at the end of its morph a level is the next one. The bumps
+        // are a product of the two axes, so a quad's two triangles are not its bilinear.
         let n = 256u32;
         let cell = 2.0;
         let surface: Vec<f32> = (0..n * n)
             .map(|i| {
                 let (x, z) = ((i % n) as f32, (i / n) as f32);
-                3.0 * (x * 0.9).sin() + 2.0 * (z * 0.7).cos()
+                3.0 * (x * 0.9).sin() * (z * 0.7).cos() + 2.0 * (z * 0.7).cos()
             })
             .collect();
         let snap = TerrainSnapshot {
@@ -737,9 +739,10 @@ mod tests {
             version: 1,
         };
         let leaves = UVec2::splat(n / 32);
+        // The patches' lattice sits on the samples, half a cell in from the grid's corner.
         let mut levels = PatchLevels {
             cell_m: cell,
-            origin: Vec2::ZERO,
+            origin: Vec2::splat(0.5 * cell),
             top: 3,
             morph: vec![(90.0, 128.0), (200.0, 256.0), (400.0, 512.0)],
             leaf_m: 32.0 * cell,
@@ -748,12 +751,10 @@ mod tests {
         };
         let p = Vec2::new(201.3, 117.9);
         let near = Vec3::new(p.x, 0.0, p.y + 5.0);
-        // At a lattice node, level 0 is the readback's own sample.
-        let node = Vec2::new(200.0, 116.0);
-        assert!(
-            (drawn_height(&snap, Some(&levels), near, node) - snap.height_clamped(node)).abs()
-                < 1e-4
-        );
+        // At a lattice node, level 0 is the stored sample itself: cell (100, 58)'s centre.
+        let node = Vec2::new(201.0, 117.0);
+        let sample = snap.surface[(58 * n + 100) as usize];
+        assert!((drawn_height(&snap, Some(&levels), near, node) - sample).abs() < 1e-4);
         // Inside a quad it is the triangle's plane, not the bilinear sample: they differ.
         let tri = drawn_height(&snap, Some(&levels), near, p);
         assert!((tri - snap.height_clamped(p)).abs() > 1e-4);

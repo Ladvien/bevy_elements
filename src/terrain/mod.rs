@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use crate::gpu::grid::zeroed_buffer;
 use crate::gpu::readback::{Readbacks, decode};
 use crate::plugin::{
-    ElementsQuality, ElementsSystems, ElementsUnits, ElementsView, ensure_gpu_core,
+    ElementsFocus, ElementsQuality, ElementsSystems, ElementsUnits, ElementsView, ensure_gpu_core,
 };
 use crate::query::EnvironmentSnapshot;
 use bevy::asset::{RenderAssetUsages, embedded_asset};
@@ -46,7 +46,9 @@ pub use material::{
     GroundExtension, GroundMaterial, GroundParams, TerrainExtension, TerrainExtensionKey,
     TerrainLook, TerrainMaterial, TerrainMaterialParams,
 };
-pub(crate) use material::{NO_TERRAIN, insert_placeholder, lod_uniform, shadow_inputs};
+pub(crate) use material::{
+    NO_TERRAIN, insert_placeholder, lod_centre_uniform, lod_uniform, shadow_inputs,
+};
 use model::{
     F_HALF, GAIN, LACUNARITY, LEAF_CELLS, OCTAVE_ROTATION, R_LOW, R_SPAN, octave_count,
     resolve_resolution, seed_mix,
@@ -389,6 +391,9 @@ pub(crate) struct TerrainRuntime {
     pub(crate) water_box: Option<BoundsTree>,
     /// Water depth max of every node (both entries): `get(..).1` is the deepest cell's depth.
     pub(crate) water_depth: Option<BoundsTree>,
+    /// What the patches are selected and morphed about under an orthographic followed camera,
+    /// metre frame (`docs/research/orthographic-lod.md` Model 1); `None`: the eye.
+    pub(crate) lod_centre: Option<Vec3>,
 }
 
 impl TerrainRuntime {
@@ -397,6 +402,12 @@ impl TerrainRuntime {
         self.active
             .as_ref()
             .is_some_and(|(_, terrain, _)| terrain.render == TerrainRender::Owned)
+    }
+
+    /// The point the patches are selected and morphed about for a followed camera at `eye`
+    /// (metre frame).
+    pub(crate) fn morph_centre(&self, eye: Vec3) -> Vec3 {
+        self.lod_centre.unwrap_or(eye)
     }
 }
 
@@ -440,7 +451,10 @@ impl Plugin for TerrainPlugin {
         .init_resource::<TerrainRuntime>()
         .init_resource::<textures::GroundTexturePack>()
         .init_resource::<TerrainLook>()
-        .add_systems(Update, ensure_terrain.in_set(ElementsSystems::Simulation))
+        .add_systems(
+            Update,
+            (ensure_terrain, update_lod_centre).in_set(ElementsSystems::Simulation),
+        )
         .add_systems(
             Update,
             (
@@ -812,18 +826,56 @@ pub(crate) fn assign_slots(
     (assigned, used)
 }
 
-/// The transform of a patch relative to the terrain entity: its corner on the grid, scaled to
-/// its edge.
+/// The transform of a patch relative to the terrain entity: its corner on the vertex lattice
+/// (the node's tile half a cell in from the grid's corner, so the vertices sit on the height
+/// samples), scaled to its edge.
 pub(crate) fn patch_transform(lod: &LodConfig, extent: Vec2, patch: Patch) -> (Vec3, Vec3) {
     let size = lod.node_m(patch.level);
+    let offset = lod.sample_offset();
     (
         Vec3::new(
-            patch.ix as f32 * size - extent.x * 0.5,
+            patch.ix as f32 * size + offset - extent.x * 0.5,
             0.0,
-            patch.iz as f32 * size - extent.y * 0.5,
+            patch.iz as f32 * size + offset - extent.y * 0.5,
         ),
         Vec3::new(size, 1.0, size),
     )
+}
+
+/// Find what the patches are selected and morphed about this frame
+/// (`docs/research/orthographic-lod.md` Model 1). Under a perspective followed camera, the eye
+/// (`None`): Bevy's vertex stage morphs about the view's own translation. Under an orthographic
+/// one, whose eye stands far back from what it shows, its [`ElementsFocus`], or without one
+/// where its forward ray first meets the ground; a view that meets no ground keeps the eye.
+pub(crate) fn update_lod_centre(
+    mut runtime: ResMut<TerrainRuntime>,
+    view: Res<ElementsView>,
+    snapshot: Res<EnvironmentSnapshot>,
+    cameras: Query<(&Projection, &GlobalTransform, Has<ElementsFocus>)>,
+) {
+    let centre = view
+        .entity
+        .and_then(|entity| cameras.get(entity).ok())
+        .and_then(|(projection, transform, focused)| {
+            if !matches!(projection, Projection::Orthographic(_)) {
+                return None;
+            }
+            // A focus that resolved to the eye (an entity without a transform) is no focus.
+            if focused && view.position != view.eye {
+                return Some(view.position);
+            }
+            let snap = snapshot.terrain.as_ref()?;
+            let (lo, hi) = runtime.bounds.as_ref()?.extremes();
+            snap.ray_hit(
+                view.eye,
+                transform.forward().as_vec3(),
+                snap.grid.y0 + lo,
+                snap.grid.y0 + hi,
+            )
+        });
+    if runtime.lod_centre != centre {
+        runtime.lod_centre = centre;
+    }
 }
 
 /// Select the patches for the followed camera and write them into the pool, touching only the
@@ -872,12 +924,13 @@ pub(crate) fn update_patches(
         return;
     };
     let grid = state.grid;
-    // The eye, not the focus: the vertex shader morphs by Bevy's `lod_view_world_position`, the
-    // camera's translation, and CDLOD's selection must use the same centre.
+    // The same centre the vertex stage morphs about: the eye, Bevy's `lod_view_world_position`,
+    // or the uniform `lod_centre` under an orthographic camera.
+    let centre = runtime.morph_centre(view.eye);
     let camera = Vec3::new(
-        view.eye.x - grid.origin.x,
-        view.eye.y - grid.y0,
-        view.eye.z - grid.origin.y,
+        centre.x - grid.origin.x,
+        centre.y - grid.y0,
+        centre.z - grid.origin.y,
     );
     let mut wanted = select_patches(&lod, &tree, camera);
     if wanted.len() > POOL_CAPACITY {

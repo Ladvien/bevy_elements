@@ -8,7 +8,9 @@
 //! the precipitation passes only run in a wet preset) and `ELEMENTS_BLOCKERS=256` (spawn that
 //! many precipitation blockers around the camera). `ELEMENTS_EYE=x,y,z` and `ELEMENTS_LOOK=x,y,z`
 //! place the camera instead of the scene's own view (with `ELEMENTS_AGL=1.7` the eye's `y` is
-//! metres above the ground): a talus for the scattered rocks, say.
+//! metres above the ground): a talus for the scattered rocks, say. `ELEMENTS_ORTHO=18` looks
+//! through `terrain_tour`'s isometric orthographic camera instead, its focus on the ground at
+//! `ELEMENTS_LOOK` (`ELEMENTS_WALK=1.4` walks it). The scene line ends with the frame's mean time.
 //! `ELEMENTS_TERRAIN=hills|mountains|dunes|lake|none`, with `ELEMENTS_TINT=r,g,b` and
 //! `ELEMENTS_SATURATION=s` grading its ground (`TerrainLook`)
 //! (default `hills`): a 2 km terrain at the quality's full simulation resolution with a 50 m³/s
@@ -46,7 +48,9 @@ use bevy::prelude::*;
 use bevy::render::diagnostic::RenderDiagnosticsPlugin;
 use bevy::window::{PresentMode, WindowResolution};
 use bevy_elements::*;
-use common::{ExampleHarness, camera, stand_on_ground, terrain_look_env, test_scene, vec3_env};
+use common::{
+    ExampleHarness, camera, ortho_camera, stand_on_ground, terrain_look_env, test_scene, vec3_env,
+};
 
 /// Frames before the per-pass minimum starts counting.
 const WARMUP_FRAMES: u32 = 240;
@@ -141,6 +145,7 @@ fn main() {
                 ..default()
             }),
             RenderDiagnosticsPlugin,
+            bevy::diagnostic::FrameTimeDiagnosticsPlugin::default(),
             elements,
             ExampleHarness,
         ))
@@ -204,28 +209,36 @@ fn setup(
     let game = std::env::var("ELEMENTS_TERRAIN").as_deref() == Ok("game");
     let bodies = std::env::var("ELEMENTS_CONTACTS").is_ok();
     let placed = vec3_env("ELEMENTS_EYE").zip(vec3_env("ELEMENTS_LOOK"));
-    let eye = commands
-        .spawn(if let Some((eye, look)) = placed {
-            camera(eye, look)
-        } else if lake && bodies {
-            // Over the water, so every wave cascade's window is wet where it can be (the fine
-            // one wholly): the field's cost on open water, not on the land around it.
-            camera(Vec3::new(0.0, 12.0, -20.0), Vec3::new(0.0, 2.0, 0.0))
-        } else if lake {
-            // The lake fills half the frame.
-            camera(Vec3::new(-75.0, 45.0, 0.0), Vec3::new(0.0, 0.0, 0.0))
-        } else if game {
-            // Over the imprints' circles, which fill the lower half of the frame.
-            camera(Vec3::new(0.0, 6.0, -10.0), Vec3::new(0.0, 0.0, 0.0))
-        } else {
-            camera(
-                Vec3::new(0.0, 30.0, 0.0),
-                // Looking 20° above the horizon: about half the frame is cloud.
-                Vec3::new(150.0, 91.9, 80.0),
-            )
-        })
-        .id();
+    // `ELEMENTS_ORTHO=18`: `terrain_tour`'s isometric orthographic camera, its focus on the
+    // ground at `ELEMENTS_LOOK` (`ELEMENTS_WALK=1.4` walks it).
+    let ortho = ortho_camera(vec3_env("ELEMENTS_LOOK").unwrap_or(Vec3::ZERO));
+    let orthographic = ortho.is_some();
+    let eye = match ortho {
+        Some(ortho) => commands.spawn(ortho).id(),
+        None => commands
+            .spawn(if let Some((eye, look)) = placed {
+                camera(eye, look)
+            } else if lake && bodies {
+                // Over the water, so every wave cascade's window is wet where it can be (the
+                // fine one wholly): the field's cost on open water, not on the land around it.
+                camera(Vec3::new(0.0, 12.0, -20.0), Vec3::new(0.0, 2.0, 0.0))
+            } else if lake {
+                // The lake fills half the frame.
+                camera(Vec3::new(-75.0, 45.0, 0.0), Vec3::new(0.0, 0.0, 0.0))
+            } else if game {
+                // Over the imprints' circles, which fill the lower half of the frame.
+                camera(Vec3::new(0.0, 6.0, -10.0), Vec3::new(0.0, 0.0, 0.0))
+            } else {
+                camera(
+                    Vec3::new(0.0, 30.0, 0.0),
+                    // Looking 20° above the horizon: about half the frame is cloud.
+                    Vec3::new(150.0, 91.9, 80.0),
+                )
+            })
+            .id(),
+    };
     if placed.is_some()
+        && !orthographic
         && let Some(agl) = std::env::var("ELEMENTS_AGL")
             .ok()
             .and_then(|a| a.parse::<f32>().ok())
@@ -497,6 +510,14 @@ fn report(
             }
             None => scene += &format!("  {pass} -"),
         }
+    }
+    // The whole frame, CPU and GPU (the window presents without vsync): Bevy's mean over its
+    // history of 120 frames.
+    if let Some(ms) = store
+        .get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FRAME_TIME)
+        .and_then(|d| d.average())
+    {
+        scene += &format!("  | frame mean {ms:.3} ms");
     }
     println!("{scene}");
 }

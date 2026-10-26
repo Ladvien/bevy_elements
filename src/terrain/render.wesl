@@ -8,7 +8,7 @@
 
 import bevy_elements::grid::{GridParams, grid_taps};
 import bevy_elements::noise::{perlin3_d, fbm3, seed_offset};
-import bevy_elements::terrain::common::{TerrainParams, ground_detail, rock_material, scree_scatter, terrain_live, turf_palette};
+import bevy_elements::terrain::common::{TerrainParams, ground_detail, last_sample, morph_centre, rock_material, scree_scatter, terrain_live, turf_palette};
 import bevy_elements::terrain::textures::{LayerMaps, layer_maps, height_lift, height_sharpness, DETAIL_GATE};
 import bevy_elements::surface_cover::{weather_surface, wet_canopy, canopy_share, graded, ripple_weights, ripple_offset, overcast_relief};
 import bevy_elements::trails::surface::{TrailHit, trail_fade, trail_march, trail_none};
@@ -38,6 +38,9 @@ struct TerrainMaterialParams {
     lod: array<vec4<f32>, 16>,
     // x: coarsest level.
     top: vec4<f32>,
+    // What the vertices morph about: xyz a metre-frame point, w 1 to use it (an orthographic
+    // followed camera's centre), 0 for the view's own `lod_view_world_position`.
+    lod_centre: vec4<f32>,
     // xy: cloud shadow map origin (metre-frame XZ), z: its extent, w: the lights' mean transmittance.
     shadow: vec4<f32>,
     // xyz: unit direction toward the light the map was made for. w: 1 when a map is bound.
@@ -134,7 +137,8 @@ fn morph_k(distance: f32, lod: u32) -> f32 {
 
 // Metre-frame position of a patch vertex with the CDLOD morph applied (Strugar's morphVertex): the
 // instance matrix's translation is the patch origin in world units (x, terrain y, z), divided by
-// `units`; `MeshTag` is the level.
+// `units`, on the height samples; `MeshTag` is the level. Every view morphs about the same centre
+// under an orthographic followed camera (`docs/research/orthographic-lod.md`).
 fn terrain_vertex_position(local: vec3<f32>, instance_index: u32) -> vec4<f32> {
     let m = mesh_functions::get_world_from_local(instance_index);
     let lod = mesh_functions::get_tag(instance_index);
@@ -142,9 +146,10 @@ fn terrain_vertex_position(local: vec3<f32>, instance_index: u32) -> vec4<f32> {
     let gi = round(local.xz * 32.0);
     let step = material.terrain.grid.cell * f32(1u << lod);
     var wxz = origin.xz + gi * step;
-    let d = distance(view.lod_view_world_position / material.units, vec3<f32>(wxz.x, origin.y + terrain_height(wxz), wxz.y));
+    let centre = morph_centre(view.lod_view_world_position, material.lod_centre, material.units);
+    let d = distance(centre, vec3<f32>(wxz.x, origin.y + terrain_height(wxz), wxz.y));
     let odd = gi - 2.0 * floor(gi * 0.5);
-    wxz = wxz - odd * step * morph_k(d, lod);
+    wxz = min(wxz - odd * step * morph_k(d, lod), last_sample(material.terrain.grid));
     // The snow lies on the surface: the same depth in the prepass, so the depths agree.
     return vec4<f32>(wxz.x, origin.y + terrain_height(wxz) + snow_depth(wxz), wxz.y, 1.0);
 }

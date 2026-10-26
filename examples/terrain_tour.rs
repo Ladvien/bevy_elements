@@ -13,6 +13,13 @@
 //! - `ELEMENTS_TINT=r,g,b` and `ELEMENTS_SATURATION=s` grade the bare ground (`TerrainLook`);
 //!   `ELEMENTS_GRADE_GLIDE=8` glides between the default and that grade and back every 8 s,
 //!   written every frame, as a palette blend would.
+//! - `ELEMENTS_ORTHO=18` looks through an orthographic camera showing 18 m of ground top to
+//!   bottom, 457 m back from an `ElementsFocus` on the ground at `ELEMENTS_LOOK`'s XZ (issue #36):
+//!   `ELEMENTS_PITCH` (default 35.26°) and `ELEMENTS_HEADING` (default 45°) aim it and
+//!   `ELEMENTS_WALK=1.4` walks the focus along the heading at 1.4 m/s.
+//! - `ELEMENTS_PINS=1` stands thin posts on `Environment::terrain_height` every 2 m over 40 m
+//!   around `ELEMENTS_LOOK`, each on a red foot 10 cm tall: where the drawn ground is not the
+//!   height the query answers, a foot sinks out of sight or stands above the ground.
 //!
 //! `cargo run --release --example terrain_tour`
 
@@ -22,7 +29,9 @@ use std::time::Duration;
 
 use bevy::prelude::*;
 use bevy_elements::*;
-use common::{ExampleHarness, camera, stand_on_ground, terrain_look_env, units, vec3_env};
+use common::{
+    ExampleHarness, camera, ortho_camera, pins, stand_on_ground, terrain_look_env, units, vec3_env,
+};
 
 fn main() {
     let hour = std::env::var("ELEMENTS_HOUR")
@@ -115,20 +124,27 @@ fn setup(
     }
     let eye = vec3_env("ELEMENTS_EYE").unwrap_or(Vec3::new(0.0, 200.0, 0.0));
     let look = vec3_env("ELEMENTS_LOOK").unwrap_or(eye + Vec3::new(150.0, -40.0, 80.0));
-    let mut camera = commands.spawn(camera(eye, look));
-    let agl: Option<f32> = std::env::var("ELEMENTS_AGL")
-        .ok()
-        .and_then(|a| a.parse().ok());
-    if let Some(speed) = std::env::var("ELEMENTS_FLY")
-        .ok()
-        .and_then(|s| s.parse::<f32>().ok())
-    {
-        camera.insert(Glide {
-            speed: speed * units(),
-            agl: agl.unwrap_or(6.0) * units(),
-        });
-    } else if let Some(agl) = agl {
-        camera.insert(stand_on_ground(agl));
+    if let Some(pins) = pins(look) {
+        commands.insert_resource(pins);
+    }
+    if let Some(ortho) = ortho_camera(look) {
+        commands.spawn(ortho);
+    } else {
+        let mut camera = commands.spawn(camera(eye, look));
+        let agl: Option<f32> = std::env::var("ELEMENTS_AGL")
+            .ok()
+            .and_then(|a| a.parse().ok());
+        if let Some(speed) = std::env::var("ELEMENTS_FLY")
+            .ok()
+            .and_then(|s| s.parse::<f32>().ok())
+        {
+            camera.insert(Glide {
+                speed: speed * units(),
+                agl: agl.unwrap_or(6.0) * units(),
+            });
+        } else if let Some(agl) = agl {
+            camera.insert(stand_on_ground(agl));
+        }
     }
     if std::env::var("ELEMENTS_UNDERLAY").is_ok() {
         commands.spawn((

@@ -277,7 +277,8 @@ fn update_levels(
         }
         Some(PatchLevels {
             cell_m: state.grid.cell_m,
-            origin: state.grid.origin,
+            // The patches' vertex lattice: half a cell in from the grid's corner.
+            origin: state.grid.origin + Vec2::splat(lod.sample_offset()),
             top: lod.levels.saturating_sub(1),
             morph: (0..lod.levels)
                 .map(|k| (lod.morph_start_m(k), lod.range_m(k)))
@@ -310,6 +311,7 @@ fn scatter(
     units: Res<ElementsUnits>,
     view: Res<ElementsView>,
     snapshot: Res<EnvironmentSnapshot>,
+    terrain: Option<Res<TerrainRuntime>>,
     assets: Option<Res<RockAssets>>,
     mut field: ResMut<RockField>,
     mut stats: ResMut<RockStats>,
@@ -349,6 +351,7 @@ fn scatter(
         return;
     }
     let eye = view.eye;
+    let centre = terrain.map_or(eye, |t| t.morph_centre(eye));
     let eye_xz = eye.xz();
     // Drop the tiles that left their ring by more than a tile (the margin keeps a camera on a
     // tile's edge from rebuilding it every frame).
@@ -390,7 +393,7 @@ fn scatter(
                 rock,
                 range_per_m,
                 u,
-                eye,
+                (eye, centre),
                 snap,
                 field.levels.as_ref(),
             );
@@ -402,7 +405,8 @@ fn scatter(
     }
 }
 
-/// Spawn one rock and its two meshes, seated on the surface the patches draw for an eye at `eye`.
+/// Spawn one rock and its two meshes, seated on the surface the patches draw for an eye and a
+/// morph centre `(eye, centre)` (metre frame).
 #[allow(clippy::too_many_arguments)]
 fn spawn_rock(
     commands: &mut Commands,
@@ -411,7 +415,7 @@ fn spawn_rock(
     rock: &Placed,
     range_per_m: f32,
     units: f32,
-    eye: Vec3,
+    (eye, centre): (Vec3, Vec3),
     snap: &TerrainSnapshot,
     levels: Option<&PatchLevels>,
 ) -> Entity {
@@ -433,7 +437,7 @@ fn spawn_rock(
         version: snap.version,
         patched: levels.is_some(),
     };
-    let surface = seat.lattices.height(levels, eye, rock.xz);
+    let surface = seat.lattices.height(levels, centre, rock.xz);
     let (translation, scale) = seat_transform(&seat, surface, eye, units);
     let near = NEAR_PER_M * d * units;
     let far = seat.far_m * units;
@@ -489,27 +493,33 @@ fn clear(commands: &mut Commands, field: &mut RockField, stats: &mut RockStats) 
     *stats = RockStats::default();
 }
 
-/// Seat every rock again when the camera has moved (the patches' morph and the rocks' shrink
-/// follow it), when the patch levels changed or when the terrain's surface changed.
+/// Seat every rock again when the camera or the patches' morph centre has moved (the morph and
+/// the rocks' shrink follow them), when the patch levels changed or when the terrain's surface
+/// changed.
 fn seat_rocks(
     view: Res<ElementsView>,
     units: Res<ElementsUnits>,
     snapshot: Res<EnvironmentSnapshot>,
+    terrain: Option<Res<TerrainRuntime>>,
     mut field: ResMut<RockField>,
     mut rocks: Query<(&mut RockSeat, &mut Transform)>,
-    mut last: Local<Option<(Vec3, u32)>>,
+    mut last: Local<Option<(Vec3, Vec3, u32)>>,
 ) {
     let Some(snap) = snapshot.terrain.as_ref() else {
         return;
     };
     let eye = view.eye;
-    let surface_changed = last.is_none_or(|(_, version)| version != snap.version);
-    let moved = last.is_none_or(|(at, _)| at.distance(eye) > SEAT_STEP_M);
+    // What the patches morph about: the eye, or an orthographic camera's centre.
+    let centre = terrain.map_or(eye, |t| t.morph_centre(eye));
+    let surface_changed = last.is_none_or(|(_, _, version)| version != snap.version);
+    let moved = last.is_none_or(|(at, about, _)| {
+        at.distance(eye) > SEAT_STEP_M || about.distance(centre) > SEAT_STEP_M
+    });
     let levels_changed = std::mem::take(&mut field.levels_changed);
     if !moved && !surface_changed && !levels_changed {
         return;
     }
-    *last = Some((eye, snap.version));
+    *last = Some((eye, centre, snap.version));
     let levels = field.levels.as_ref();
     let u = units.per_metre();
     let tolerance = SEAT_TOLERANCE_M * u;
@@ -525,7 +535,7 @@ fn seat_rocks(
             seat.version = snap.version;
             seat.patched = levels.is_some();
         }
-        let surface = seat.lattices.height(levels, eye, seat.xz);
+        let surface = seat.lattices.height(levels, centre, seat.xz);
         let (translation, scale) = seat_transform(&seat, surface, eye, u);
         if transform.translation.distance(translation) > tolerance
             || (transform.scale.x - scale).abs() > tolerance

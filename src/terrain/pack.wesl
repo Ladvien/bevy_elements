@@ -77,8 +77,8 @@ fn cell_bounds(c: vec2<i32>) -> vec4<f32> {
 }
 
 // One workgroup per 32×32-cell leaf; each of the 256 threads reduces a 2×2 block plus a one-cell
-// halo (4×4 cells): a vertex on the leaf's edge is a bilinear blend with the neighbouring leaf's
-// first cell, so the leaf's bounds must cover it.
+// halo (4×4 cells): a leaf's vertices sit on its own cells' centres and its last row and column
+// on the neighbouring leaf's first cells, so the leaf's bounds must cover them.
 @compute @workgroup_size(16, 16, 1)
 fn terrain_minmax(
     @builtin(workgroup_id) leaf: vec3<u32>,
