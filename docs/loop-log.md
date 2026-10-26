@@ -4589,3 +4589,56 @@ The user's focus, fifth run: "Can we please focus on roads, path, trails, etc." 
 3. **The weather's precipitation climatology** (iteration 49): the temperate preset rains 2-13x an observed wet station's totals.
 4. **Stylistic variants of the ground** (the user's ask): golem sets taking their own colour.
 5. **Textures on the rock**: a triplanar PBR detail over the procedural rock material.
+## Iteration 57 - 2026-10-26 - Scattered rocks under an orthographic camera: drawn, verified and shipped
+
+**Commits:** the research note `docs/research/orthographic-rocks.md` (`16eeed2`, already on `main`); the implementation, the docs, the changelog and this log (this pass). **Issue:** none. **Sibling repos:** none.
+
+**This pass did not choose a new item.** A `WIP(pass 3)` commit (`911ca5b`) sat at `HEAD`: the previous pass wrote the whole change, captured it and wrote its critique, but was killed before its gates, before its commits. Per the loop's rule, this pass verified that work end to end, replaced the evidence that would not hold, and shipped it.
+
+### Why this item ranked first (the previous pass's reasoning, re-checked here)
+
+An isometric game saw **no scattered rocks at all**. The rocks were spawned, seated and then shrunk to nothing: `seat_transform` faded a rock over the last fifth of `range_per_m · D`, measured from `ElementsView::eye`, and an orthographic camera in this crate stands 457 m back from everything it shows, while a 0.25 m stone's range is 25 m. Bevy's `VisibilityRange` culls on the same camera distance, so even a rock that kept its scale would not have drawn. The runner-up was the weather's precipitation climatology (iteration 49) — a calibration gap, against a feature that is invisible under the camera an isometric town game uses.
+
+### What changed
+
+- **A rock's draw range is a screen size, expressed in the view's own units.** Under a perspective camera nothing changes (`range_per_m · D`, measured from the eye). Under an **orthographic** camera distance says nothing about a rock's size (Akenine-Möller et al. §4.7.1), so the same screen size becomes a threshold on the rock's **diameter**: `height_m / (2 · range_per_m · tan(30°))`, 16 cm at an 18 m view, so every size class is drawn there and the finest class drops out at 60 m.
+- **The measure is taken from the terrain's LOD centre** — the `ElementsFocus` under an orthographic camera, the eye under a perspective one — so a rock is faded, ringed and seated about the same centre the ground under it is drawn by (`TerrainRuntime::morph_centre`).
+- **The ring is the view's ground footprint**, `0.5 · diagonal / (1 − FADE)`, capped at 1200 m; the scatter's lattices are built from it, so the tiles built are the tiles drawn.
+- **The near/far mesh choice is the crate's under an orthographic view**, because Bevy's `VisibilityRange` compares each entity with each *camera's* translation, which under this projection is one number for the whole scene.
+- **The fade runs over the last fifth of the ring**, so a stone arrives small at the frame's edge and never shrinks where it is watched.
+- **`RockStats` counts the rocks drawn, not those placed**, so the number a game reads is what is on the ground.
+
+### Rounds and the evidence that had to be replaced
+
+| Round | Finding |
+|---|---|
+| 1 | The WIP change builds and its 4 new unit tests pass; the perspective capture is identical to the baseline to the byte (max diff 0) |
+| 2 | `m_ortho9` shows stones: 2.91 % of the frame changed, median blob side 10.0 px, p90 20.6 |
+| 3 | **Two of the previous pass's "second seed" captures point straight into a cliff** (`m_ortho18_s7`, `m_ortho9_s3`: byte-identical before/after, mean 84.5). Their GREAT verdicts rested on nothing. Surveyed four sites × two seeds and re-captured |
+| 4 | 40 m, 60 m and 1200 m views read correctly as the diameter rule widens; the 60 m view drops the finest class (1.61 % of the frame against 2.75 % at 40 m) |
+| 5 | The pan (61 frames, 10 m/s) has no pop: motion-compensated p99 flat at 22-23 levels, `>40`-level pixels ≤ 0.24 % |
+
+**Verdict: GREAT**, every angle that survived (`/tmp/i58/critique.md`, written before the verdict). Evidence in `/tmp/i58/{before,after}/`: `m_ortho9` (the item), `m120_s3_h{0,12,15}` (dawn/noon/dusk), `m_ortho9_h{0,135,270}` (headings), `m120_s3_o40` and `m_ortho60` (view heights), `m40_s7`/`m40_s11` (two seeds on ground that shows), `h_ortho9_s{0,7}` (hills), `pan/` (61 frames), `wide1200`, and `m_persp9`/`m_persp9_foot` (the perspective pair that must not change).
+
+### Measurements
+
+- **Cost** (`bench_elements`, 4K, mountains, High, interleaved, clocks logged per run): the isometric scene with the scatter off against the same scene on, three trials, plus the perspective base/new pair.
+- Tests: **4** new unit tests in `src/rocks/mod.rs` (a perspective view keeps its range; an orthographic view draws the same screen size a perspective one would; a wide view draws only the stones that read; a rock fades about the focus, monotonically). Lib suite 329 (was 325).
+- `m_persp9` differs from the pre-change baseline by **max 0**, and `m_persp9_foot` by max 1 in 0.049 % of pixels (GPU dither): the perspective path is untouched.
+
+### Sources
+
+`docs/research/orthographic-rocks.md` §Sources: Akenine-Möller, Haines, Hoffman, Shirley 2019, *Real-Time Rendering* 4th ed. §4.7.1 (`bo/book_real_time_rendering_4th_akenine`, "objects maintain the same size regardless of distance to the camera"); Luebke et al. 2003, *Level of Detail for 3D Graphics* §4.1.1-4.1.2 (`bo/book_level_of_detail_3d_graphics_luebke`, size-based LOD by projected screen coverage, insensitive to field of view and scaling); Lindstrom et al. 1996 (`10.1145_237170.237217`, the screen-space-error criterion); Strugar 2009 (`10.1080_2151237x.2009.10129287`, select about the main camera's centre); Asirvatham & Hoppe 2005 (`10.1145_1015706.1015799`, camera-relative domains); van Muijden 2017 (GDC, *GPU-Based Procedural Placement in Horizon Zero Dawn*, placement by footprint). All already in the corpus; `Pending index`: nothing new.
+
+### Traps added to `AGENTS.md` this pass
+
+- **An orthographic view has no distance at which a prop's screen size falls**, so `VisibilityRange` and a fade measured from the eye both cull everything: measure from the LOD centre and select by the view's own height.
+- **A capture that shows a feature absent is checked against the camera before it is believed.** Two of iteration 57's seed angles pointed into a cliff face and produced byte-identical before/after frames, which read as "no rocks" on a frame that also had no ground.
+
+### The next five items, ranked
+
+1. **The rock material's colour**: the stones are a desaturated blue-grey against a green meadow (`/tmp/i58/after/m40_s7.png`, crop `q_verge.png`). `ROCK_ALBEDO` is untouched by this change, so it is pre-existing, but with rocks now visible in isometric views it is the most obvious beauty gap on the feature.
+2. **The weather's precipitation climatology** (iteration 49): the temperate preset rains 2-13× an observed wet station's totals on ~1.5× its wet days.
+3. **Stylistic variants of the ground** (the user's ask): golem-generated texture sets in other styles, each taking its own colour through `with_colour`, with a capture tour.
+4. **Textures on the rock**: a triplanar PBR detail over the procedural rock material, settable like the ground's.
+5. **The rock material's joint web on cliff faces** (iterations 43-44): a web of blue-grey cells over the rock, visible in `m40_s7`'s left third at 4x.
