@@ -2,6 +2,8 @@
 
 ### Fixed
 
+- **The `trails` example lays Stone and packed-snow routes** (`ELEMENTS_PATHS=stone|packed`), so every `PathKind` has a capture path. Captured on the RTX 3090: Gravel and Stone routes draw after the #38 fix (a grey road, a pale slab band on turf); a Snow route is a faint compacted band in snow.
+
 - **`tools/wesl-check` now compiles the 11 shaders that import from Bevy.** It reported
   `celestial::moon`, `celestial::stars`, `clouds::{composite,march,resolve,shadow}`,
   `hydrology::water`, `precipitation::draw`, `terrain::{ground,render}` and `weathered::weathered`
