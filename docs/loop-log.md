@@ -4896,3 +4896,19 @@ Host: the same Mac as iterations 65-66 (no Xvfb, no NVIDIA GPU, no route to `big
 3. #41/#39 wetness as drawn and a footprint press threshold.
 4. Items 1-5 of iteration 63.
 5. A check that every def `gpu.rs`/`mod.rs` pushes as `ShaderDefVal` is in `VARIANTS`.
+
+## Iteration 68 — 2026-10-27 — Gravel, Stone and Snow path routes draw (#38)
+
+Host: the same Mac as iterations 65-67 (no Xvfb, no NVIDIA GPU, no route to `big`, no `gh`; issues read through the API). Rule 1 of the triage: #38 is the oldest open bug. The unmerged `loop/iter-64` branch held the fix (`9761f22`); it was cherry-picked onto `main` as a new branch (CHANGELOG conflict with #37's entry resolved by keeping both) and gated here rather than merged as is.
+
+- **Change** (`src/paths.rs`): `mask_image` clamped the kind lane to 0..1, the shader reads `texel.y * 4.0` (`src/paths.wesl:97`), so kinds above `Earth` encoded as 255, decoded as kind 4 and drew nothing. The lane is stored `/ 4` through `encode_kind_lane`, rounded up so `floor` keeps kind 3, with the rut fraction held at 0.97.
+- **Verification**: `every_kind_and_rut_depth_round_trips_the_eight_bit_kind_lane` fails with the old line restored (panic at `paths.rs:775`) and passes with the fix. Lib suite 334 passed, 0 failed; clippy `-D warnings`, rustdoc `-D warnings` and the wasm32 lib build clean.
+- **Not verified**: no GPU capture of a Gravel/Stone/Snow route (visual gate) and no benchmark (the change is a CPU byte encode at mask build). The integration and GPU suites were not run. Whoever next has `big` should capture one route per kind before closing #38; it is not closed by this pass.
+
+### Next five items, ranked
+
+1. Capture Gravel/Stone/Snow routes on `big` to confirm #38, then close it.
+2. #42 ground detail amplitude / finest-feature knob.
+3. #41/#39 wetness as drawn and a footprint press threshold.
+4. #40 `TerrainGrid` height that follows the drawn triangles.
+5. Items 1-5 of iteration 63.
