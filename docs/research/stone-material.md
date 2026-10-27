@@ -11,21 +11,23 @@ per **fragment** — the cell network's own draw decides which rock each piece o
 (`rock_blocks`). The mesh decided it per **rock**. So a boulder is 60 % of the way to *one* rock's
 hue, whole, and the cliff it fell from is never one hue at that scale.
 
-Measured on this build (`big`, RTX 3090, `terrain_tour`, mountains, seed 7, 9 h, 1280 × 720; the
-frames and the scripts are listed under Evidence):
+Measured on this build (`big`, RTX 3090, `terrain_tour`, mountains, seed 7, 9 h, 1280 × 720; same
+luminance band, so the light matches; the frames and the scripts are in `/tmp/i59`):
 
-| measure | the cliff's face | a scattered stone |
-|---|---|---|
-| chroma, median (`max−min` of the linear triplet over `max`), 3 m | **0.150** | **0.020** |
-| the albedo's high-pass (3 × 3), sd | 2.69 DN | **8.84 DN** |
-| tones visible on one body | 2–4 per fragment | **1** |
-| shaded side, `B − (R+G)/2` | +20.5 | +16.5 (both sky-lit; not a defect) |
+| measure (like-for-like) | a scattered stone | the cliff's face | the ground |
+|---|---|---|---|
+| the top facet's sRGB saturation, 2 m | **0.020** | 0.15 | 0.19 |
+| the front facet's sRGB saturation, 2 m | 0.112 | — | — |
+| the hue's spread over one body | **67.5°** (from the shading, not the rock) | 8-27° | — |
+| the albedo's high-pass (3 × 3), sd | 6.30 DN | 5.07 DN | 3.29 DN |
 
-So the stone is **greyer than the rock it fell from**, and *noisier* than it: the surface swings
-twice as hard per pixel and still carries one colour. A 4× crop (`z10_stone_px.png`) reads as a
-mottled grey potato. The measured blue of the *shaded* stones is the sky's ambient on a stone in
-shadow, and the cliff's shadowed face measures the same — it is physics and this note leaves it
-alone.
+So a stone is not *noisier* than the rock it fell from — that was my first, wrong reading, taken
+by comparing a sunlit stone with a **shaded** cliff face (8.84 against 2.69 DN, an artefact of the
+light, not of the material). What is wrong is **uniformity**: one palette tone over the whole
+body, so a boulder's top facet is a grey of saturation 0.020 where the face beside it is 0.15, and
+the hue a boulder shows is the light's, not the rock's. The shaded stones' blue is the sky's
+ambient on a shadowed low-albedo surface, and the shaded *cliff* measures bluer still (+20.5 against
++16.5); it is physics and this note leaves it alone.
 
 ## Sources
 
@@ -34,7 +36,7 @@ alone.
   **score-weighted palette blend** `C = Σ sᵢ Tᵢ / Σ sᵢ` with a reference colour per rock and a score
   from the colour distance, and the crate's rule that the **mean must not move** — "a ground that
   changes colour changes the game's lighting". The stones take the same construction: the palette is
-  the same, the *score* is the facet, and the mean over a shape is still exactly 1.
+  the same, the *score* is the facet, and the mean over a shape is still 1.
 - **Akenine-Möller, T., Haines, M., Hoffman, N., Shirley, P. (2019)**, *Real-Time Rendering, 4th
   ed.* §6.3 (corpus `bo/book_real_time_rendering_4th_akenine`): "a cellular texture is formed by
   measuring distances from each location to a set of 'feature points' scattered through space …
@@ -78,112 +80,119 @@ alone.
 **1. A stone wears the palette per *facet*, and its facets are the joint planes it was cut by.**
 
 The shape already has the partition: `rock_geometry` cuts an icosphere by three near-orthogonal
-joint sets plus chips, with a soft minimum, and it already computes each vertex's **analytic normal**
-— which is a plane's normal on the facet that plane cut. So the facet is *free*: the vertex's
-strongest plane is its facet, and the palette's draw is `hash(shape, facet)`.
+joint sets plus chips, with a soft minimum, and it already computes each vertex's **analytic
+normal** — which is a plane's normal on the facet that plane cut. The facet is therefore *free*:
+the **carrier** of the soft minimum is the plane that owns the vertex, and the palette's tone is
+the facet's.
 
 **2. The tones are the cliff's four, so a stone is a piece of the same rock.**
 
 No new palette and no new hues: `TONES` stays the cliff's (`ROCK_TONE_*` in `common.wesl`), and a
-stone's facets wear two to four of them, as the cliff's fragments do.
+stone's facets wear three or four of them, as the cliff's fragments do.
 
-**3. The mean over a shape stays exactly 1, and so does the mean over the scatter.**
+**3. A facet is *one* colour, so the mesh splits its vertices per facet.**
 
-A per-facet draw would drift the mean by chance (one shape's facets could land on basalt twice). The
-draw is therefore **balanced**: the shape's facets are assigned palette indices round-robin from a
-seed per shape, so each shape's facets are as evenly spread over the four tones as its facet count
-allows, and a test asserts the mean of every shape's tones is within 1 % of 1. The scatter's mean is
-then the palette's mean, which is exactly 1 (`the_palette_is_the_rocks_mean`).
+A shared vertex carries one colour and the rasteriser interpolates it between neighbours, which
+smears the tone across the joint it is supposed to break at. The mesh is emitted **per triangle**,
+each triangle taking its facet's tone, so the change lands on the joint. The shape's own geometry
+is unchanged: the vertices sit where they did.
 
-**4. The tone's strength is per *facet*, and it is the cliff's.**
+**4. A triangle's facet is the one nearest one of its vertices, not a vote.**
 
-`TONE_STRENGTH` was 0.6 because a whole rock at full tone "read as a painted blue-grey"
-(`mesh.rs`). A facet is a fragment, and a fragment *is* one rock: it wears its tone at full
-strength, and the shape does not, because its facets differ. So `TONE_STRENGTH` becomes 1 and the
-"painted" risk is answered by the variety instead of by washing every tone out — which is exactly
-the cliff's own construction.
+A majority vote over three corners flips triangle by triangle where a joint runs diagonally and
+draws a ragged edge (measured on the first build: the boundary zigzagged by 2-3 px at 4×). The
+carrier distance — the plane's own distance to the point — picks the facet the joint belongs to,
+so the boundary follows the joint's field.
 
-**5. The speckle is a *mineral grain*, not static.**
+**5. The shape's brightness is normalised to the palette's, by a scalar.**
 
-The stone's high-pass is 8.84 DN against the cliff's 2.69. The speckle's albedo swing (2.0 per unit
-of the field, at an 8th of the mottle's size) is what makes a stone read as noise rather than as
-stone; it drops to a quarter of that, and the mottle — the feature a player reads at arm's length —
-carries the surface. This is a *reduction*, not a new feature: it is the same path, tuned, with the
-cliff's own high-pass as the target.
+The palette's mean is exactly 1 (`rock-palette.md`), but a shape's facets are *whole* rocks of it,
+so its largest facet decides its body's mean and drifts a stone by up to 21 %. Each shape's
+area-weighted luminance is scaled to 1 by **one scalar**, so the tones keep their hues and the hue
+differences stay. (A per-channel mean cancels the hue, which is what `rock-palette.md` Deviation 2
+and `ground-colour.md` both record.)
 
 ## Parameters
 
 | Parameter | Value | Source |
 |---|---|---|
-| The palette | the cliff's four tones, `TONES` in `mesh.rs` (= `ROCK_TONE_*` in `common.wesl`) | `rock-palette.md` Parameters; this note Model 2 |
-| The facet | the vertex's dominant analytic plane (the joint set or chip that cut it) | the shape's own construction, `rock-scatter.md` Model 5 |
-| The facet's tone strength | **1.0** (was 0.6 per shape) | Model 4; `rock-palette.md` Deviation 2 for the mean |
-| The tones' assignment | balanced round-robin per shape, seeded by the shape | Model 3; `the_palette_is_the_rocks_mean` |
-| The per-shape mean | `(1, 1, 1)` within 1 % | `rock-palette.md`: the mean must not move |
-| The speckle's albedo swing | **0.5** (was 2.0) | `rock-scatter.md` Deviation 8, measured against the cliff's high-pass |
-| The mottle's albedo swing | 1.2, unchanged | `rock-scatter.md` Deviation 8 |
-| The two tones' *blend* across a joint | none: a facet is one rock | `rock-palette.md` Deviation 4 (a blend makes blotches) |
+| The palette | the cliff's four tones, `TONES` in `mesh.rs` (= `ROCK_TONE_*` in `common.wesl`) | `rock-palette.md` Parameters |
+| The facet | the carrier of the soft minimum: the joint plane (or the bounding sphere) that owns the vertex | the shape's own construction, `rock-scatter.md` Model 5 |
+| The facet's tone strength | **1.0** (was 0.6 applied to a whole shape) | Model 2; `rock-palette.md` Deviation 2 |
+| The triangles' facet | the carrier nearest one of the triangle's vertices | Model 4 |
+| The tones' assignment | by area, largest facet first, round-robin from a per-shape draw | Model 5; `every_stone_keeps_the_palettes_brightness` |
+| The per-shape brightness | 1, by a scalar on the shape's tones | `rock-palette.md` Deviation 2 |
+| The speckle's albedo swing | **2.0, unchanged** | measured, Deviation 2 below |
 
 ## GPU mapping
 
 - **No new pass, no new buffer, no new binding, no shader cost.** The tones are the mesh's **vertex
-  colours**, written on the CPU once per shape at start-up (24 meshes) — the attribute the stone
-  grain and the base's darkening already ride. The stone's GPU path is untouched.
-- The speckle's swing is a constant in `weathered.wesl` (`STONE_SPECKLE_ALBEDO`): one edit, no new
-  work per pixel.
+  colours**, written on the CPU once per shape at start-up (24 meshes), which is the attribute the
+  base's darkening already rides. The rock's shader path is untouched.
+- The mesh stays **indexed**, and a vertex is duplicated only where two facets meet: the near mesh
+  goes from 642 shared vertices to 827, the same 1280 triangles. Splitting every triangle corner
+  instead (the first build) gave 3840 vertices and paid **+4.5 %** of the isometric scene's opaque
+  pass at matched clocks, so the seam is drawn only at the joint. Nothing per pixel changed.
 
 ## What great looks like
 
-- **A boulder below a cliff is visibly the cliff's rock.** At 2 m a stone shows two or three faces of
-  *different* rock — a darker slab beside a pale one — and its faces are flat with sharp edges, not
-  a mottled sphere.
+- **A boulder below a cliff is visibly the cliff's rock.** At 2 m a stone shows two or three faces
+  of *different* rock — a pale grey-buff slab beside a warmer, darker one and a cool end face — and
+  its faces are flat with sharp edges, not a mottled sphere.
 - **The variation is at the piece, not on the object.** A stone's colour changes at a *joint*, the
-  way the cliff's does, and not across its middle: no gradient, no blotch, no gradient-with-noise.
-- **The surface is stone, not static.** At arm's length the stone has a mottle the size of a hand and
-  a grain you can see where the light rakes, and the frame's high-pass on a stone is the cliff's own
-  order of magnitude, not three times it.
+  way the cliff's does, and not across its middle: no gradient, no blotch.
 - **The scatter's mean colour does not move.** A meadow full of stones keeps the brightness and hue
   it had: a game that changes a ground's colour changes its lighting.
-- **At 40 m and at dusk** the stones read as stones — a few degrees of hue apart from one another and
-  from the ground — and never as blue pebbles on a green lawn.
+- **The cliff and the ground are untouched**: a scattered stone is a mesh, and nothing about the
+  terrain's material changes.
 
 ## Validation targets
 
-1. **The palette is on the facets.** Over the four families, the number of distinct tones within one
-   stone's vertices is at least 2 for every shape with 3 or more facets, and 4 for the angular
-   family. (CPU test.)
-2. **The mean does not move.** Every shape's mean vertex tone is within 1 % of `(1, 1, 1)`, and the
-   scatter's mean is the palette's (CPU test, replacing the whole-palette mean test).
-3. **The stone's chroma rises toward the face's.** In the 2 m stone frame (`stone_a`), a stone
-   face's median chroma rises from **0.020** to at least **0.08** (the cliff's face measures 0.150).
-4. **The stone is not static.** A stone's high-pass (3 × 3, sd) falls from **8.84 DN** to at most
-   **5 DN**, against the face's 2.69.
-5. **The silhouette does not change.** The shape meshes' positions, normals and indices are
-   identical to the baseline's (only the colour attribute moves), so the seat, the physics and the
-   screenshots' silhouettes are untouched (CPU test / byte-identical geometry).
-6. **The cliff is untouched.** The 3 m face frame and the 120 m massif are byte-identical.
-7. **The ground is untouched.** `plains` at 40 m is byte-identical.
-8. **The cost.** The opaque pass is within 1 % (a vertex-colour change and one constant).
+1. **The palette is on the facets.** Every shape wears at least 3 distinct rocks, and every
+   triangle's three vertices agree, so no tone interpolates across a joint. (CPU tests
+   `a_stone_wears_several_rocks_and_each_facet_is_one_colour`.)
+2. **The brightness does not move.** Every shape's area-weighted brightness is 1 within 2·10⁻³
+   (CPU test `every_stone_keeps_the_palettes_brightness`).
+3. **The stone's chroma rises toward the face's.** On the 2 m boulder (`stone_a`), the top facet's
+   sRGB saturation rises from **0.020** to at least **0.10** (the front facet from 0.112).
+4. **A boulder's facets are different rocks.** The hue's spread across one boulder's sub-regions
+   rises from **67.5°** to at least **70°**, and its mean hue moves toward the cliff's warm side.
+5. **The silhouette does not change.** Positions and normals are the shape's own; only the colour
+   attribute moves, and the seat, the `Aabb` and a game's collider read the same geometry.
+6. **The cliff is untouched.** The 3 m face, the 6 m face, the dusk face and the 120 m massif are
+   byte-identical (measured: max diff 1, dither).
+7. **The ground is untouched.** `plains` at 40 m and `dunes` at 40 m are byte-identical bar one
+   stone's edge.
+8. **The cost.** The opaque pass is unchanged: nothing per pixel changed.
 
 ## Deviations from this plan
 
-1. **The facet is taken from the *analytic* normal, not from the triangles.** The plan was to group
-   the mesh's triangles by their plane. The analytic normal is already the facet's plane on the
-   facet's interior (it turns only inside the rounding's width at an edge), and it is what
-   `rock_geometry` computes anyway, so no second pass over the faces is needed.
-2. **The speckle's swing is quartered, and the mottle's is not.** The plan was to leave the grain
-   alone and change only the colour. The measurement above (a stone's high-pass 3.3× the face's)
-   says the grain is half of why a stone reads as a grey potato, and it is one constant on the same
-   path this note already touches. The mottle, which is the feature the eye reads, is unchanged.
-3. **The tones are assigned round-robin and not drawn independently.** A free draw drifts a shape's
-   mean by up to 12 % (four facets, four tones), and the crate's rule is that the mean does not move.
-   The round-robin from a per-shape seed keeps the *which-facet-gets-which* random while bounding the
-   mean.
+1. **The facet is the soft minimum's *carrier*, not a grouping of triangles by plane.** The plan
+   grouped the mesh's triangles by their plane. The carrier is already computed, is a per-vertex
+   scalar the joint's own field supplies, and gives a boundary that follows the joint — where a
+   vote over three corners zigzags (Model 4). It also avoids a second pass over the faces.
+2. **The speckle's albedo swing is unchanged at 2.0.** The plan quartered it, on a first
+   measurement that compared *sunlit* stones with a *shaded* cliff face and reported the stone's
+   high-pass as 3.3× the face's. Measured like for like — same luminance band, same light — the
+   stone's high-pass is **6.30 DN** against the face's **5.07**, not three times it, so there was
+   nothing to fix and the edit was reverted before it was written into the note. The stone grain
+   stays as `rock-scatter.md` Deviation 8 set it.
+3. **The tones are assigned by *area*, largest facet first, and the shape's brightness is
+   normalised by a scalar.** The plan had a balanced round-robin, which bounds a shape's mean by
+   its facet *count* — but a facet's *area* is what the eye integrates, and the largest facet of a
+   rounded rock is 56-65 % of its surface. Sorting by area and then normalising is what actually
+   holds the brightness, and it is the same construction `rock-palette.md` Deviation 2 used for the
+   palette itself.
+4. **The vertices are split per facet and per triangle.** The plan changed only the colour
+   attribute of the existing shared-vertex mesh. A shared vertex interpolates its colour across
+   every triangle that uses it, and the first build smeared a pale top into a buff side over the
+   whole rock. Splitting the vertices is the fix, and it costs no silhouette.
 
 ## Pending index
 
 None. This note cites only documents already converted and indexed (`10.5194_esurf-9-1073-2021`,
-`10.1145_1281500.1281668`, `bo/book_real_time_rendering_4th_akenine`); the two publisher records this
-note would have liked (La Pointe & Hudson 1985, Papavasiliou 2015's PDF) are the ones
+`10.1145_1281500.1281668`, `bo/book_real_time_rendering_4th_akenine`); the two publisher records
+this note would have liked (La Pointe & Hudson 1985, Papavasiliou 2015's PDF) are the ones
 `rock-palette.md` and `rock-blocks.md` already record as unobtainable, and are read through those
 notes' quotes.
+
