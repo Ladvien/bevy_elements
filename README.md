@@ -4,23 +4,9 @@
 
 **Living environments for Bevy 0.20.** A sun and moon placed by real ephemerides, the bright-star sky, a seeded climate that schedules hourly weather, a GPU wind field, volumetric clouds that shade the ground, rain and snow, lightning and thunder, distance and ground fog, and exposure that keeps night looking like night. Simulation runs in compute shaders; gameplay asks the `Environment` system parameter and is answered from a throttled async readback.
 
-![The ten weather presets forced in turn at a held 10.00 h on 20 April 2026: the HUD names the preset and prints the temperature, cover, precipitation rate, wind, visibility, and the sun's and moon's elevation](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/tour.gif)
+![The ten weather presets forced in turn, the clock running from 10.00 h on 20 April 2026: the HUD names the preset and prints the temperature, cover, precipitation rate, wind, visibility, and the sun's and moon's elevation](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/tour.gif)
 
-*The `weather_tour` example forcing `WeatherPreset::ALL` in turn: 262 frames, 512 × 288, 34 s of playback. The stills for each system are in the sections below, and `weather_tour` is listed under [Examples](#examples).*
-
-## Contents
-
-[What is in it](#what-is-in-it) · [Install](#install) · [Quick start](#quick-start)
-
-The API, in five groups:
-
-- [Putting it in a scene](#putting-it-in-a-scene) — [frame order](#frame-order), [the camera](#the-camera) (keeping your own look, a focus and isometric cameras, world units)
-- [Sky, weather and light](#sky-weather-and-light) — [clock, sun, moon and stars](#clock-sun-moon-and-stars), [climate, seasons and weather](#climate-seasons-and-weather), [wind](#wind), [fog](#fog), [clouds](#clouds), [precipitation](#precipitation), [lightning](#lightning)
-- [Terrain and ground](#terrain-and-ground) — [terrain](#terrain), [ground cover](#ground-cover), [rocks](#rocks), [dust storms](#dust-storms), [paths and roads](#paths-and-roads), [trails](#trails)
-- [Rivers, lakes and waves](#rivers-lakes-and-waves) — [hydrology and erosion](#hydrology-and-erosion), [water](#water), [waves](#waves)
-- [Surfaces, materials and voxel snow](#surfaces-materials-and-voxel-snow) — [weathered materials](#weathered-materials), [snow on voxel volumes](#snow-on-voxel-volumes)
-
-And: [gameplay queries](#gameplay-queries) · [plays well with](#plays-well-with) · [performance](#performance) · [platforms](#platforms) · [what it deliberately does not do](#what-it-deliberately-does-not-do) · [compatibility](#compatibility) · [research](#research) · [examples](#examples) · [license](#license)
+*The `weather_tour` example forcing `WeatherPreset::ALL` in turn, one preset for 20 s, with the clock unpaused and running at 1× from 10.00 h: 262 frames, 512 × 288, 34 s of playback over 210 s of game time, the hour finishing at 10.06. The stills for each system are in the sections below, and `weather_tour` is listed under [Examples](#examples).*
 
 ## What is in it
 
@@ -43,7 +29,7 @@ And: [gameplay queries](#gameplay-queries) · [plays well with](#plays-well-with
 | `TrailsPlugin` | `trails` | Footprints, ruts and tracks: `Imprint` components press a centimetre field that follows the focus to their Bekker–Wong sinkage (CRREL's compaction limit in snow) with a rim of the displaced material, sweeping the path between frames; new snow fills it, wind smooths it, sand and mud slump; on the crate's terrain or a game's own ground (`TrailGround`); the terrain and ground materials and `WeatheredMaterial::with_trails()` draw it per pixel with parallax occlusion mapping and a soft self-shadow; `Environment::trail_depth`; `TrailState` for custom shaders |
 | `PathsPlugin` | `paths` | Roads and paths laid across the terrain: a `PathNetwork` of `Path`s — a polyline, a half width, a `PathKind` (earth, gravel, stone or a packed snow track) and a rut depth — rasterised once into an **8-bit coverage distance field** over the terrain (`rgba8unorm`, its alpha a per-texel grain), which the terrain material reads per fragment: the turf gives way to bare, compacted earth with its own grain and a dish cross-section whose verge catches a grazing sun, snow cleared where traffic runs, and the ruts pressed along the route's wheel lines; the block is compiled only into a terrain whose network has routes, so a terrain without paths pays nothing; `PathState` for custom shaders |
 | `WavesPlugin` | `waves` | Ripples and wakes: `WaterContact` ellipsoids press the hydrology's water with the pressure head of their column and their entry's impact; a dispersive capillary-gravity wave field in three camera-following cascades (iWave with a kernel fitted to Airy's dispersion) reflects off the shores, slows in the shallows, follows the current, breaks into foam; drawn by the water's passes; `WaveState` for custom shaders |
-| `VoxelPlugin` (feature `isomesh`) | `voxel` | Snow on `bevy_isomesh` voxel volumes: `VoxelGround` on a `VoxelVolume` scans the column tops into an external `Terrain` the snow, wetness and hydrology maps run on, and `SnowyField` adds the snow depth back as a slab over the tops, swapped per column when it moves half a voxel, remeshing only the chunks that changed; tunnels stay clear; erosion is off for voxel ground |
+| `VoxelPlugin` (feature `isomesh`) | `voxel` | Snow on `bevy_isomesh` voxel volumes: `VoxelGround` on a `VoxelVolume` scans the column tops into an external `Terrain` the snow, wetness and hydrology maps run on, and `SnowyField` adds the snow depth back as a slab over the tops, swapped per column when it moves half a voxel, remeshing only the chunks that changed; tunnels stay clear; erosion is off for voxel ground. `VoxelSnow` puts the same slab on any number of volumes over a game's own ground, with no terrain |
 | `ElementsFloraPlugin` (feature `flora`) | `flora` | Drives `bevy_flora`'s wind, gusts, season and wetness, and `FloraGround` from the terrain's height snapshot |
 
 `ElementsPlugins` adds every plugin above except `ElementsFloraPlugin`, and adds `VoxelPlugin` with the feature `isomesh`. Each is public on its own, so `ElementsPlugins.build().disable::<FogPlugin>()` works.
@@ -87,6 +73,18 @@ fn setup(mut commands: Commands) {
     commands.spawn(Terrain::procedural(ProceduralTerrain::hills(42)));
 }
 ```
+
+## Contents
+
+Everything past here is reference. The API is in five groups:
+
+- [Putting it in a scene](#putting-it-in-a-scene) — [frame order](#frame-order), [the camera](#the-camera) (keeping your own look, a focus and isometric cameras, world units)
+- [Sky, weather and light](#sky-weather-and-light) — [clock, sun, moon and stars](#clock-sun-moon-and-stars), [climate, seasons and weather](#climate-seasons-and-weather), [wind](#wind), [fog](#fog), [clouds](#clouds), [precipitation](#precipitation), [lightning](#lightning)
+- [Terrain and ground](#terrain-and-ground) — [terrain](#terrain), [ground cover](#ground-cover), [rocks](#rocks), [dust storms](#dust-storms), [paths and roads](#paths-and-roads), [trails](#trails)
+- [Rivers, lakes and waves](#rivers-lakes-and-waves) — [hydrology and erosion](#hydrology-and-erosion), [water](#water), [waves](#waves)
+- [Surfaces, materials and voxel snow](#surfaces-materials-and-voxel-snow) — [weathered materials](#weathered-materials), [snow on voxel volumes](#snow-on-voxel-volumes)
+
+And: [gameplay queries](#gameplay-queries) · [plays well with](#plays-well-with) · [performance](#performance) · [platforms](#platforms) · [what it deliberately does not do](#what-it-deliberately-does-not-do) · [compatibility](#compatibility) · [research](#research) · [examples](#examples) · [license](#license)
 
 ## Putting it in a scene
 
