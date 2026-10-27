@@ -283,7 +283,7 @@ fn textured_hills(mut commands: Commands, assets: Res<AssetServer>) {
 # use bevy::prelude::*;
 # use bevy_elements::TerrainLook;
 fn night_palette(mut look: ResMut<TerrainLook>) {
-    *look = TerrainLook { tint: Vec3::new(0.55, 0.62, 0.85), saturation: 0.6 };
+    *look = TerrainLook { tint: Vec3::new(0.55, 0.62, 0.85), saturation: 0.6, ..default() };
 }
 ```
 

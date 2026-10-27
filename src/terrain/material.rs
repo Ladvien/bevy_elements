@@ -79,6 +79,9 @@ pub struct TerrainMaterialParams {
     pub(crate) colours: [Vec4; 3],
     /// The game's grade of the bare ground ([`TerrainLook`]): xyz the tint, w the saturation.
     pub(crate) look: Vec4,
+    /// The host's ground detail ([`TerrainLook`]): x the amplitude multiplier, y the finest
+    /// feature its camera resolves (m, 0 for none).
+    pub(crate) grain: Vec4,
     /// Paths ([`PathNetwork`](crate::PathNetwork)): xy the mask's minimum corner (metre frame),
     /// z its texel edge (m), w its texels a side; w below 0.5 is no mask.
     pub(crate) path: Vec4,
@@ -107,6 +110,7 @@ impl Default for TerrainMaterialParams {
             ground: Vec4::W,
             colours: [Vec4::ZERO; 3],
             look: Vec4::ONE,
+            grain: Vec4::new(1.0, 0.0, 0.0, 0.0),
             path: Vec4::ZERO,
             path_scale: Vec4::ZERO,
             units: 1.0,
@@ -245,6 +249,21 @@ pub struct TerrainLook {
     /// 1 keeps the ground's colours, 0 renders it at its own luminance (grey), above 1
     /// oversaturates. Default 1.
     pub saturation: f32,
+    /// A multiplier on the ground's micro-detail (`docs/research/ground-detail.md`, Deviation
+    /// 10): the albedo grain, the bump relief and the clump the turf's palette takes from the same
+    /// noise, together. 1 is the crate's own, 0 leaves the palette's colour field and the
+    /// terrain's own shape with no grain and no bump, above 1 exaggerates (negative is taken as
+    /// 0). It does not change wetness, snow or standing water. Under a texture set it scales the
+    /// procedural grain only. Default 1.
+    pub detail: f32,
+    /// The smallest world feature, in metres, that the host's camera resolves: its metres per
+    /// pixel. `Some` floors the band limit's footprint with it, so an octave of the detail
+    /// narrower than this is dropped (the 9 cm fine band at `0.09` or more; the 1.25 m coarse band
+    /// and all below it above `1.25`) and a route's speckle goes with them. A camera whose pixel
+    /// is wider than a feature would otherwise draw it as one-texel noise. `None` (the default)
+    /// leaves the footprint to the screen-space derivatives; the crate never lowers it, so
+    /// `Some` of a value below the derived footprint changes nothing.
+    pub finest_m: Option<f32>,
 }
 
 impl Default for TerrainLook {
@@ -252,6 +271,8 @@ impl Default for TerrainLook {
         Self {
             tint: Vec3::ONE,
             saturation: 1.0,
+            detail: 1.0,
+            finest_m: None,
         }
     }
 }
@@ -260,6 +281,13 @@ impl TerrainLook {
     /// The uniform's lane: the tint, and the saturation clamped at zero.
     pub(crate) fn packed(&self) -> Vec4 {
         self.tint.max(Vec3::ZERO).extend(self.saturation.max(0.0))
+    }
+
+    /// The uniform's lane of the detail: x the amplitude multiplier, y the finest feature (0 for
+    /// none, a non-finite or negative `finest_m` is none).
+    pub(crate) fn grain(&self) -> Vec4 {
+        let finest = self.finest_m.filter(|m| m.is_finite()).map_or(0.0, |m| m.max(0.0));
+        Vec4::new(self.detail.max(0.0), finest, 0.0, 0.0)
     }
 }
 
@@ -297,6 +325,8 @@ pub struct GroundParams {
     pub(crate) trail: Vec4,
     /// As `TerrainMaterialParams::trail_light`.
     pub(crate) trail_light: Vec4,
+    /// As `TerrainMaterialParams::grain`.
+    pub(crate) grain: Vec4,
     /// As `TerrainMaterialParams::units`.
     pub(crate) units: f32,
 }
@@ -316,6 +346,7 @@ impl Default for GroundParams {
             gate: Vec4::new(NO_COLUMN_GATE, 0.0, 0.0, 0.0),
             trail: Vec4::ZERO,
             trail_light: Vec4::ZERO,
+            grain: Vec4::new(1.0, 0.0, 0.0, 0.0),
             units: 1.0,
         }
     }
@@ -534,6 +565,7 @@ pub(super) fn update_materials(
             ground,
             colours,
             look: look.packed(),
+            grain: look.grain(),
             path: path_lane,
             path_scale,
             units: units.per_metre(),
@@ -574,6 +606,7 @@ pub(super) fn update_materials(
         gate: GroundParams::default().gate,
         trail: trail_window,
         trail_light,
+        grain: look.grain(),
         units: units.per_metre(),
     };
     let ids: Vec<_> = ground_materials.iter().map(|(id, _)| id).collect();
@@ -617,9 +650,25 @@ mod tests {
         let clamped = TerrainLook {
             tint: Vec3::new(-1.0, 0.5, 2.0),
             saturation: -0.3,
+            ..TerrainLook::default()
         }
         .packed();
         assert_eq!(clamped, Vec4::new(0.0, 0.5, 2.0, 0.0));
+    }
+
+    /// `ground-detail.md` Deviation 10: the default look is the shader's identity (amplitude 1, no
+    /// floor), a negative amplitude packs to 0, and a non-finite or negative finest feature is no
+    /// floor rather than a footprint that blanks the ground.
+    #[test]
+    fn the_detail_lane_is_the_identity_by_default_and_never_blanks_the_ground_by_accident() {
+        assert_eq!(TerrainLook::default().grain(), Vec4::new(1.0, 0.0, 0.0, 0.0));
+        let look = |detail: f32, finest_m: Option<f32>| {
+            TerrainLook { detail, finest_m, ..TerrainLook::default() }.grain()
+        };
+        assert_eq!(look(-2.0, Some(0.09)), Vec4::new(0.0, 0.09, 0.0, 0.0));
+        assert_eq!(look(0.5, Some(f32::NAN)).y, 0.0);
+        assert_eq!(look(0.5, Some(f32::INFINITY)).y, 0.0);
+        assert_eq!(look(0.5, Some(-1.0)).y, 0.0);
     }
 
     /// Terrain validation 9: each extension declares at most two storage buffers (terrain cells
