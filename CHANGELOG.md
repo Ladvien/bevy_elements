@@ -2,6 +2,11 @@
 
 ### Fixed
 
+- **`PathKind::Gravel`, `Stone` and `Snow` routes draw.** `paths::mask_image` clamped the kind lane to 0..1
+  where the shader reads it over 0..4 (`texel.y * 4.0`), so every kind above `Earth` encoded as 255,
+  decoded as kind 4 and painted nothing (#38). The lane is now stored `/ 4`, rounded up so `floor` keeps
+  kind 3, with a rut-depth fraction held at 0.97 so a deep rut cannot change a route's kind.
+
 - **The air past the ground is the sky's own column, not the fog's hue.** Where a frame's ground does
   not reach the horizon, the crate drew a flat slab in the camera's `DistanceFog` colour, a fixed
   `(0.75, 0.80, 0.85)` scaled by horizontal illuminance, while the sky at the horizon is Rayleigh- and
