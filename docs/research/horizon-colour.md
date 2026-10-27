@@ -168,7 +168,45 @@ materials are untouched).
 
 ## Deviations from this plan
 
-*(filled in as the build settles; each entry cites what was measured.)*
+1. **The readback and the new compute kernel were not built.** The plan's Models 1-2 measured the
+   horizon's mean on the GPU over 32 azimuths and wrote it into `DistanceFog::color` from the main
+   world. The build instead reads the cube the crate already composes (`sky_probe`, the cloud pass's
+   environment cube) *inside* `ground_haze`, at the ray's own azimuth. Three reasons, all measured:
+   - **Per azimuth is strictly better than one mean.** Wenzel reports the mean is enough because his
+     sky is a low-resolution gradient; this crate's dusk horizon runs from a peach sunward to a cool
+     anti-solar side, and one mean of that is a band of its own. The azimuth sweep
+     (`/tmp/i62/after/az_xp`, `az_xn`, `az_zn`, `az_zp`, 19 h, 400 m up) shows the slab following
+     the sky's own hue round the compass.
+   - **No new pass, no readback, no latency.** `DistanceFog::color` from a readback lags the exposure
+     by a frame and needs a kernel plus a storage buffer; the cube fetch is already bound to the
+     shader that draws the slab.
+   - **The slab is the only thing this change moves.** `DistanceFog::color` still comes from
+     `fog::update_distance_fog`'s analytic hue, so every mesh's far field, and `fog.md` Validation
+     12's "distant terrain at the horizon", are **unchanged by this pass** and still open. What is
+     fixed is the flat slab the cloud pass fills where the ground ends — the 130 DN band the finding
+     measured. Reading the fog colour itself from the sky is the next item, not this one.
+2. **The taps are two, not 32, and the horizon value is extrapolated to zero elevation.** Sampling
+   the cube 0.5° up the sky (the plan's band, chosen for Bevy's sky-LUT row spacing) is a steep
+   gradient in twilight: at 20 h the slab's lip read 127.8 DN against a sky of 117.2. The shipped
+   form takes two taps, at 0.5° and 1.0° (`HORIZON_SAMPLE_BAND` = 0.0087 rad and twice it), and
+   extrapolates linearly to the horizon as `2·r(h) − r(2h)`. Measured on `big` against the sky 4-12
+   rows above the terrain's edge: 2.2 DN at 20 h, 4.3 DN at 19.5 h, and 0.7-2.0 DN at every hour from
+   dawn to 22 h (`/tmp/i63/{before,after}/hi_h*`).
+   A wider pair is *worse*, not better: measured in this pass by building the same tree with
+   `HORIZON_SAMPLE_BAND` = 0.0175 rad (taps at 1° and 2°), the 20 h lip reads **3.2 DN** against the
+   shipped pair's **2.2 DN**, and 19.5 h reads **6.9 DN** against **4.3 DN**; noon is 2.5 against
+   2.0 (`/tmp/i63/wide/` against `/tmp/i63/after/`). The sky's gradient steepens toward the horizon,
+   so a linear extrapolation taken from too high up overshoots. The cube's own resolution sets the
+   floor — a 128² face spans 0.7° per texel, so a tap closer than that bilinearly averages the cube's
+   ground in and the slab goes dark (measured at 0.1°: 12.9 against a sky of 14.2).
+3. **The night fill is not added.** The environment cube carries `params.atmo.w · NIGHT_SKY_COLOUR`
+   so the lighting cube is not black at night; the screen's sky does not carry it. Adding it drew a
+   grey sea (9.6, 12.4, 15.5 DN) under a black sky (2, 1, 1). The slab reads the cube without it.
+4. **Parameter table.** `HORIZON_SAMPLE_BAND` is 0.0087 rad (0.5°), with the second tap at twice it,
+   so `HORIZON_BAND_DEG` = 0.5 rather than the table's +0.5 in the plan's *sky-LUT* mapping;
+   `HORIZON_AZIMUTHS` is 2 (not 32, and they are elevations, not azimuths), and the readback
+   interval and the analytic fallback are not used: the slab has no fallback path, because a ray
+   that meets the planet always has the cube.
 
 ## Pending index
 
