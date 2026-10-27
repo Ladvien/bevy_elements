@@ -87,8 +87,14 @@ gh issue list --repo Ladvien/bevy_elements --state open --limit 100 \
   --json number,title,labels,createdAt --jq '.[] | "#\(.number) \(.title)"'
 ```
 
-(If `gh` is absent, the same list is
-`https://api.github.com/repos/Ladvien/bevy_elements/issues?state=open&per_page=100`.)
+If `gh` is absent (it is on big_mac), run this instead. It needs no login and prints the same list:
+
+```sh
+curl -s "https://api.github.com/repos/Ladvien/bevy_elements/issues?state=open&per_page=100" \
+  | python3 -c 'import json,sys; [print("#%s %s" % (i["number"], i["title"])) for i in json.load(sys.stdin) if "pull_request" not in i]'
+```
+
+A missing `gh` is never a reason to skip this step. If the command errors or prints a Python traceback, that is the rate-limit case below.
 
 Then, in this order:
 
