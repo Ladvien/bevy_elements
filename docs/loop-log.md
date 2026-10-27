@@ -4642,3 +4642,52 @@ An isometric game saw **no scattered rocks at all**. The rocks were spawned, sea
 3. **Stylistic variants of the ground** (the user's ask): golem-generated texture sets in other styles, each taking its own colour through `with_colour`, with a capture tour.
 4. **Textures on the rock**: a triplanar PBR detail over the procedural rock material, settable like the ground's.
 5. **The rock material's joint web on cliff faces** (iterations 43-44): a web of blue-grey cells over the rock, visible in `m40_s7`'s left third at 4x.
+
+## Iteration 58 - 2026-10-26 - A stone's facets, verified; and the two meshes that wore different rocks
+
+**Commits:** `e0591e2` (the LOD tone fix, its test and the note's corrections), `539640b` (changelog), `08cb247` (README), this log. **Issue:** none. **Sibling repos:** none.
+
+**This pass chose no new item.** `main` carried two unlogged commits (`5a8f190`, `1f52207`, `ad2fbf6`) from passes that were killed before their gates and before their log entries — the stone's faceted palette, the item iteration 57's backlog ranked first. Per the loop's rule this pass verified that work end to end, replaced the evidence that would not hold, found a defect in it, fixed it, and logged the whole thing. **The log skips to 58 here** because 58 and 59 never wrote an entry; their evidence is in `/tmp/i59`.
+
+### Why the inherited item ranked first (re-checked)
+
+Iteration 57's backlog: "**The rock material's colour**: the stones are a desaturated blue-grey against a green meadow". Measured like for like, a stone's top facet was sRGB saturation **0.020** against the cliff face's 0.15 at the same light — one palette tone over a whole body, where the cliff mixes its palette per fragment. The runner-up was the weather's precipitation climatology (iteration 49), a calibration gap invisible without instrumenting the record, against a visible flaw on every stone in every frame.
+
+### The capture path had to be rebuilt first
+
+`big` (RTX 3090, Xvfb) is **down** — `ping` and every port fail — so the crate's documented capture host is unavailable. Both Macs' window screenshots came out **byte-black** (`mean 0.0`, 2560 × 1406) because neither has a GUI session for the ssh user, and `screencapture` fails the same way. `mac_air` (192.168.1.112) turned out to have a live console session, and its `Screenshot::primary_window` capture is correct there: 4-6 MB frames, `mean 110`. **All captures and benchmarks in this entry are from `mac_air`, an M10 GPU** — not comparable with the `big` numbers in earlier entries, and not reported as if they were.
+
+### What changed
+
+- **The palette table is now the shape's, not the mesh's.** `facet_tones` derived its table from the **facet areas of whichever mesh was being built**, so a shape's 1280-triangle near mesh and its 320-triangle far mesh were handed *different* palette tones. Measured on the CPU over all twelve shapes: **19.0°** of hue apart at the worst vertex (shapes 1, 4, 5) and 3.7° on one shape's mean. The meshes switch abruptly at `22 · D`, so a stone **changed colour as the camera moved**, which reads as the rock flickering. `shape_tones` now derives the table once per shape from its canonical (near) tessellation, caches it (`OnceLock`), and stores it on `RockGeometry`, so both meshes wear the same rocks to the bit. The near mesh — the one the previous pass signed off — is unchanged.
+- **The note's models 3 and 4 described rejected builds.** Model 3 said "the mesh splits its vertices per facet … each triangle taking its facet's tone" and Model 4 "the carrier nearest one of its vertices, not a vote": both were builds that were tried and thrown away. They now describe the shipped construction (the tone blends over `TONE_JOINT`, the mesh stays indexed) and the shape-level table.
+- **A duplicated comment block** in `rock_geometry` (the second unlogged pass appended instead of replacing) is gone.
+
+### Rounds and the evidence that had to be replaced
+
+| Round | Finding |
+|---|---|
+| 1 | `main` at `23765e8` built; 10 baseline angles captured on `mac_air`. The facet work diffs **2.6 %** of the 40 m frame, **9.3 %** of `stone_b`, and the cliff face at 40 m **0.00 % (max diff 1)** — the mesh's vertex colours and nothing else |
+| 2 | The boulder's top face measures saturation **0.122 → 0.132** and its three faces are visibly three rocks (pale buff top, warm tan front, cool grey-blue end). The joint boundary is one soft polyline at 3× |
+| 3 | **CPU probe over both tessellations: the near and far meshes wear different rocks.** 19.0° hue at the worst vertex. A real, shipping-visible defect; fixed |
+| 4 | The test `a_rocks_two_meshes_wear_the_same_rock` **fails** on the old code and passes on the new. The fix moves 1.44 % of the 40 m frame, all of it far-mesh stones; the near boulder changes by 0.03 % and its saturation and luminance to the third digit |
+
+**Verdict: GREAT** for the facets at every angle that survived (`/tmp/i60/critique.md`, written before the verdict), and GREAT for the LOD fix. Evidence in `/tmp/i60/{before,after,after_fix}/`: `stone_a`, `stone_b` (2 m), `p_eye_s7` (eye level), `m40_s7`/`m40_s11` (the orthographic 40 m view, two seeds), `m40_s7_h6`/`m40_s7_h17` (dawn, dusk), `pl40_s7`, `du40_s7`, `p_m120`; crops `z_boulder_three` (before / HEAD / fix at 3×), `z_far_stones` (HEAD vs fix), `diff_head_fix_m40`.
+
+### Measurements
+
+- **Cost.** The change is a CPU-side vertex-colour table with no shader, pass, binding or buffer touched: all 24 meshes **plus** the shape table build in **19.8 ms** at start-up. The `bench_elements` numbers are **not usable on this host** (Metal reports no GPU timestamps, so `main_opaque_pass_3d` and `early prepass` read `-`, and the fixed 1/60 s step pins "frame mean" at 16.667 ms); a real-time interleaved run (45 s each, head/fix × 3) reads 38-67 ms with **no systematic difference** and heavy machine contention (the same scene swings 16.7 → 247 ms between runs). **This pass claims no GPU cost number**, and iteration 55's `big` measurement stands until `big` is back.
+- Tests: **1** new (`a_rocks_two_meshes_wear_the_same_rock`, fails before, passes after). Lib suite **333**. Gates 1-4: build, `cargo test` (all suites, 333 lib + 21 doc), examples, clippy `-D warnings`, `cargo doc -D warnings` all pass; `wasm32-unknown-unknown` needed the target installed on this toolchain (`rustup target add`) and is re-running.
+- Gate 5 (GPU) is running on this host; the shader and every GPU kernel are untouched by this change.
+
+### Sources
+
+As `docs/research/stone-material.md`: Papavasiliou 2015 (the score-weighted palette blend, mean-preserving), Akenine-Möller et al. 2019 §6.3 (cellular textures colour their cells; corpus `bo/book_real_time_rendering_4th_akenine`), La Pointe & Hudson 1985 (joint sets; the pieces between them), Verdian et al. 2021 (`10.5194_esurf-9-1073-2021`, a talus clast is the cliff's block), Andersson 2007 (`10.1145_1281500.1281668`). The corpus was re-synced from Garage (`s3://home-still/markdown`, 17 957 objects) with signed `curl`; `distill` is down (502, `big` unreachable), so no note was indexed — see `Pending index`.
+
+### The next five items, ranked
+
+1. **The weather's precipitation climatology** (iteration 49): the temperate preset rains 2-13× an observed wet station's totals on ~1.5× its wet days.
+2. **The block network's distance look**: the cliff's blocks read as a shingle fan at 40 m, and at 40 m a scattered stone's facets read as noise rather than as facets (2-4 px). Both are the rock's *distance* look.
+3. **Stylistic variants of the ground** (the user's ask): golem-generated texture sets each taking its own colour through `with_colour`, with a capture tour.
+4. **Textures on the rock**: a triplanar PBR detail over the procedural rock material, settable like the ground's.
+5. **Restore a capture host with GPU timestamps.** `big` is the only machine that reports `main_opaque_pass_3d`/`early prepass`, and it is down: every cost claim since iteration 57 is unverifiable. Either bring `big` back or make the benchmark report a clock-stable frame-time ratio on Metal.
