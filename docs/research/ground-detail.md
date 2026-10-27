@@ -214,6 +214,13 @@ the cost is bounded by the near field).
    the same shader is right at 1080p and at 4K and under an orthographic camera (whose footprint
    is constant in metres).
 
+10. **A host may set the detail's amplitude and the camera's finest resolvable feature (#42).** The crate derived the footprint from `dpdx`/`dpdy` alone, so a game whose art direction or zoom turns the 9 cm band into one-texel salt-and-pepper (Sanctuary's isometric ground, red-channel stddev 26.8 on open grass) had no host-side remedy: `TerrainLook`'s tint is multiplicative on top of the grain. Two knobs on `TerrainLook`, both pure uniform writes:
+    - `detail` (default 1): a multiplier on the albedo swing, on the bump gradient, and on the `coarse`/`fine` values the turf palette reads as its clump, so a lowered `detail` loses grain, relief and the palette's fine ragged edge together. At 0 the albedo is the palette's own colour field and the normal the hill's. Wet-ground sheen, snow and the path's own colours are other fields and do not read it.
+    - `finest_m` (default `None`): the smallest world feature the host's camera resolves, m. The band limit's footprint becomes `max(derived, finest_m)`, so an octave of feature `f` keeps 1 at `f >= 2 * finest_m` and 0 at `f <= finest_m` (the same `detail_keep` ramp, Lagae et al. 2010 §5.2.1). A `finest_m` above `DETAIL_COARSE_M` therefore drops the coarse band's base octave and every octave below it. The road's speckle (`paths.wesl`, `path_grain`) takes the same `detail` multiplier and the same footprint floor, with its texel-resolution speckle dropped by the floor only when `finest_m` is set, so a defaulted host is unchanged.
+    - Default arithmetic is unchanged: `max(footprint, 0.0)` and `× 1.0` are exact.
+    - **The issue's `finest_m: 0.04` cannot reach its 8-level target under this rule**: the fine band's base octave is 9 cm, so at a 4 cm footprint its ratio is 0.44 and it is kept whole (only the 4.5 cm octave, ratio 0.89, fades to 12 %). The same issue states that a 9 cm feature is about one pixel at Sanctuary's zoom; that is a footprint of 9 cm, and `finest_m = 0.09` drops the base octave (ratio 1.0). The number to pass is the camera's metres per pixel. The acceptance figure is measured on a capture and recorded in the log.
+    - The `ground_detail` debug view of the issue (per-band colour, `keep` readout) is not part of this change.
+
 ## Pending index
 
 - Andersson 2007 and Lagae et al. 2010 were read from the corpus copies already in the repository;
