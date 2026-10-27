@@ -4,6 +4,18 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
 
 ## [Unreleased]
 
+### Changed
+
+- **A scattered stone wears the cliff's palette per facet, not one rock over its whole body.** Every
+  vertex of a shape carried one tone, so a boulder below a cliff was greyer than the face it fell
+  from — its top facet's saturation 0.020 against the face's 0.15 at the same light — and the hue it
+  showed was the light's rather than the rock's. The tones now follow the shape's own **joint
+  planes**: the soft minimum's carrier names each vertex's facet, a triangle takes the facet nearest
+  one of its corners, and the mesh is indexed with a seam only where two facets meet, so a facet is
+  one flat colour and the change lands on the joint. Each shape's area-weighted brightness is
+  normalised to the palette's 1 by a scalar, so every rock keeps its hue and the scatter keeps the
+  ground's brightness. `docs/research/stone-material.md`.
+
 ### Fixed
 
 - **Scattered rocks are drawn under an orthographic camera.** An isometric game saw none of them:
