@@ -674,6 +674,17 @@ mod tests {
         }
     }
 
+
+    #[test]
+    fn probe_counts() {
+        for shape in [0, 5] {
+            for s in [FAR_SUBDIVISIONS, NEAR_SUBDIVISIONS] {
+                let g = rock_geometry(shape, s);
+                println!("shape {shape} subdiv {s}: {} vertices, {} triangles", g.positions.len(), g.indices.len() / 3);
+            }
+        }
+    }
+
     /// The colour a vertex wears, recovered from the vertex colour by dividing out the two
     /// modulations the module applies.
     fn tone_of_vertex_direction(g: &RockGeometry, i: u32, seed: u64) -> Vec3 {
