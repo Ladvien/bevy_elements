@@ -84,7 +84,7 @@ Before you pick an item, list the repository's open issues and triage them:
 
 ```sh
 gh issue list --repo Ladvien/bevy_elements --state open --limit 100 \
-  --json number,title,labels,createdAt --template '{{range .}}#{{.number}} {{.title}} [{{.labels}}]{{"\n"}}{{end}}'
+  --json number,title,labels,createdAt --jq '.[] | "#\(.number) \(.title)"'
 ```
 
 (If `gh` is absent, the same list is
