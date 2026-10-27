@@ -961,6 +961,10 @@ fn the_air_past_the_ground_is_the_sky_in_its_own_column() {
         (17.5, "golden hour"),
         (19.0, "low sun"),
         (20.0, "after sunset"),
+        // Midnight: the probe's cube adds a night fill so the lighting cube is not black, and
+        // that fill is not the sky the screen draws. Read into the slab it was a grey sea
+        // (9.6, 12.4, 15.5 DN) under a black sky, so the night is checked here.
+        (0.5, "midnight"),
     ] {
         for rel_azimuth_deg in [0.0f32, 90.0, 180.0] {
             let mut case = Case::sky(WeatherPreset::Clear);
