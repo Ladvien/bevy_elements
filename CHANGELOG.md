@@ -2,6 +2,16 @@
 
 ### Fixed
 
+- **`tools/wesl-check` now compiles the 11 shaders that import from Bevy.** It reported
+  `celestial::moon`, `celestial::stars`, `clouds::{composite,march,resolve,shadow}`,
+  `hydrology::water`, `precipitation::draw`, `terrain::{ground,render}` and `weathered::weathered`
+  as "not checked (module not found)" and exited 0, because WESL joins `import bevy_pbr::…` onto the
+  importing package (`bevy_elements/bevy_pbr`) and the router never asked the stubs. Each Bevy
+  namespace is now mounted under both spellings, the stubs declare Bevy 0.20's own structs and
+  function signatures (`View`, `PbrInput`, `StandardMaterial`, `VertexOutput`, `apply_pbr_lighting`, …),
+  and a missing module is a failure, not a benign "not checked". All 44 modules compile; a wrong call
+  into Bevy or a missing field fails the check with exit 1. Fixes #37.
+
 - **The air past the ground is the sky's own column, not the fog's hue.** Where a frame's ground does
   not reach the horizon, the crate drew a flat slab in the camera's `DistanceFog` colour, a fixed
   `(0.75, 0.80, 0.85)` scaled by horizontal illuminance, while the sky at the horizon is Rayleigh- and
