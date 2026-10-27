@@ -4827,3 +4827,38 @@ the note stands unchanged.
 4. **The block network's distance look** (iteration 58): the talus at 40 m reads as a shingle fan.
 5. **Stylistic variants of the ground** (the user's ask): golem-generated texture sets each taking its
    own colour through `with_colour`, with a capture tour.
+
+## Iteration 65 — 2026-10-27 — `wesl-check` compiles the shaders that import Bevy (#37)
+
+Host: a Mac with no Xvfb, no NVIDIA GPU and no route to `big`, so no capture, GPU test or benchmark
+was possible; the item was chosen to be fully verifiable without them. Rule 1 of the issue triage
+(oldest reproducible bug first): #37 is the oldest open bug (#38, Gravel/Stone/Snow routes draw
+nothing, is next and needs a GPU capture; #39-#43 are enhancements). An unmerged `loop/iter-64`
+branch (`9761f22` the #38 fix, `9600727` its log) already exists locally and on origin; it was
+not gated by this pass and not built on, so this iteration is numbered 65. #37 was reproduced: 33 modules
+`ok`, 11 "not checked (module not found)", exit 0.
+
+- **Change** (`tools/wesl-check/src/main.rs` only; no crate code touched): each Bevy namespace
+  (`bevy_pbr`, `bevy_render`, `bevy_core_pipeline`, `constants`) mounted as itself and as
+  `bevy_elements/<name>`; virtual modules keyed by `Absolute` paths; an empty root module per mount;
+  stubs declare Bevy 0.20's structs and signatures (read from the vendored `bevy_pbr-0.20.0` and
+  `bevy_render-0.20.0`); `"module not found"` removed from `BENIGN`. Shape follows
+  `Ladvien/bevy_lights@b6e734c`.
+- **Verification**: 44 of 44 modules `the WGSL is ok`, no "not checked", exit 0. Mutations in
+  `terrain/ground.wesl`, each restored: `apply_pbr_lighting(pbr_input, 1.0)` → "incorrect number of
+  arguments … expected 1, got 2", exit 1; `pbr_input.nonexistent` → "invalid field accessor", exit 1.
+- **Not covered**: the check compiles with no shader defs, so `@if(PREPASS_PIPELINE)` branches
+  (the prepass/deferred paths, which use the `prepass::io` and `deferred::functions` stubs) are
+  pruned and unchecked. Compiling a second variant with the prepass defs on is the follow-up.
+- **Gates**: 1-5 not run (no crate code changed, no GPU on this host). Visual and performance gates
+  are not applicable to a tool change.
+
+### Next five items, ranked
+
+1. **#38** `PathNetwork` Gravel/Stone/Snow draw nothing: `loop/iter-64` (`9761f22`) holds a fix whose
+   gates and capture were never recorded on `main`; gate it on `big` and merge or redo it.
+2. `wesl-check` second variant with `PREPASS_PIPELINE`/`DEFERRED_PREPASS` on.
+3. #42 ground detail amplitude / finest-feature knob (host's "television static").
+4. #41/#39 wetness as drawn and a footprint press threshold.
+5. Items 1-5 of iteration 63 (distant terrain fog hue, the 19-20 h horizon line, precipitation
+   climatology, block network at 40 m, ground styles).
