@@ -4912,3 +4912,24 @@ Host: the same Mac as iterations 65-67 (no Xvfb, no NVIDIA GPU, no route to `big
 3. #41/#39 wetness as drawn and a footprint press threshold.
 4. #40 `TerrainGrid` height that follows the drawn triangles.
 5. Items 1-5 of iteration 63.
+
+## Iteration 69 — 2026-10-27 — #38 confirmed on the GPU; `trails` lays every route kind
+
+Host: the Mac, with `ssh big` reachable this time (RTX 3090, Xvfb; the remote shell is fish, so scripts go in files). No `gh`; issues read through the API (#38-#43 open, all enhancements/bugs already ranked). Item: iteration 68's first backlog entry, capturing Gravel/Stone/Snow routes, because a code-only fix is not a fix until it is seen.
+
+- **Change**: `examples/trails.rs` gains `ELEMENTS_PATHS=stone` and `packed` (README knob list updated). No crate code changed.
+- **Evidence** (`/tmp/i69/`, `trails`, sand and snow ground, 12 h, 400 frames, built with the old `paths.rs` for `before*` and the fixed one for `after*`):
+  - Gravel (`sand_road`, `gravel_sand`): `before` has no road at all (pixel diff 24 206 px above 30 DN in `sand_road`); `after` shows the road as a dark-grey band with wheel lines. Verdict on the fix: confirmed.
+  - Stone (`c3/stone_close_grass.png`, after only): a pale slab band crosses the turf, drawn. The `before` stone capture was framed past the route (diff 2 px), so a before/after pair for Stone is missing; the CPU test `every_kind_and_rut_depth_round_trips_the_eight_bit_kind_lane` is the before/after proof.
+  - Snow (`c3/packed_top_snow.png`, `all_top_snow.png`): a faint compacted band, no colour change, as `path_colour` documents. No before capture (the before diff on snow ground was 0 px).
+- **Critique (hostile)**: the gravel at eye level is a soft dark smear with no visible chip grain (`after2/gravel_sand.png`); gravel on bright sand reads as a shadow rather than a road; the packed-snow band is barely legible at 1x. None is a #38 defect, but none is GREAT. Gravel grain and packed-snow legibility belong on the backlog.
+- **Not run**: benchmark, the GPU test suites, `cargo test`. Midway the GPU filled (vLLM 14.6 GB plus other tenants, 23.5 of 24.5 GB) and half the captures died with `OutOfMemory`; the Stone top-down on sand and the `before` stone pair were lost to it. `cargo clippy --release --example trails --all-features -- -D warnings` passes on `big`.
+- **#38** stays open: Gravel and Stone verified, Snow is subtle, so the owner should judge it.
+
+### Next five items, ranked
+
+1. Gravel/packed-snow legibility from eye level (grain at 1x; the band on snow).
+2. #42 ground detail amplitude / finest-feature knob.
+3. #41/#39 wetness as drawn and a footprint press threshold.
+4. #40 `TerrainGrid` height that follows the drawn triangles.
+5. Items 1-5 of iteration 63.
