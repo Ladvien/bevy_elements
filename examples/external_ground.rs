@@ -2,13 +2,16 @@
 //! terrain the crate only simulates (`Terrain::external()`). The plane gets cloud shadows by
 //! world position, and darkens where the simulation puts water over it.
 //!
+//! `ELEMENTS_EYE=x,y,z` and `ELEMENTS_LOOK=x,y,z` place the camera; `ELEMENTS_DETAIL=k` and
+//! `ELEMENTS_FINEST_M=m` set the ground's micro-detail (`TerrainLook`, issue #42).
+//!
 //! `cargo run --release --example external_ground`
 
 mod common;
 
 use bevy::prelude::*;
 use bevy_elements::*;
-use common::{ExampleHarness, camera};
+use common::{ExampleHarness, camera, terrain_look_env, vec3_env};
 
 fn main() {
     App::new()
@@ -19,6 +22,7 @@ fn main() {
                 .with_time_scale(1.0),
         )
         .insert_resource(Climate::temperate())
+        .insert_resource(terrain_look_env().unwrap_or_default())
         .add_systems(Startup, setup)
         .run();
 }
@@ -60,7 +64,7 @@ fn setup(
         ));
     }
     commands.spawn(camera(
-        Vec3::new(0.0, 30.0, 0.0),
-        Vec3::new(150.0, 10.0, 80.0),
+        vec3_env("ELEMENTS_EYE").unwrap_or(Vec3::new(0.0, 30.0, 0.0)),
+        vec3_env("ELEMENTS_LOOK").unwrap_or(Vec3::new(150.0, 10.0, 80.0)),
     ));
 }

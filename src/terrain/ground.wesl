@@ -34,6 +34,9 @@ struct GroundParams {
     // As the terrain material's `trail` and `trail_light`.
     trail: vec4<f32>,
     trail_light: vec4<f32>,
+    // The host's ground detail (`TerrainLook`): x the amplitude multiplier, y the finest feature
+    // its camera resolves (m, 0 for none).
+    grain: vec4<f32>,
     // World units to the metre (`ElementsUnits`): the fragment's world position and the camera
     // come in divided by this, the position handed back to Bevy's lighting goes out multiplied.
     units: f32,
@@ -176,7 +179,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // octaves are sampled in the surface's own frame, so a slope's grain is round on the slope
     // (`docs/research/rock-material.md`, Model 1).
     let footprint = max(length(dpdx(pv)), length(dpdy(pv)));
-    let grain = ground_detail(pv, footprint);
+    let grain = ground_detail(pv, footprint, ground.grain.xy);
     n = normalize(n - (grain.grad - dot(grain.grad, n) * n));
     let xz = pv.xz;
     let cover = cover_at(xz) * gated;
