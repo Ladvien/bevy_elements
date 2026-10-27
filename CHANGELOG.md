@@ -1,8 +1,42 @@
-# Changelog
-
-All notable changes to bevy_elements. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the crate is pre-1.0, so any release may break the API.
-
 ## [Unreleased]
+
+## [0.6.0] — 2026-10-27
+
+Nineteen days and 197 commits after 0.5.3. The four things a game will notice:
+
+**Clouds are lit properly, and the sky is not one colour.** Multiple scattering by diffusion makes a
+cloud white rather than grey, cumulus billow, twilight exists and the sunset is no longer blown out, the
+night sky is blue and lights the ground instead of being a black screen, and a cloud's shadow over the
+camera no longer darkens the sky. Clouds also appear in the environment map, so reflections and sky
+light under cloud agree with what is drawn overhead.
+
+**Roads, and trails.** `PathNetwork` / `PathsPlugin` rasterise a route into an 8-bit coverage distance
+field that the terrain material reads per fragment: turf gives way to compacted earth with the route's
+own grain, a dish cross-section whose verge catches a grazing sun, snow cleared where traffic runs, and
+each wheel line's rut. That block compiles only into a terrain whose network has routes, so a terrain
+without paths pays nothing (measured within ±2 % of a no-network scene). `Environment::surface_at`,
+`nearest_path` and `on_path` answer a game's questions about them. Separately: trails — footprints, ruts
+and tracks in snow, sand, soil and mud — and waves, ripples and wakes from bodies in the water.
+
+**Rock is a material, not a colour.** A rock face carries a palette of different rock, a succession of
+bedded layers, two families of joints, fractures, a grain and a relief of its own; a cliff breaks into
+irregular fragments of many sizes and a distant range is many rocks. Scattered stones take the cliff's
+palette per facet rather than one tone over the whole body — following the shape's own joint planes, so
+the colour changes at the break rather than across the face.
+
+**Night, cameras and the ground under them.** A game lights its own night; `ElementsCamera` gained
+fields beyond `auto_exposure`; a focus now drives the camera-relative domains, which is what lets an
+orthographic camera work at all; and a snowpack survives a save.
+
+**Breaking.** `TerrainSnapshot` carries the sediment; `ElementsGlobals` is 128 bytes;
+`CloudShadows::camera_transmittance` is now `mean_transmittance` (the shadow map's mean over its 8 km);
+`WindState::at_camera` is `at_focus`; `TrailSettings` has a `texel_m` field; `Weather` has
+`snow_possible`; `SnowyField` takes the nearest column's top and snow across a cliff. The `flora`
+feature depends on `bevy_flora` 0.46.
+
+The full, unchanged per-change record follows.
+
+
 
 ### Changed
 
@@ -778,5 +812,6 @@ Everything from 0.2 through 0.5 lands in one release. Every system was studied i
 
 New: `terrain_tour`, `external_ground`, `flood`, `lake`, `erosion_bake`, `weathered_town`, `ground_cover`, `dust_storm`, `voxel_snow` (feature `isomesh`), and `quickstart` now stands on hills. `bench_elements` times every pass, with `ELEMENTS_TERRAIN=hills|mountains|dunes|lake|none`.
 
+[0.6.0]: https://github.com/Ladvien/bevy_elements/compare/v0.5.3...v0.6.0
 [0.5.1]: https://github.com/Ladvien/bevy_elements/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Ladvien/bevy_elements/compare/v0.1.0...v0.5.0
