@@ -946,3 +946,85 @@ fn the_horizon_sky_is_the_fog_colour_under_a_deck() {
         );
     }
 }
+
+/// The sky just above the horizon and the air past the edge of a finite ground are the same
+/// colour, in every azimuth and at every hour — the slab the crate draws where the ground ends
+/// is the sky's own column, not one colour for the whole horizon
+/// (`docs/research/horizon-colour.md`). The camera stands 2 m up looking level at 20° field of
+/// view, so the top rows are the sky and the rows just below the horizon are the slab; the sun
+/// is put behind the camera and to its side in turn, since a dusk horizon is not one colour.
+#[test]
+#[ignore = "needs a GPU"]
+fn the_air_past_the_ground_is_the_sky_in_its_own_column() {
+    for (hour, sun_note) in [
+        (12.0, "noon"),
+        (17.5, "golden hour"),
+        (19.0, "low sun"),
+        (20.0, "after sunset"),
+    ] {
+        for rel_azimuth_deg in [0.0f32, 90.0, 180.0] {
+            let mut case = Case::sky(WeatherPreset::Clear);
+            case.hour = hour;
+            case.position = Vec3::new(0.0, 2.0, 0.0);
+            case.fov_deg = Some(20.0);
+            case.linear_target = true;
+            // The weather's air is suppressed: this is the atmosphere's own colour, not the
+            // fog's (Deviation 29 saturates a short visibility to one colour by design).
+            case.debug.air = Some(0.0);
+            let mut app = app(case);
+            run(&mut app, 30);
+            let sun = *app.world().resource::<crate::celestial::SunState>();
+            let azimuth = (sun.azimuth_deg + rel_azimuth_deg).to_radians();
+            let look = Dir3::new(Vec3::new(azimuth.sin() * 1e-4, 0.0, -azimuth.cos()))
+                .expect("a level look");
+            let mut cameras = app
+                .world_mut()
+                .query_filtered::<&mut Transform, With<ElementsCamera>>();
+            for mut transform in cameras.iter_mut(app.world_mut()) {
+                *transform =
+                    Transform::from_translation(Vec3::new(0.0, 2.0, 0.0)).looking_to(look, Vec3::Y);
+            }
+            // Past the 1 s light smoothing and a full accumulation window.
+            run(&mut app, 400);
+            let target = app.world().resource::<Target>().0.clone();
+            let texels = rgba16(&support::read_texture(&mut app, target, 64 * 8, 64));
+            finish(&mut app);
+
+            // 64 rows span 20° about level: the horizon is row 32. Rows 26..=31 are the sky just
+            // above it, rows 36..=44 the slab. The two rows either side of the edge are skipped:
+            // they hold the geometric transition, not the colours.
+            let band = |rows: std::ops::Range<usize>| {
+                let mut sum = [0.0f32; 3];
+                let mut n = 0.0;
+                for y in rows {
+                    for x in 0..64 {
+                        let p = texels[y * 64 + x];
+                        sum[0] += p[0];
+                        sum[1] += p[1];
+                        sum[2] += p[2];
+                        n += 1.0;
+                    }
+                }
+                [sum[0] / n, sum[1] / n, sum[2] / n]
+            };
+            let sky = band(30..31);
+            let slab = band(36..45);
+            let lum = luminance([slab[0], slab[1], slab[2], 0.0]).max(1e-9);
+            let d = (0..3).map(|c| (slab[c] - sky[c]).abs()).fold(0.0f32, f32::max);
+            println!(
+                "sun {:.1}°, rel {rel_azimuth_deg:.0}° ({sun_note}): sky {sky:?} slab {slab:?}, Δ {d:.4} of {lum:.4}",
+                sun.altitude_deg,
+            );
+            // Row 30's centre is 0.47° above the horizon, which is where the slab reads its own
+            // sample from, so this compares the slab with the sky at the same elevation.
+            // Measured: within 0.7 % at every hour and azimuth. Before this change the slab was
+            // the analytic fog hue and differed from the sky above it by 65–116 DN at eye level
+            // and 130 at dusk.
+            assert!(
+                d <= 0.03 * lum,
+                "{sun_note}, rel {rel_azimuth_deg}°: the slab is not the sky above it: \
+                 {slab:?} against {sky:?} (Δ {d:.4} of {lum:.4})"
+            );
+        }
+    }
+}
