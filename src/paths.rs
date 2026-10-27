@@ -441,13 +441,13 @@ pub(crate) fn mask_image(mask: &PathMask) -> Image {
     //
     // The channels, 8-bit:
     //   r: the signed edge distance over ±PATH_DISTANCE_RANGE_M, 0.5 at the edge
-    //   g: the kind plus the rut depth in the fraction (m / 0.5)
+    //   g: (the kind plus the rut depth in the fraction (m / 0.5)) / 4, so 0..4 fits one byte
     //   b: the lateral offset as a fraction of the half width, -1..1
     //   a: the per-texel grain, 0-1 (the near field's stone)
     let mut bytes = Vec::with_capacity(mask.texels_data.len() * 4);
     for texel in &mask.texels_data {
         let r = encode(texel[0] / PATH_DISTANCE_RANGE_M, 0.5);
-        let g = (texel[1].clamp(0.0, 1.0) * 255.0).round() as u8;
+        let g = encode_kind_lane(texel[1]);
         let b = encode(0.5 * texel[2], 0.5);
         let a = (texel[3].clamp(0.0, 1.0) * 255.0).round() as u8;
         bytes.extend_from_slice(&[r, g, b, a]);
@@ -472,6 +472,18 @@ pub(crate) fn mask_image(mask: &PathMask) -> Image {
         ..default()
     });
     image
+}
+
+/// The kind lane as the shader decodes it (`packed = g / 255 · 4`): `kind + depth / 0.5` over 0..4.
+///
+/// A byte steps 4/255 = 0.0157 of a kind, so a depth fraction above 0.97 could round up into the
+/// next kind: it is held there, and a deep rut never changes a route's kind.
+fn encode_kind_lane(packed: f32) -> u8 {
+    const MAX_DEPTH_FRACTION: f32 = 0.97;
+    let packed = packed.max(0.0);
+    let kind = packed.floor().min(3.0);
+    let fraction = (packed - kind).min(MAX_DEPTH_FRACTION);
+    (((kind + fraction) / 4.0).clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 /// A signed value scaled by `range` and offset by `bias`, in 0..1, as 8 bits.
@@ -733,6 +745,36 @@ mod tests {
             );
             assert!((got[2] - want[2]).abs() <= 0.05, "lateral {got:?} against {want:?}");
             assert!((got[3] - want[3]).abs() <= 1.0 / 255.0, "grain {got:?}");
+        }
+    }
+
+    /// Issue #38: the kind lane is stored over 0..4, as the shader's `texel.y * 4.0` reads it, so
+    /// Gravel, Stone and Snow survive the byte (they clamped to 255 and decoded as no kind).
+    #[test]
+    fn every_kind_and_rut_depth_round_trips_the_eight_bit_kind_lane() {
+        for kind in [PathKind::Earth, PathKind::Gravel, PathKind::Stone, PathKind::Snow] {
+            for depth in [0.0f32, 0.03, 0.25, 0.49] {
+                let route = Path::new(
+                    vec![Vec3::new(-20.0, 0.0, 0.0), Vec3::new(20.0, 0.0, 0.0)],
+                    2.5,
+                    kind,
+                )
+                .with_ruts(depth);
+                let mask = rasterise(&[route], Vec2::splat(-32.0), 0.25, 256);
+                let image = mask_image(&mask);
+                let data = image.data.as_ref().expect("the mask carries its bytes");
+                let n = mask.texels as usize;
+                let tx = ((0.0 - mask.origin.x) / mask.texel_m).floor() as usize;
+                let ty = ((0.0 - mask.origin.y) / mask.texel_m).floor() as usize;
+                let i = ty * n + tx;
+                let packed = f32::from(data[4 * i + 1]) / 255.0 * 4.0;
+                let (got_kind, got_depth) = PathMask::kind_and_depth(packed);
+                assert_eq!(got_kind, kind.packed(), "{kind:?} at {depth} m");
+                assert!(
+                    (got_depth - depth).abs() <= 0.01,
+                    "{kind:?}: depth {got_depth} against {depth}"
+                );
+            }
         }
     }
 
