@@ -218,7 +218,7 @@ fn strategy_view(mut commands: Commands) {
 
 ![The isometric town in Rain and Snow at 35°: left, the physical look (wind-slanted dashes, identical dots); right, PrecipitationLook::readable() (upright streaks, flakes of many sizes)](docs/precipitation_look.png)
 
-![The isometric town in Rain, one second: physical on the left, readable() on the right](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/precipitation_look.gif)
+![The isometric town under forced Rain, animated: wind-slanted drops over the meadow, the HUD reading Rain (forced) at 4.8 mm/h](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/precipitation_look.gif)
 
 ### Lightning
 
