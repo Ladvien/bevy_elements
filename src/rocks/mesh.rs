@@ -674,6 +674,17 @@ mod tests {
         }
     }
 
+
+    #[test]
+    fn probe_mesh_cost() {
+        let t0 = std::time::Instant::now();
+        for shape in 0..SHAPES {
+            let _ = rock_geometry(shape, NEAR_SUBDIVISIONS);
+            let _ = rock_geometry(shape, FAR_SUBDIVISIONS);
+        }
+        println!("all 24 meshes (with the shape tone table): {:?}", t0.elapsed());
+    }
+
     /// The colour a vertex wears, recovered from the vertex colour by dividing out the two
     /// modulations the module applies.
     fn tone_of_vertex_direction(g: &RockGeometry, i: u32, seed: u64) -> Vec3 {
