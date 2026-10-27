@@ -1,6 +1,26 @@
 ## [Unreleased]
 
+### Fixed
+
+- **The air past the ground is the sky's own column, not the fog's hue.** Where a frame's ground does
+  not reach the horizon, the crate drew a flat slab in the camera's `DistanceFog` colour, a fixed
+  `(0.75, 0.80, 0.85)` scaled by horizontal illuminance, while the sky at the horizon is Rayleigh- and
+  Mie-extinguished air whose radiance and hue follow the sun's altitude and azimuth — so the two
+  diverged exactly when the sun was low (measured 116 DN low at 19:00, 130 DN in the worst channel at
+  dusk). `ground_haze` now takes the sky, sampled by `horizon_sky(dir)` from the sky cube in the ray's
+  own azimuth 0.5° above the horizon, and the weather's air mixes it toward the fog colour by its own
+  extinction, the law the ground below already obeys. The GPU test asserts the invariant: the sky above
+  the horizon and the slab below are the same colour in three azimuths at four hours, within 5 % of
+  luminance (measured 0.6 % at noon, golden hour and a low sun; 3.1 % just after sunset).
+  `docs/research/horizon-colour.md`, `262207d`.
+
 ## [0.6.0] — 2026-10-27
+
+> **Published tarball note.** The crate on crates.io also carries `262207d`, "the air past the ground is
+> the sky's own column" — the horizon slab now samples the sky in the ray's own azimuth instead of using
+> one fixed fog hue (a 116 DN error at dusk before it). That fix was uncommitted when the crate was
+> packaged, so it is in the published source but landed after tag `v0.6.0`; it is gated here (380 tests,
+> 0 failing) and is in `[Unreleased]` below. Tag and crate differ only by that commit.
 
 Nineteen days and 197 commits after 0.5.3. The four things a game will notice:
 
