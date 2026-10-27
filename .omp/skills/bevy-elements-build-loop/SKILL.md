@@ -116,6 +116,8 @@ shared by everything on this network), do not treat it as "no issues": write one
 could not be read and continue. Never spend a second call to retry it in the same pass, and never infer
 from silence that nothing is filed.
 
+**A rate limit you have not hit is not a rate limit.** Make the call in every pass. It is one request; the driver sleeps at least 60 seconds between passes and backs off when passes find nothing, so this loop makes a few requests an hour against a limit of 60. Several idle passes of the sibling loop on 2026-10-27 logged "issues not re-read (rate-limit risk)" without the call ever having answered `403` or `429`, which leaves a filed bug unseen. Only an answer you actually received lets you write "could not be read".
+
 **An empty issue list costs nothing:** if it is empty or `gh` is unreachable, write one line saying so
 and continue — never spend a pass on the lookup.
 
