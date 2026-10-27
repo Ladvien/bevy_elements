@@ -10,14 +10,23 @@ All notable changes to bevy_elements. The format follows [Keep a Changelog](http
   vertex of a shape carried one tone, so a boulder below a cliff was greyer than the face it fell
   from — its top facet's saturation 0.020 against the face's 0.15 at the same light — and the hue it
   showed was the light's rather than the rock's. The tones now follow the shape's own **joint
-  planes**: the soft minimum's carrier names each vertex's facet, a triangle takes the facet nearest
-  one of its corners, and the mesh is indexed with a seam only where two facets meet, so a facet is
-  one flat colour and the change lands on the joint. Each shape's area-weighted brightness is
+  planes**: the soft minimum's carrier names each vertex's facet, and a vertex's tone blends over
+  the joint's own narrow width (0.004 of the shape's radius), so a facet keeps its rock over its
+  whole face and the colour changes at the break. Each shape's area-weighted brightness is
   normalised to the palette's 1 by a scalar, so every rock keeps its hue and the scatter keeps the
-  ground's brightness. `docs/research/stone-material.md`.
+  ground's brightness. The mesh stays indexed and nothing per pixel changed; the palette table is
+  the **shape's**, shared by both levels of detail (see Fixed).
+  `docs/research/stone-material.md`.
 
 ### Fixed
 
+- **A scattered stone no longer changes colour where its mesh switches.** The facet palette was
+  derived from the mesh's own triangle areas, so the near (1280-triangle) and far (320-triangle)
+  mesh of one rock were handed **different** palette tones — 19° of hue apart at the worst vertex,
+  3.7° on one shape's mean. The meshes switch abruptly at `22 · D`, so a stone changed colour as the
+  camera moved, which the eye reads as the rock flickering. The tone table is now computed once per
+  shape from its canonical tessellation and stored on `RockGeometry`, so both meshes wear the same
+  rocks to the bit; the near mesh is unchanged. `docs/research/stone-material.md`.
 - **Scattered rocks are drawn under an orthographic camera.** An isometric game saw none of them:
   every rock was seated, then shrunk to nothing, because the fade measured from `ElementsView::eye`
   and an isometric camera stands 457 m back from everything in view (a 0.25 m stone's range is 25 m).
