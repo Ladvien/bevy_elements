@@ -4,11 +4,23 @@
 
 **Living environments for Bevy 0.20.** A sun and moon placed by real ephemerides, the bright-star sky, a seeded climate that schedules hourly weather, a GPU wind field, volumetric clouds that shade the ground, rain and snow, lightning and thunder, distance and ground fog, and exposure that keeps night looking like night. Simulation runs in compute shaders; gameplay asks the `Environment` system parameter and is answered from a throttled async readback.
 
-![Every weather preset, forced in turn at noon: the HUD names the preset and prints cover, precipitation, wind, visibility and the sun's and moon's elevation](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/tour.gif)
+![The ten weather presets forced in turn at a held 10.00 h on 20 April 2026: the HUD names the preset and prints the temperature, cover, precipitation rate, wind, visibility, and the sun's and moon's elevation](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/tour.gif)
 
-*The `weather_tour` example forcing every preset at noon; the terrain, water and voxel stills live in the sections below.*
+*The `weather_tour` example forcing `WeatherPreset::ALL` in turn: 262 frames, 512 × 288, 34 s of playback. The stills for each system are in the sections below, and `weather_tour` is listed under [Examples](#examples).*
 
-Every system was studied in the home-still paper library first. The note for each one, in [`docs/research/`](docs/research), names the papers, the equations adopted, every deviation from the plan with its source, and the numbers the tests assert.
+## Contents
+
+[What is in it](#what-is-in-it) · [Install](#install) · [Quick start](#quick-start)
+
+The API, in five groups:
+
+- [Putting it in a scene](#putting-it-in-a-scene) — [frame order](#frame-order), [the camera](#the-camera) (keeping your own look, a focus and isometric cameras, world units)
+- [Sky, weather and light](#sky-weather-and-light) — [clock, sun, moon and stars](#clock-sun-moon-and-stars), [climate, seasons and weather](#climate-seasons-and-weather), [wind](#wind), [fog](#fog), [clouds](#clouds), [precipitation](#precipitation), [lightning](#lightning)
+- [Terrain and ground](#terrain-and-ground) — [terrain](#terrain), [ground cover](#ground-cover), [rocks](#rocks), [dust storms](#dust-storms), [paths and roads](#paths-and-roads), [trails](#trails)
+- [Rivers, lakes and waves](#rivers-lakes-and-waves) — [hydrology and erosion](#hydrology-and-erosion), [water](#water), [waves](#waves)
+- [Surfaces, materials and voxel snow](#surfaces-materials-and-voxel-snow) — [weathered materials](#weathered-materials), [snow on voxel volumes](#snow-on-voxel-volumes)
+
+And: [gameplay queries](#gameplay-queries) · [plays well with](#plays-well-with) · [performance](#performance) · [platforms](#platforms) · [what it deliberately does not do](#what-it-deliberately-does-not-do) · [compatibility](#compatibility) · [research](#research) · [examples](#examples) · [license](#license)
 
 ## What is in it
 
@@ -76,7 +88,7 @@ fn setup(mut commands: Commands) {
 }
 ```
 
-## The API
+## Putting it in a scene
 
 ### Frame order
 
@@ -104,44 +116,23 @@ Orthographic cameras (`Projection::Orthographic`) work: the clouds are marched a
 
 ![The hills through an isometric orthographic camera 457 m back, 18 m of ground on screen, with posts standing on Environment::terrain_height every 2 m on 10 cm red feet. Left, before: the ground near the focus drawn in coarse, morphed patches, and most posts end in the grass, their feet swallowed (a quarter of them wholly). Right, after: the patches about the focus at full detail on the height samples, and every post stands on its red foot](docs/orthographic_lod.png)
 
-![Twilight toward the sun, the sun 8° below the horizon: the orange glow under a violet sky, clouds and posts in silhouette](docs/twilight.png) ![The same evening away from the sun, 5° below: the pink Belt of Venus over the blue Earth's shadow](docs/belt_of_venus.png)
-
 #### World units
 
 The crate works in metres. A game whose world unit is something else inserts `ElementsUnits { units_per_metre: 3.2808 }` (feet; 100.0 for centimetres) and the weather is sized for its world: the rain box, the wind cells, fog, clouds and the sky's aerial perspective, lightning and its light, shadow cascades, the terrain and water. Positions the crate reads and gives back are world units (`Transform`s, `ElementsFocus::Point`, the `Environment` query positions and `terrain_height`, strike, thunder, flash and gust positions); lengths, depths and speeds stay SI (`Thunder::distance_m`, `Terrain` extents and heights, blocker, contact and imprint half extents under their transforms, `wind_at` in m/s). A scene built in feet renders as the same scene in metres (`docs/research/units.md`); `ELEMENTS_UNITS=3.2808` runs an example in feet, which reproduces it exactly where its world is the crate's (`terrain_tour`, `quickstart`), while an example's own props keep their metre sizes.
 
 ![The same hills, clouds and rain in metres (left) and in feet (right)](docs/units.png)
 
-![A grassy hillside 6 m above the ground. Left, before: a flat green wash, near-patch standard deviation 1.07 of 255. Right, after: turf grain and clumps from two band-limited octave scales, each octave cancelled once the pixel footprint cannot resolve it, so the distance is unchanged](docs/ground_detail.png)
-
-![A plain at 6 m. Left, before: one green, the hue's spread over a near-ground patch 0.010. Right, after: a meadow — straw-yellow patches with broken edges, darker hollows between them, the turf's grain through it, and the mean colour and brightness unchanged](docs/ground_colour.png)
-
-![A meadow underfoot (top) and at eye level (bottom). Left, before: a procedural green felt. Right, after: PBR detail textures from golem — grass blades over moss and soil, hex-tiled so no tile repeats, the landscape's colour unchanged from 12 m on](docs/ground_textures.png)
-
-![A rock face 6 m above the ground. Left, before: a smooth pale wash with a red-brown rim round the grass. Right, after: stone with a grain and a relief of its own, a bed and a second tone, dark fractures, and the scree at the grass's foot](docs/rock_material.png)
-
-![The massif from 700 m: grey stone with its surface, scree below it, and a clean line where the grass meets the rock](docs/rock_mountain.png)
-
-![A rock face 3 m above the ground. Left, before: a smooth sandy wash with a fine even noise, the material's own high-pass 1.72 DN. Right, after: the cliff's blocks — angular, bedded fragments of many sizes, each a flat facet with its own tone, sharp dark joints between them, and the sun raking their edges](docs/rock_blocks.png)
-
-![A rock face 3 m above the ground. Left, before: a regular lattice of identical diamonds — a quilt, every block the same size and the same shape. Right, after: the cliff's fragments — irregular, angular, of many sizes, each a flat facet with its own lit edge and shadowed joint](docs/rock_fragments.png)
-
-![A cliff at dusk. Left, before: a single flat sand colour — the whole face is one hue, the hue angles' resultant 0.998. Right, after: a face of warm ochre sandstone fragments, pale limestone chips, cool grey basalt and dark brown varnish, each fragment a piece of its own rock](docs/rock_palette.png)
-
-![A mountain range from 120 m. Left, before: every massif the same cool blue-grey, the beds' banding showing only as faint value stripes. Right, after: the massifs separate into warm buff and ochre beside cool blue-grey, and the beds' banding reads as tonal stripes within each formation](docs/bed_colour.png)
-
-![A cliff at dusk. Left, before: a uniform diamond lattice — every cell the same size, the same shape, in rows; it reads as cracked mud. Right, after: the lattice crossed by a second family of seams that wander and end, so the pieces are of many sizes and the regularity is broken](docs/block_sizes.png)
-
-![A massif from 120 m. Left, before: a smooth blue-grey wash with no structure — the rock's own high-pass 1.72 DN and a max−min of 1.00 DN over a 200 × 200 patch. Right, after: a succession of beds, each with its own tone, banded across the rock in the bedding's direction](docs/bedding.png)
-
-![The scree at the rock's foot, 3 m above the ground. Left, before: the grass meets the rock in a hard step, and the stone is a smooth wash. Right, after: a scatter of stones of many sizes with turf thinning between them, each with its own relief and a contact shadow on the matrix](docs/scree.png)
+## Sky, weather and light
 
 ### Clock, sun, moon and stars
 
 ![The night at 22 h with no moon. Left, before: a black screen, the sky, the ground and the houses' windows all at 1 DN. Right, after: the night sky's own glow — the airglow, zodiacal light and starlight behind the atmosphere — lights the ground, and the houses read against the stars](docs/night_town.png)
 
 ![The sky at 22 h with no moon. Top, before: sepia — the clear colour behind the atmosphere is neutral and the atmosphere's warm Rayleigh extinction takes the blue out of it, so the night is brown. Bottom, after: the deep blue-black the scotopic eye expects, warmer toward the horizon where the path through the atmosphere is longer](docs/night_sky_colour.png)
-date and hour and advances by `Time<Virtual>` × `time_scale`; `GeoLocation` places the observer. `SunState` has the sun's and moon's directions, true altitudes, the synodic phase and the lit fraction. The `astro` module exposes the ephemeris functions (Meeus ch. 7–48: sidereal time, nutation, the sun at 0.01°, the moon from a 51 + 34-term series, phase, refraction, the USNO total-illuminance factor), each tested against the book's worked examples and the SPA reference case. Stars are the 8404 Yale Bright Star Catalogue stars to V = 6.5, precessed to the date, coloured from B−V; the moon is a Lommel–Seeliger-shaded disc from NASA's LROC map. See [`src/celestial/PROVENANCE.md`](src/celestial/PROVENANCE.md).
+
+`WorldClock` holds the local date and hour and advances by `Time<Virtual>` × `time_scale`; `GeoLocation` places the observer. `SunState` has the sun's and moon's directions, true altitudes, the synodic phase and the lit fraction. The `astro` module exposes the ephemeris functions (Meeus ch. 7–48: sidereal time, nutation, the sun at 0.01°, the moon from a 51 + 34-term series, phase, refraction, the USNO total-illuminance factor), each tested against the book's worked examples and the SPA reference case. Stars are the 8404 Yale Bright Star Catalogue stars to V = 6.5, precessed to the date, coloured from B−V; the moon is a Lommel–Seeliger-shaded disc from NASA's LROC map. See [`src/celestial/PROVENANCE.md`](src/celestial/PROVENANCE.md).
+
+![Twilight toward the sun, the sun 8° below the horizon: the orange glow under a violet sky, clouds and posts in silhouette](docs/twilight.png) ![The same evening away from the sun, 5° below: the pink Belt of Venus over the blue Earth's shadow](docs/belt_of_venus.png)
 
 ### Climate, seasons and weather
 
@@ -177,44 +168,9 @@ let v = elements_wind(wind_field, wind_sampler, wind_params, world_position);
 
 bound to `WindState::field` and `WindState::field_params()`. `WindGust` is written when a gust band starts. `bevy_elements::noise` (gradient noise with analytic derivatives, fBm, Worley, curl) and `bevy_elements::grid` (bilinear taps into the crate's 2D grids) are also supported imports.
 
-### Terrain
-
-`Terrain` is a component: `Terrain::procedural(ProceduralTerrain::hills(seed))` (also `mountains`, `dunes`, `plains`, or your own relief, feature size, octaves and ridged mix), `Terrain::from_heightmap(image, height_range_m)` (a linearly read `R16Uint`, 16-bit normalised, float or 8-bit image) or `Terrain::flat(height)`, with `with_extent`, `with_resolution` and `external()`. It is centred on its `Transform` (default 2048 m, 1024² cells at High; the resolution is clamped to `ElementsQuality::terrain_max_resolution()` and to a power of two). One terrain exists at a time. The GPU generates `bedrock` and `sediment`, and keeps the layers hydrology and erosion write (`TerrainState`); `terrain_pack` rewrites a packed `terrain_cells` buffer that the materials, the wind solid mask and the precipitation kernel read, and the surface heights are copied back for `Environment::terrain_height(Vec2)`.
-
-By default the crate draws the ground: a pool of 33 × 33-vertex patches selected by distance (CDLOD, Strugar 2009: one shared mesh, vertices morph onto the next coarser grid, no cracks, one draw per pass; about the eye of a perspective camera, about the focus of an orthographic one) with `TerrainMaterial`, which blends rock (slope above 40°), sand (sediment above 0.5 m), soil and grass from the slope and sediment per pixel, adds noise detail, and takes the cloud shadow map like the weathered materials do. The vertices sit on the height samples (the cell centres `Environment::terrain_height` interpolates), so at full detail the drawn ground is the bilinear at every vertex and within a quarter of a quad's twist of it between them (4.7 cm at the 90th percentile on the hills at 4 m cells); the drawn terrain spans the cell centres, half a cell inside the extent. With `Terrain::external()` you draw the ground yourself and give your mesh `ExtendedMaterial<StandardMaterial, GroundExtension>` (`GroundExtension::default()`): it adds cloud shadows by world position and darkens where water stands. Wind blows around the terrain and rain stops on it; with the `flora` feature `ElementsFloraPlugin` hands the height snapshot to `bevy_flora`. See [`docs/research/terrain.md`](docs/research/terrain.md) and [`docs/research/orthographic-lod.md`](docs/research/orthographic-lod.md).
-
-**Ground textures.** Put `TerrainTextures` on the `Terrain` entity and the owned terrain's sand, soil and grass take PBR maps, handed over the way any material's are: per layer a `GroundLayerTextures` with a base colour and, optionally, a normal (tangent space, +Y up; DirectX maps set `flip_normal_map_y`), roughness (G channel), occlusion (R) and height (R) map, as a glTF material or a PBR library stores them (one glTF ARM or ORM image serves as both roughness and occlusion), and the tile's size in metres. The crate packs them itself, off the frame (an async task: 0.5 s for two layers of five 1024² maps on a desktop CPU; on wasm the task pool runs it on the main thread), into detail maps over its procedural layers: the base colour, roughness and occlusion become multipliers with mean 1 over the crate's calibrated colour and roughness (the weather still owns the roughness, and the ground's mean light does not move), and a missing normal, height or occlusion is derived from the base colour; `GroundLayerTextures::photograph()` also de-lights and makes tileable a photograph or a generated image. `with_colour(share)` lets the set's own mean colour replace the layer's, at every distance — for a stylised set whose colour is the point; a library's base colour is rarely a calibrated albedo (two CC0 libraries' grass and earth measured 2 and 6.5 times the crate's, and taken whole they bleach the hills to lime and beige), and a set that takes its colour runs its own pipeline, compiled once when it starts taking it. They are hex-tiled (Mikkelsen 2022: randomly offset taps in eight orientations, up to three per pixel, so a tile never repeats), blended between layers by their heights (grass blades stand out of the soil instead of a cross-fade, band-limited by the pixel's footprint so nothing sparkles at a distance), and from 12 m on the mips average to the layer's colour. Inserting, changing or removing the component re-textures the ground at runtime — the previous set renders until the new one is packed — so a set is a stylistic variant a game can swap. A layer left `None` stays procedural; without the component the ground renders exactly as before, at its old cost (the textured path is compiled only into a set's pipeline). The maps must keep their CPU data (the default when loading; `RenderAssetUsages::MAIN_WORLD` keeps them off the GPU, since only the packed array is drawn). The examples wear golem-generated soil and grass photographs from `assets/ground/golem/` (`ELEMENTS_GROUND_TEXTURES=0` leaves them off, `ELEMENTS_GROUND_SWAP=S` toggles them every S seconds, `ELEMENTS_GROUND_COLOUR=c` sets every layer's colour share). The sand waits for wind ripples. See [`docs/research/terrain-textures.md`](docs/research/terrain-textures.md) and [`docs/research/ground-textures.md`](docs/research/ground-textures.md).
-
-```rust
-# use bevy::prelude::*;
-# use bevy_elements::*;
-fn textured_hills(mut commands: Commands, assets: Res<AssetServer>) {
-    let arm = assets.load("textures/meadow_arm.png"); // glTF: occlusion R, roughness G
-    let grass = GroundLayerTextures::new(assets.load("textures/meadow_color.png"), 2.0)
-        .with_normal(assets.load("textures/meadow_normal_gl.png"))
-        .with_roughness(arm.clone())
-        .with_occlusion(arm)
-        .with_height(assets.load("textures/meadow_height.png"));
-    commands.spawn((
-        Terrain::procedural(ProceduralTerrain::hills(7)),
-        TerrainTextures { grass: Some(grass), ..default() },
-    ));
-}
-```
-
-**Grading the ground.** `TerrainLook { tint, saturation }` grades the owned terrain's bare ground (rock, soil, grass, sand, scree, textured or not) and the scattered rocks lying on it, the way a game grades its own materials per palette: the saturation first, around the colour's own linear Rec. 709 luminance (0 grey, 1 unchanged, above 1 oversaturated), then the tint multiplies it, so a cooling tint survives a desaturation. It applies before the ground cover, so snow and standing water keep their colours and wet grass still beads the rain. The default renders the ground as without it (within a float's rounding, below one 8-bit level), at no measured cost, and a change is a uniform write — no pipeline is specialised or compiled — so a palette blend may write it every frame (`terrain_tour`: `ELEMENTS_TINT=0.55,0.62,0.85 ELEMENTS_SATURATION=0.6`, `ELEMENTS_GRADE_GLIDE=8`). A `TerrainRender::External` ground and a game's own `WeatheredMaterial`s are the game's to grade. `docs/research/terrain-look.md`.
-
-```rust
-# use bevy::prelude::*;
-# use bevy_elements::TerrainLook;
-fn night_palette(mut look: ResMut<TerrainLook>) {
-    *look = TerrainLook { tint: Vec3::new(0.55, 0.62, 0.85), saturation: 0.6 };
-}
-```
-
 ### Fog
 
-`DistanceFog` follows `Weather::visibility_m` (Koschmieder, 2 % contrast, grey extinction) with a colour lit like the scene; a 240 × 120 × 240 m ground-fog `FogVolume` around the camera thickens toward the ground and drifts with the wind. Bevy lights a `FogVolume` from the `DirectionalLight`s alone, which under cloud carry only the beam, so the volume fades out of the frame as the cloud thickens (its density is scaled by the beam's share of the scene's light and its intensity by the reciprocal): a blizzard is a whiteout from the sky and the distance fog, not a dark hole (measured: the noon zenith of a 200 m-visibility blizzard read `(46, 47, 50)` before and `(122, 124, 129)` after; `docs/research/fog.md` Deviation 7). `sky_air_extinction(σ_fog)` gives the excess of a fog extinction over clear air (`CLEAR_AIR_EXTINCTION`, the `Clear` preset's 40 km), which the cloud composite uses to fog the sky to the same colour as the ground (see Volumetric clouds).
+`DistanceFog` follows `Weather::visibility_m` (Koschmieder, 2 % contrast, grey extinction) with a colour lit like the scene; a 240 × 120 × 240 m ground-fog `FogVolume` around the camera thickens toward the ground and drifts with the wind. Bevy lights a `FogVolume` from the `DirectionalLight`s alone, which under cloud carry only the beam, so the volume fades out of the frame as the cloud thickens (its density is scaled by the beam's share of the scene's light and its intensity by the reciprocal): a blizzard is a whiteout from the sky and the distance fog, not a dark hole (measured: the noon zenith of a 200 m-visibility blizzard read `(46, 47, 50)` before and `(122, 124, 129)` after; `docs/research/fog.md` Deviation 7). `sky_air_extinction(σ_fog)` gives the excess of a fog extinction over clear air (`CLEAR_AIR_EXTINCTION`, the `Clear` preset's 40 km), which the cloud composite uses to fog the sky to the same colour as the ground (see [Clouds](#clouds)). Where a frame's ground ends before the horizon, the air the ray then travels is the sky's own column: the composite reads the sky cube at the horizon in the ray's azimuth and extrapolates to zero elevation, so the flat band below the horizon is the sky's colour rather than the fog hue (measured 24–38 DN of error at noon, dusk and night before, 2–3 DN after, and 6.9 DN at 20 h, where the cube's 0.7° texel cannot resolve the twilight gradient).
 
 ### Clouds
 
@@ -233,10 +189,6 @@ Every reflection and the sky light of every PBR surface come from the camera's e
 ![The pond at 16:30 under a partly cloudy sky: the cumulus and the blue gaps between them reflected in the water, which is a mirror with a fine skin on it](docs/sky_light.png)
 
 ![The partly cloudy pond: the cumulus and the blue gaps between them in the moving water](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/sky_light.gif)
-
-### Lightning
-
-Strikes are a Poisson process at `Weather::storminess / 60` per second of `Time<Virtual>`, uniform over an 8 km disc around the followed camera and deterministic from `Climate::seed`. Each one writes `LightningStrike { position, seed }`, spawns a bolt (a channel with side branches, then 1–3 restrikes 40–80 ms apart), lights the ground with a 1e8 lm `PointLight`, writes `LightningFlash` for the clouds, and writes `Thunder { position, distance_m, loudness }` `distance_m / 343` s of real time later. `StrikeLightning { at }` scripts a strike. The bolt's brightness is multiplied by the camera's exposure and clamped, so it saturates at night and fades by day. The strike process and messages run without a renderer.
 
 ### Precipitation
 
@@ -270,50 +222,72 @@ fn strategy_view(mut commands: Commands) {
 
 ![The isometric town in Rain, one second: physical on the left, readable() on the right](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/precipitation_look.gif)
 
-### Weathered materials
+### Lightning
 
-`WeatheredMaterial` is `ExtendedMaterial<StandardMaterial, WeatheredExtension>`: give any mesh one and it follows the weather. `WeatheredPlugin` writes `ElementsGlobals` every frame (wetness, snow cover and snow depth from `SurfaceWeathering`, the rain intensity `min(1, R_liquid/20)`, the cloud shadow map, ripple and streak phases, the world units, the trail window) into one 128-byte storage buffer all weathered materials bind (binding 101, fragment stage only: it leaves the fragment stage two of the eight storage buffers WebGPU guarantees). A wet surface loses up to half its albedo in proportion to its porosity (Lagarde's gloss-based estimate: rough surfaces soak, plastic, tile and metal do not); a porous surface gains Lagarde's limited sheen (roughness × (1 − 0.4 · wetness · porosity), 0.54 for a soaked rough wall) and a smooth or metal one a water film at 0.1, as does a porous one drenched past saturation (a rain streak); rain on a wall adds darker streaks that run down it; faces turn white under snow with the curve `snow · smoothstep(0.85 − 0.6 snow, +0.2, n.y)` that `bevy_flora` uses, snow albedo `SNOW_ALBEDO` and roughness `SNOW_ROUGHNESS`, so trees and buildings read as one snow. `WeatheredExtension::exposure` is 1 under open sky and 0 sheltered (no wetness, streaks or snow, only cloud shadow): it does not follow a `PrecipitationBlocker` by itself, set it from your own test. `WeatheredExtension::default().with_trails()` also draws the trails pressed into it (below). `docs/research/wet-ground.md`.
+Strikes are a Poisson process at `Weather::storminess / 60` per second of `Time<Virtual>`, uniform over an 8 km disc around the followed camera and deterministic from `Climate::seed`. Each one writes `LightningStrike { position, seed }`, spawns a bolt (a channel with side branches, then 1–3 restrikes 40–80 ms apart), lights the ground with a 1e8 lm `PointLight`, writes `LightningFlash` for the clouds, and writes `Thunder { position, distance_m, loudness }` `distance_m / 343` s of real time later. `StrikeLightning { at }` scripts a strike. The bolt's brightness is multiplied by the camera's exposure and clamped, so it saturates at night and fades by day. The strike process and messages run without a renderer.
 
-```rust
-# use bevy::prelude::*;
-# use bevy_elements::*;
-fn spawn(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<WeatheredMaterial>>) {
-    let house = materials.add(WeatheredMaterial {
-        base: StandardMaterial { base_color: Color::srgb(0.55, 0.26, 0.2), perceptual_roughness: 0.9, ..default() },
-        extension: WeatheredExtension::default(),
-    });
-    commands.spawn((Mesh3d(meshes.add(Cuboid::new(9.0, 5.0, 7.0))), MeshMaterial3d(house)));
-}
-```
+## Terrain and ground
 
-The shading is a public WESL import for your own shaders, `bevy_elements::surface_cover` (`weather_surface`, `mesh_snow_cover`, `rain_streak`, `ripple_offset`, `overcast_relief`, `ElementsGlobals`): bind `ELEMENTS_GLOBALS_BUFFER` read-only at any free storage slot of your own material (`#[storage(N, read_only)]`), import `ElementsGlobals`, and read the wetness, snow cover, rain intensity, wind and the cloud shadow map's placement (`CloudShadows::map` is the map). `WeatheredPlugin` (in `ElementsPlugins`) keeps the buffer current. The forward and deferred passes are covered; the depth and normal prepass stays Bevy's, so SSAO reads the dry normal. Order-independent transparency, meshlets and forward decals are not weathered.
+### Terrain
 
-### Hydrology and erosion
+`Terrain` is a component: `Terrain::procedural(ProceduralTerrain::hills(seed))` (also `mountains`, `dunes`, `plains`, or your own relief, feature size, octaves and ridged mix), `Terrain::from_heightmap(image, height_range_m)` (a linearly read `R16Uint`, 16-bit normalised, float or 8-bit image) or `Terrain::flat(height)`, with `with_extent`, `with_resolution` and `external()`. It is centred on its `Transform` (default 2048 m, 1024² cells at High; the resolution is clamped to `ElementsQuality::terrain_max_resolution()` and to a power of two). One terrain exists at a time. The GPU generates `bedrock` and `sediment`, and keeps the layers hydrology and erosion write (`TerrainState`); `terrain_pack` rewrites a packed `terrain_cells` buffer that the materials, the wind solid mask and the precipitation kernel read, and the surface heights are copied back for `Environment::terrain_height(Vec2)`.
 
-`HydrologyPlugin` simulates water on the `Terrain`'s grid with Mei et al.'s virtual pipes, the pipe's cross-section taken from the local depth (so waves travel at 0.9 √(g d), not at a constant speed) and Manning friction (`HydrologySettings::manning_n`, 0.035). Time runs in fixed 20 ms substeps scheduled from *real* time (`HydrologySettings::time_scale`, independent of the `WorldClock`), at most `ElementsQuality::hydrology_substeps()` a frame (2 / 4 / 4 / 16), on a grid of at most `terrain_max_resolution()` cells per side (256 / 512 / 512 / 2048). The boundary is an open free overfall or a closed wall. Rain is the weather's, split into rain and snow per cell at that cell's lapse-rate temperature, delivered in quanta of at least 5 µm so it is never lost to f32 rounding, and shaded by `PrecipitationBlocker`s. `WaterSource` and `WaterSink` pour or drain a rate over the cells within a radius.
+By default the crate draws the ground: a pool of 33 × 33-vertex patches selected by distance (CDLOD, Strugar 2009: one shared mesh, vertices morph onto the next coarser grid, no cracks, one draw per pass; about the eye of a perspective camera, about the focus of an orthographic one) with `TerrainMaterial`, which blends rock (slope above 40°), sand (sediment above 0.5 m), soil and grass from the slope and sediment per pixel, adds noise detail, and takes the cloud shadow map like the weathered materials do. The vertices sit on the height samples (the cell centres `Environment::terrain_height` interpolates), so at full detail the drawn ground is the bilinear at every vertex and within a quarter of a quad's twist of it between them (4.7 cm at the 90th percentile on the hills at 4 m cells); the drawn terrain spans the cell centres, half a cell inside the extent. With `Terrain::external()` you draw the ground yourself and give your mesh `ExtendedMaterial<StandardMaterial, GroundExtension>` (`GroundExtension::default()`): it adds cloud shadows by world position and darkens where water stands. Wind blows around the terrain and rain stops on it; with the `flora` feature `ElementsFloraPlugin` hands the height snapshot to `bevy_flora`. See [`docs/research/terrain.md`](docs/research/terrain.md) and [`docs/research/orthographic-lod.md`](docs/research/orthographic-lod.md).
+
+![A grassy hillside 6 m above the ground. Left, before: a flat green wash, near-patch standard deviation 1.07 of 255. Right, after: turf grain and clumps from two band-limited octave scales, each octave cancelled once the pixel footprint cannot resolve it, so the distance is unchanged](docs/ground_detail.png)
+
+![A plain at 6 m. Left, before: one green, the hue's spread over a near-ground patch 0.010. Right, after: a meadow — straw-yellow patches with broken edges, darker hollows between them, the turf's grain through it, and the mean colour and brightness unchanged](docs/ground_colour.png)
+
+**Ground textures.** Put `TerrainTextures` on the `Terrain` entity and the owned terrain's sand, soil and grass take PBR maps, handed over the way any material's are: per layer a `GroundLayerTextures` with a base colour and, optionally, a normal (tangent space, +Y up; DirectX maps set `flip_normal_map_y`), roughness (G channel), occlusion (R) and height (R) map, as a glTF material or a PBR library stores them (one glTF ARM or ORM image serves as both roughness and occlusion), and the tile's size in metres. The crate packs them itself, off the frame (an async task: 0.5 s for two layers of five 1024² maps on a desktop CPU; on wasm the task pool runs it on the main thread), into detail maps over its procedural layers: the base colour, roughness and occlusion become multipliers with mean 1 over the crate's calibrated colour and roughness (the weather still owns the roughness, and the ground's mean light does not move), and a missing normal, height or occlusion is derived from the base colour; `GroundLayerTextures::photograph()` also de-lights and makes tileable a photograph or a generated image. `with_colour(share)` lets the set's own mean colour replace the layer's, at every distance — for a stylised set whose colour is the point; a library's base colour is rarely a calibrated albedo (two CC0 libraries' grass and earth measured 2 and 6.5 times the crate's, and taken whole they bleach the hills to lime and beige), and a set that takes its colour runs its own pipeline, compiled once when it starts taking it. They are hex-tiled (Mikkelsen 2022: randomly offset taps in eight orientations, up to three per pixel, so a tile never repeats), blended between layers by their heights (grass blades stand out of the soil instead of a cross-fade, band-limited by the pixel's footprint so nothing sparkles at a distance), and from 12 m on the mips average to the layer's colour. Inserting, changing or removing the component re-textures the ground at runtime — the previous set renders until the new one is packed — so a set is a stylistic variant a game can swap. A layer left `None` stays procedural; without the component the ground renders exactly as before, at its old cost (the textured path is compiled only into a set's pipeline). The maps must keep their CPU data (the default when loading; `RenderAssetUsages::MAIN_WORLD` keeps them off the GPU, since only the packed array is drawn). The examples wear golem-generated soil and grass photographs from `assets/ground/golem/` (`ELEMENTS_GROUND_TEXTURES=0` leaves them off, `ELEMENTS_GROUND_SWAP=S` toggles them every S seconds, `ELEMENTS_GROUND_COLOUR=c` sets every layer's colour share). The sand waits for wind ripples. See [`docs/research/terrain-textures.md`](docs/research/terrain-textures.md) and [`docs/research/ground-textures.md`](docs/research/ground-textures.md).
 
 ```rust
 # use bevy::prelude::*;
 # use bevy_elements::*;
-fn pour_a_river(mut commands: Commands, mut bake: MessageWriter<ErodeTerrain>) {
-    // 50 m³/s over the cells within 5 m of this point; the weather's rain falls everywhere.
+fn textured_hills(mut commands: Commands, assets: Res<AssetServer>) {
+    let arm = assets.load("textures/meadow_arm.png"); // glTF: occlusion R, roughness G
+    let grass = GroundLayerTextures::new(assets.load("textures/meadow_color.png"), 2.0)
+        .with_normal(assets.load("textures/meadow_normal_gl.png"))
+        .with_roughness(arm.clone())
+        .with_occlusion(arm)
+        .with_height(assets.load("textures/meadow_height.png"));
     commands.spawn((
-        WaterSource { rate_m3_s: 50.0, radius_m: 5.0 },
-        Transform::from_xyz(-200.0, 4.0, 0.0),
+        Terrain::procedural(ProceduralTerrain::hills(7)),
+        TerrainTextures { grass: Some(grass), ..default() },
     ));
-    // Ten simulated minutes of erosion under 20 mm/h, at the quality's full substep rate.
-    // `TerrainBaked` follows when it is done.
-    bake.write(ErodeTerrain { duration_s: 600.0, rain_mm_h: 20.0 });
 }
 ```
 
-`ErosionSettings` carries Mei's capacity law `K_c · max(sin α, min_tilt) · |v|`, dissolve and deposit (sediment first, then bedrock; sediment moves with the water through the same pipe fluxes, so solids are conserved to rounding) and thermal erosion every 4th substep (35° talus, bedrock above 45°). **Bare bedrock erodes at the capacity rate**: the `flood` valley's 50 m³/s river carves its bedrock by up to 7.9 m in 120 s of simulated time and arrives at a marker 100 m away after 63 s instead of 36 s, so set `ErosionSettings::enabled = false` for a flood that should not change the ground (the `flood` example does). `HydrologyStats` counts substeps and simulated time, for code that waits on them.
+![A meadow underfoot (top) and at eye level (bottom). Left, before: a procedural green felt. Right, after: PBR detail textures from golem — grass blades over moss and soil, hex-tiled so no tile repeats, the landscape's colour unchanged from 12 m on](docs/ground_textures.png)
 
-### Water
+**The rock.** The massif, a cliff and the scree at its foot, before and after the terrain's rock material: its beds, its palette, its two joint families, its fragments and its grain.
 
-`WaterPlugin` (part of `ElementsPlugins`) draws the water the hydrology simulates; `WaterSettings` (insert it first to override) holds the look. A patch of the terrain's level-of-detail selection that has at least 3 mm of water somewhere in it is drawn twice, by two entities with one `WaterExtension` and two `WaterMaterial`s: the **absorb** pass multiplies what is under the water by `(1 − F) · exp(−σ t)` per colour channel (σ = `absorption`, default `(0.45, 0.06, 0.03)` m⁻¹: red goes first, so a metre of water turns the bed blue-green, which one blend cannot do), where `t` is the thickness from the depth prepass corrected for the refracted ray; the **surface** pass adds the Fresnel reflection of the sky (`F₀ = 0.02`) and sun, the body colour of silt, and foam where the flow is fast or the water is thin, the ripples flow-mapped from the simulated velocity (Vlachos 2010, two phases).
+![A rock face 6 m above the ground. Left, before: a smooth pale wash with a red-brown rim round the grass. Right, after: stone with a grain and a relief of its own, a bed and a second tone, dark fractures, and the scree at the grass's foot](docs/rock_material.png)
 
-![The flood valley under a clear sky: blue-green water, white foam in the fast reaches](docs/water_flood.png) ![Water in forced rain: foam over teal under the overcast sky](docs/water_flood_rain.png)
+![The massif from 700 m: grey stone with its surface, scree below it, and a clean line where the grass meets the rock](docs/rock_mountain.png)
+
+![A rock face 3 m above the ground. Left, before: a smooth sandy wash with a fine even noise, the material's own high-pass 1.72 DN. Right, after: the cliff's blocks — angular, bedded fragments of many sizes, each a flat facet with its own tone, sharp dark joints between them, and the sun raking their edges](docs/rock_blocks.png)
+
+![A rock face 3 m above the ground. Left, before: a regular lattice of identical diamonds — a quilt, every block the same size and the same shape. Right, after: the cliff's fragments — irregular, angular, of many sizes, each a flat facet with its own lit edge and shadowed joint](docs/rock_fragments.png)
+
+![A cliff at dusk. Left, before: a single flat sand colour — the whole face is one hue, the hue angles' resultant 0.998. Right, after: a face of warm ochre sandstone fragments, pale limestone chips, cool grey basalt and dark brown varnish, each fragment a piece of its own rock](docs/rock_palette.png)
+
+![A mountain range from 120 m. Left, before: every massif the same cool blue-grey, the beds' banding showing only as faint value stripes. Right, after: the massifs separate into warm buff and ochre beside cool blue-grey, and the beds' banding reads as tonal stripes within each formation](docs/bed_colour.png)
+
+![A cliff at dusk. Left, before: a uniform diamond lattice — every cell the same size, the same shape, in rows; it reads as cracked mud. Right, after: the lattice crossed by a second family of seams that wander and end, so the pieces are of many sizes and the regularity is broken](docs/block_sizes.png)
+
+![A massif from 120 m. Left, before: a smooth blue-grey wash with no structure — the rock's own high-pass 1.72 DN and a max−min of 1.00 DN over a 200 × 200 patch. Right, after: a succession of beds, each with its own tone, banded across the rock in the bedding's direction](docs/bedding.png)
+
+![The scree at the rock's foot, 3 m above the ground. Left, before: the grass meets the rock in a hard step, and the stone is a smooth wash. Right, after: a scatter of stones of many sizes with turf thinning between them, each with its own relief and a contact shadow on the matrix](docs/scree.png)
+
+**Grading the ground.** `TerrainLook { tint, saturation }` grades the owned terrain's bare ground (rock, soil, grass, sand, scree, textured or not) and the scattered rocks lying on it, the way a game grades its own materials per palette: the saturation first, around the colour's own linear Rec. 709 luminance (0 grey, 1 unchanged, above 1 oversaturated), then the tint multiplies it, so a cooling tint survives a desaturation. It applies before the ground cover, so snow and standing water keep their colours and wet grass still beads the rain. The default renders the ground as without it (within a float's rounding, below one 8-bit level), at no measured cost, and a change is a uniform write — no pipeline is specialised or compiled — so a palette blend may write it every frame (`terrain_tour`: `ELEMENTS_TINT=0.55,0.62,0.85 ELEMENTS_SATURATION=0.6`, `ELEMENTS_GRADE_GLIDE=8`). A `TerrainRender::External` ground and a game's own `WeatheredMaterial`s are the game's to grade. `docs/research/terrain-look.md`.
+
+```rust
+# use bevy::prelude::*;
+# use bevy_elements::TerrainLook;
+fn night_palette(mut look: ResMut<TerrainLook>) {
+    *look = TerrainLook { tint: Vec3::new(0.55, 0.62, 0.85), saturation: 0.6 };
+}
+```
 
 ### Ground cover
 
@@ -492,6 +466,35 @@ Dry sand at evening (the prints slump to rounded dishes with a raised rim) and m
 
 ![Prints and ruts in dry sand at a low sun](docs/trails_sand.png) ![Ruts and prints in mud](docs/trails_mud.png)
 
+## Rivers, lakes and waves
+
+### Hydrology and erosion
+
+`HydrologyPlugin` simulates water on the `Terrain`'s grid with Mei et al.'s virtual pipes, the pipe's cross-section taken from the local depth (so waves travel at 0.9 √(g d), not at a constant speed) and Manning friction (`HydrologySettings::manning_n`, 0.035). Time runs in fixed 20 ms substeps scheduled from *real* time (`HydrologySettings::time_scale`, independent of the `WorldClock`), at most `ElementsQuality::hydrology_substeps()` a frame (2 / 4 / 4 / 16), on a grid of at most `terrain_max_resolution()` cells per side (256 / 512 / 512 / 2048). The boundary is an open free overfall or a closed wall. Rain is the weather's, split into rain and snow per cell at that cell's lapse-rate temperature, delivered in quanta of at least 5 µm so it is never lost to f32 rounding, and shaded by `PrecipitationBlocker`s. `WaterSource` and `WaterSink` pour or drain a rate over the cells within a radius.
+
+```rust
+# use bevy::prelude::*;
+# use bevy_elements::*;
+fn pour_a_river(mut commands: Commands, mut bake: MessageWriter<ErodeTerrain>) {
+    // 50 m³/s over the cells within 5 m of this point; the weather's rain falls everywhere.
+    commands.spawn((
+        WaterSource { rate_m3_s: 50.0, radius_m: 5.0 },
+        Transform::from_xyz(-200.0, 4.0, 0.0),
+    ));
+    // Ten simulated minutes of erosion under 20 mm/h, at the quality's full substep rate.
+    // `TerrainBaked` follows when it is done.
+    bake.write(ErodeTerrain { duration_s: 600.0, rain_mm_h: 20.0 });
+}
+```
+
+`ErosionSettings` carries Mei's capacity law `K_c · max(sin α, min_tilt) · |v|`, dissolve and deposit (sediment first, then bedrock; sediment moves with the water through the same pipe fluxes, so solids are conserved to rounding) and thermal erosion every 4th substep (35° talus, bedrock above 45°). **Bare bedrock erodes at the capacity rate**: the `flood` valley's 50 m³/s river carves its bedrock by up to 7.9 m in 120 s of simulated time and arrives at a marker 100 m away after 63 s instead of 36 s, so set `ErosionSettings::enabled = false` for a flood that should not change the ground (the `flood` example does). `HydrologyStats` counts substeps and simulated time, for code that waits on them.
+
+### Water
+
+`WaterPlugin` (part of `ElementsPlugins`) draws the water the hydrology simulates; `WaterSettings` (insert it first to override) holds the look. A patch of the terrain's level-of-detail selection that has at least 3 mm of water somewhere in it is drawn twice, by two entities with one `WaterExtension` and two `WaterMaterial`s: the **absorb** pass multiplies what is under the water by `(1 − F) · exp(−σ t)` per colour channel (σ = `absorption`, default `(0.45, 0.06, 0.03)` m⁻¹: red goes first, so a metre of water turns the bed blue-green, which one blend cannot do), where `t` is the thickness from the depth prepass corrected for the refracted ray; the **surface** pass adds the Fresnel reflection of the sky (`F₀ = 0.02`) and sun, the body colour of silt, and foam where the flow is fast or the water is thin, the ripples flow-mapped from the simulated velocity (Vlachos 2010, two phases).
+
+![The flood valley under a clear sky: blue-green water, white foam in the fast reaches](docs/water_flood.png) ![Water in forced rain: foam over teal under the overcast sky](docs/water_flood_rain.png)
+
 ### Waves
 
 `WavesPlugin` makes the hydrology's water answer what moves through it. Put a `WaterContact { half_extents }` (an ellipsoid along the entity's local axes, any rotation) on a hull, a float, a wader's legs or a falling stone: where it cuts the surface it presses down with the pressure head of its occupied column (its draft for a shallow hull, less for a deep narrow leg whose lower part the waves do not reach), plus Bernoulli's impact head `v²/2g` while it crosses the surface going down. At rest the water stays flat around it; moving, it leaves a wake bounded by Kelvin's 19.47°; bobbing or dropped in, it sends out rings in which the short waves outrun the long ones. Waves reflect off the shores, slow in the shallows, are carried by the current, break where they grow steeper than water holds (amplitude 7 % of the wavelength) and leave foam that fades over a few seconds.
@@ -510,6 +513,26 @@ fn a_float(mut commands: Commands) {
 ![A hull's wake: Kelvin's V, transverse crests and breaking foam](https://raw.githubusercontent.com/Ladvien/bevy_elements/main/docs/waves.gif)
 
 ![A hull crossing a pond, its wake and foam](docs/waves_wake.png) ![A pebble's rings](docs/waves_rings.png)
+
+## Surfaces, materials and voxel snow
+
+### Weathered materials
+
+`WeatheredMaterial` is `ExtendedMaterial<StandardMaterial, WeatheredExtension>`: give any mesh one and it follows the weather. `WeatheredPlugin` writes `ElementsGlobals` every frame (wetness, snow cover and snow depth from `SurfaceWeathering`, the rain intensity `min(1, R_liquid/20)`, the cloud shadow map, ripple and streak phases, the world units, the trail window) into one 128-byte storage buffer all weathered materials bind (binding 101, fragment stage only: it leaves the fragment stage two of the eight storage buffers WebGPU guarantees). A wet surface loses up to half its albedo in proportion to its porosity (Lagarde's gloss-based estimate: rough surfaces soak, plastic, tile and metal do not); a porous surface gains Lagarde's limited sheen (roughness × (1 − 0.4 · wetness · porosity), 0.54 for a soaked rough wall) and a smooth or metal one a water film at 0.1, as does a porous one drenched past saturation (a rain streak); rain on a wall adds darker streaks that run down it; faces turn white under snow with the curve `snow · smoothstep(0.85 − 0.6 snow, +0.2, n.y)` that `bevy_flora` uses, snow albedo `SNOW_ALBEDO` and roughness `SNOW_ROUGHNESS`, so trees and buildings read as one snow. `WeatheredExtension::exposure` is 1 under open sky and 0 sheltered (no wetness, streaks or snow, only cloud shadow): it does not follow a `PrecipitationBlocker` by itself, set it from your own test. `WeatheredExtension::default().with_trails()` also draws the trails pressed into it (below). `docs/research/wet-ground.md`.
+
+```rust
+# use bevy::prelude::*;
+# use bevy_elements::*;
+fn spawn(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<WeatheredMaterial>>) {
+    let house = materials.add(WeatheredMaterial {
+        base: StandardMaterial { base_color: Color::srgb(0.55, 0.26, 0.2), perceptual_roughness: 0.9, ..default() },
+        extension: WeatheredExtension::default(),
+    });
+    commands.spawn((Mesh3d(meshes.add(Cuboid::new(9.0, 5.0, 7.0))), MeshMaterial3d(house)));
+}
+```
+
+The shading is a public WESL import for your own shaders, `bevy_elements::surface_cover` (`weather_surface`, `mesh_snow_cover`, `rain_streak`, `ripple_offset`, `overcast_relief`, `ElementsGlobals`): bind `ELEMENTS_GLOBALS_BUFFER` read-only at any free storage slot of your own material (`#[storage(N, read_only)]`), import `ElementsGlobals`, and read the wetness, snow cover, rain intensity, wind and the cloud shadow map's placement (`CloudShadows::map` is the map). `WeatheredPlugin` (in `ElementsPlugins`) keeps the buffer current. The forward and deferred passes are covered; the depth and normal prepass stays Bevy's, so SSAO reads the dry normal. Order-independent transparency, meshlets and forward decals are not weathered.
 
 ### Snow on voxel volumes
 
@@ -717,8 +740,11 @@ Native (Vulkan, Metal, DX12) and wasm WebGPU. WebGL2 is unsupported: the simulat
 | bevy_elements | bevy | notes |
 |---|---|---|
 | 0.1 – 0.5 | 0.20 | 0.5's `isomesh` feature needs `isomesh`/`bevy_isomesh` 0.0.11; the `flora` feature `bevy_flora` 0.46 (0.30 before) |
+| 0.6 | 0.20 | as 0.5 |
 
 ## Research
+
+Every system was studied in the home-still paper library first. The note for each one, in [`docs/research/`](docs/research), names the papers, the equations adopted, every deviation from the plan with its source, and the numbers the tests assert.
 
 - [Bevy 0.20 render APIs](docs/research/bevy-0.20-render.md) — the verified paths and signatures this crate builds on.
 - [What the home-still corpus holds](docs/research/corpus.md) — the reading list per domain.
