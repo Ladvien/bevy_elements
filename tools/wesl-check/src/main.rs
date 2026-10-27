@@ -402,9 +402,39 @@ impl Resolver for Files {
     }
 }
 
-fn main() {
-    let root = std::env::args().nth(1).unwrap_or_else(|| "src".to_string());
-    let root = Path::new(&root);
+/// Shader-def sets the crate's pipelines specialise with. Each is compiled in full, because
+/// `@if` prunes the other branches before naga sees them: the base set (every def off) checks
+/// the forward path only, and the prepass and deferred paths are otherwise never compiled
+/// before a GPU runs them.
+const VARIANTS: &[(&str, &[&str])] = &[
+    ("forward", &[]),
+    ("prepass", &["PREPASS_PIPELINE"]),
+    (
+        "prepass+normal+motion",
+        &["PREPASS_PIPELINE", "NORMAL_PREPASS_OR_DEFERRED_PREPASS", "MOTION_VECTOR_PREPASS"],
+    ),
+    (
+        "deferred",
+        &["PREPASS_PIPELINE", "DEFERRED_PREPASS", "NORMAL_PREPASS_OR_DEFERRED_PREPASS"],
+    ),
+    (
+        "forward+optional",
+        &[
+            "VISIBILITY_RANGE_DITHER",
+            "VERTEX_OUTPUT_INSTANCE_INDEX",
+            "GROUND_TEXTURES",
+            "GROUND_COLOURS",
+            "PATHS",
+            "BLEND_MULTIPLY",
+        ],
+    ),
+    (
+        "prepass+ortho",
+        &["PREPASS_PIPELINE", "UNCLIPPED_DEPTH_ORTHO_EMULATION", "VISIBILITY_RANGE_DITHER"],
+    ),
+];
+
+fn router(root: &Path) -> Router {
 
     let mut files = FileResolver::new(root);
     files.set_extension("wesl");
@@ -435,6 +465,24 @@ fn main() {
         }
     }
 
+    router
+}
+
+fn main() {
+    let root = std::env::args().nth(1).unwrap_or_else(|| "src".to_string());
+    let root = Path::new(&root);
+    let mut failed = 0;
+    for (name, defs) in VARIANTS {
+        println!("== variant {name} ({})", defs.join(", "));
+        failed += check(root, defs);
+    }
+    if failed > 0 {
+        eprintln!("{failed} module(s) failed");
+        std::process::exit(1);
+    }
+}
+
+fn check(root: &Path, defs: &[&str]) -> usize {
     // `keep_main`: a library module has no entry point, and stripping keeps only what an entry
     // point reaches, so without it a library compiled to an *empty* string and the check passed
     // nothing past the parser. `visibility: false` is how Bevy compiles the crate's shaders.
@@ -443,7 +491,11 @@ fn main() {
         visibility: false,
         ..Default::default()
     };
-    let compiler = wesl::Compiler::new_with_resolver(options, router);
+    let mut options = options;
+    for def in defs {
+        options.features.set(*def, true);
+    }
+    let compiler = wesl::Compiler::new_with_resolver(options, router(root));
 
     let mut failed = 0;
     for module in MODULES {
@@ -478,8 +530,5 @@ fn main() {
         }
     }
 
-    if failed > 0 {
-        eprintln!("{failed} module(s) failed");
-        std::process::exit(1);
-    }
+    failed
 }
