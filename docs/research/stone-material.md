@@ -90,21 +90,37 @@ the facet's.
 No new palette and no new hues: `TONES` stays the cliff's (`ROCK_TONE_*` in `common.wesl`), and a
 stone's facets wear three or four of them, as the cliff's fragments do.
 
-**3. A facet is *one* colour, so the mesh splits its vertices per facet.**
+**3. A facet is *one* colour, and the tone changes over the joint's own width.**
 
 A shared vertex carries one colour and the rasteriser interpolates it between neighbours, which
-smears the tone across the joint it is supposed to break at. The mesh is emitted **per triangle**,
-each triangle taking its facet's tone, so the change lands on the joint. The shape's own geometry
-is unchanged: the vertices sit where they did.
+smears the tone across the joint it is supposed to break at. Two builds were tried and rejected: a
+hard per-triangle assignment read as a **sawtooth** on a small stone, and splitting every triangle
+corner gave 3840 vertices and paid **+4.5 %** of the isometric scene's opaque pass. The shipped
+build keeps the mesh **indexed** (827 vertices, the same 1280 triangles) and blends each vertex's
+tone over the joint's own rounding, `TONE_JOINT` = 0.004 of the shape's radius: a facet keeps its
+rock over its whole face and the colour changes across the joint itself, which is the surface's own
+feature (Deviation 1).
 
-**4. A triangle's facet is the one nearest one of its vertices, not a vote.**
+**4. The tone table is the *shape's*, not the mesh's.**
 
-A majority vote over three corners flips triangle by triangle where a joint runs diagonally and
-draws a ragged edge (measured on the first build: the boundary zigzagged by 2-3 px at 4×). The
-carrier distance — the plane's own distance to the point — picks the facet the joint belongs to,
-so the boundary follows the joint's field.
+The tones go out by the *area* each facet covers, and an area is measured on a mesh — so a table
+derived from whichever mesh is being built gives the near and the far mesh of one rock *different
+rocks*. Measured on the CPU over all twelve shapes: the worst vertex's hue differs by **19.0°**
+between the two tessellations, and one shape's mean moved 3.7°. The meshes switch abruptly at
+`22 · D`, so a stone crossing that distance changed colour, which the eye reads as the rock
+flickering as the camera moves (Outcome). The table is computed **once per shape** from its
+canonical (near) tessellation and stored on the `RockGeometry`, so both meshes wear the same rocks
+to the bit; the near mesh — the one a player stands next to — is unchanged. Test
+`a_rocks_two_meshes_wear_the_same_rock`.
 
-**5. The shape's brightness is normalised to the palette's, by a scalar.**
+**5. A vertex's tone weights are the soft minimum's terms at the joint's width, not the geometry's.**
+
+The soft minimum already blends the planes' *normals* at the rounding's width; the tone uses the
+same terms at `TONE_JOINT`, a narrower width. Widening the blend to the geometry's rounding washed
+every facet toward the palette's mean (measured: an apex facet's chroma fell to 0.17 where a whole
+facet is 0.25-0.53).
+
+**6. The shape's brightness is normalised to the palette's, by a scalar.**
 
 The palette's mean is exactly 1 (`rock-palette.md`), but a shape's facets are *whole* rocks of it,
 so its largest facet decides its body's mean and drifts a stone by up to 21 %. Each shape's
@@ -119,8 +135,9 @@ and `ground-colour.md` both record.)
 | The palette | the cliff's four tones, `TONES` in `mesh.rs` (= `ROCK_TONE_*` in `common.wesl`) | `rock-palette.md` Parameters |
 | The facet | the carrier of the soft minimum: the joint plane (or the bounding sphere) that owns the vertex | the shape's own construction, `rock-scatter.md` Model 5 |
 | The facet's tone strength | **1.0** (was 0.6 applied to a whole shape) | Model 2; `rock-palette.md` Deviation 2 |
-| The triangles' facet | the carrier nearest one of the triangle's vertices | Model 4 |
-| The tones' assignment | by area, largest facet first, round-robin from a per-shape draw | Model 5; `every_stone_keeps_the_palettes_brightness` |
+| The joint's colour width | **0.004** of the shape's radius (`TONE_JOINT`) | Model 3; the geometry's own rounding is wider |
+| The tones' assignment | by area, largest facet first, round-robin from a per-shape draw | Model 6; `every_stone_keeps_the_palettes_brightness` |
+| The tone table's tessellation | **the near mesh's**, once per shape (`shape_tones`) | Model 4; `a_rocks_two_meshes_wear_the_same_rock` |
 | The per-shape brightness | 1, by a scalar on the shape's tones | `rock-palette.md` Deviation 2 |
 | The speckle's albedo swing | **2.0, unchanged** | measured, Deviation 2 below |
 
@@ -129,10 +146,12 @@ and `ground-colour.md` both record.)
 - **No new pass, no new buffer, no new binding, no shader cost.** The tones are the mesh's **vertex
   colours**, written on the CPU once per shape at start-up (24 meshes), which is the attribute the
   base's darkening already rides. The rock's shader path is untouched.
-- The mesh stays **indexed**, and a vertex is duplicated only where two facets meet: the near mesh
-  goes from 642 shared vertices to 827, the same 1280 triangles. Splitting every triangle corner
-  instead (the first build) gave 3840 vertices and paid **+4.5 %** of the isometric scene's opaque
-  pass at matched clocks, so the seam is drawn only at the joint. Nothing per pixel changed.
+- The mesh stays **indexed**: 827 vertices against 642 shared ones, the same 1280 triangles. The
+  tone blends over the joint, so no seam has to be drawn. Splitting every triangle corner instead
+  (the first build) gave 3840 vertices and paid **+4.5 %** of the isometric scene's opaque pass at
+  matched clocks. Nothing per pixel changed.
+- The tone table is one `Vec<Vec3>` per shape (at most ~19 entries), computed once at start-up and
+  shared by both meshes.
 
 ## What great looks like
 
@@ -148,9 +167,9 @@ and `ground-colour.md` both record.)
 
 ## Validation targets
 
-1. **The palette is on the facets.** Every shape wears at least 3 distinct rocks, and every
-   triangle's three vertices agree, so no tone interpolates across a joint. (CPU tests
-   `a_stone_wears_several_rocks_and_each_facet_is_one_colour`.)
+1. **The palette is on the facets.** Every shape wears at least 3 distinct rocks, and a
+   vertex's tone is its facet's over the face and changes only within the joint's own width, so no
+   tone interpolates across a face. (CPU test `a_stone_wears_several_rocks_and_the_change_lands_on_its_joints`.)
 2. **The brightness does not move.** Every shape's area-weighted brightness is 1 within 2·10⁻³
    (CPU test `every_stone_keeps_the_palettes_brightness`).
 3. **The stone's chroma rises toward the face's.** On the 2 m boulder (`stone_a`), the top facet's
@@ -164,13 +183,17 @@ and `ground-colour.md` both record.)
 7. **The ground is untouched.** `plains` at 40 m and `dunes` at 40 m are byte-identical bar one
    stone's edge.
 8. **The cost.** The opaque pass is unchanged: nothing per pixel changed.
+9. **The two meshes wear the same rock.** Every facet of every shape carries the same tone in the
+   near and the far mesh, to the bit, so the switch at `22 · D` is a change of triangle count and
+   not of colour (CPU test `a_rocks_two_meshes_wear_the_same_rock`).
 
 ## Deviations from this plan
 
 1. **The facet is the soft minimum's *carrier*, not a grouping of triangles by plane.** The plan
    grouped the mesh's triangles by their plane. The carrier is already computed, is a per-vertex
    scalar the joint's own field supplies, and gives a boundary that follows the joint — where a
-   vote over three corners zigzags (Model 4). It also avoids a second pass over the faces.
+   vote over three corners zigzags (the rejected round-2 build). It also avoids a second pass over
+   the faces.
 2. **The speckle's albedo swing is unchanged at 2.0.** The plan quartered it, on a first
    measurement that compared *sunlit* stones with a *shaded* cliff face and reported the stone's
    high-pass as 3.3× the face's. Measured like for like — same luminance band, same light — the
@@ -183,10 +206,38 @@ and `ground-colour.md` both record.)
    rounded rock is 56-65 % of its surface. Sorting by area and then normalising is what actually
    holds the brightness, and it is the same construction `rock-palette.md` Deviation 2 used for the
    palette itself.
-4. **The vertices are split per facet and per triangle.** The plan changed only the colour
-   attribute of the existing shared-vertex mesh. A shared vertex interpolates its colour across
-   every triangle that uses it, and the first build smeared a pale top into a buff side over the
-   whole rock. Splitting the vertices is the fix, and it costs no silhouette.
+4. **The tone blends over the joint, and the mesh stays indexed.** The plan changed only the
+   colour attribute of the existing shared-vertex mesh, which smeared a pale top into a buff side
+   over the whole rock; splitting every triangle corner fixed the smear and cost +4.5 % of the
+   opaque pass. The shipped build moves the *tone's own weights* to the joint's width instead, so
+   the change lands on the joint without a seam (Model 3).
+5. **The tone table is derived once per shape, from the near mesh.** The plan derived the tones
+   inside `rock_geometry`, which runs once per mesh — and so gave a rock's two levels of detail
+   different rocks. Found in this pass by a CPU probe over both tessellations, measured at up to
+   19° of hue, and fixed by making the table the shape's (Model 4).
+
+## Outcome
+
+The item shipped, with one defect found and fixed in the same pass.
+
+- **The facets wear the cliff's rocks.** On the 2 m boulder (`stone_b`, mac_air, 2560 × 1406):
+  the top face's sRGB saturation **0.122 → 0.132** at 3×, with the front and end faces measuring
+  other rocks — a pale buff top, a warm tan front, a cool grey-blue end. The boulder's whole-stone
+  chroma read 0.104 → 0.120 against the ground's 0.143 → 0.190. The boundary is a single soft
+  polyline along a facet edge at 3×: no sawtooth, no smear.
+- **Nothing else moved.** Full-frame diffs (fraction of pixels changing by more than one level):
+  the cliff face at 40 m **0.00 % (max diff 1)**, the dunes **0.00 % (max diff 0)**, the plains
+  0.03 %, the 120 m massif 0.02 %. Frame means hold: `m40_s7` 110.0 → 110.0, `m40_s11` 86.7 →
+  86.7. The change is the meshes' vertex colours and nothing else.
+- **The defect this pass found: a rock's two levels of detail wore different rocks.** The table was
+  derived from the mesh's own facet areas, so the 1280-triangle near mesh and the 320-triangle far
+  mesh of one shape got different palette tones — **19.0°** of hue apart at the worst vertex, 3.7°
+  on one shape's mean — and the abrupt switch at `22 · D` popped. The table is now the shape's
+  (Model 4, Validation 9). The near mesh, which the previous pass signed off, is byte-identical;
+  only the far mesh moves, onto the tones the near mesh already wore.
+- **Not claimed:** the distance look at 40 m, where a stone is 2-4 px and the facets read as noise
+  rather than as facets. It was no better before this change, and the cliff's own distance look
+  (the block network's shingle fan) is the separate item the backlog carries.
 
 ## Pending index
 
