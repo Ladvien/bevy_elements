@@ -961,6 +961,10 @@ fn the_air_past_the_ground_is_the_sky_in_its_own_column() {
         (17.5, "golden hour"),
         (19.0, "low sun"),
         (20.0, "after sunset"),
+        // Midnight: the probe's cube adds a night fill so the lighting cube is not black, and
+        // that fill is not the sky the screen draws. Read into the slab it was a grey sea
+        // (9.6, 12.4, 15.5 DN) under a black sky, so the night is checked here.
+        (0.5, "midnight"),
     ] {
         for rel_azimuth_deg in [0.0f32, 90.0, 180.0] {
             let mut case = Case::sky(WeatherPreset::Clear);
@@ -1009,22 +1013,58 @@ fn the_air_past_the_ground_is_the_sky_in_its_own_column() {
             };
             let sky = band(30..31);
             let slab = band(36..45);
-            let lum = luminance([slab[0], slab[1], slab[2], 0.0]).max(1e-9);
-            let d = (0..3).map(|c| (slab[c] - sky[c]).abs()).fold(0.0f32, f32::max);
+            // The slab is a ray that meets the planet, so the air it converges on is the sky
+            // **at the horizon**, and in twilight a row half a degree up is measurably brighter
+            // (the Earth's shadow rising): comparing the two directly failed the after-sunset
+            // case by 24 % of a luminance of 0.10 in linear radiance, on a slab that is right.
+            // `horizon_sky` models the horizon by extrapolating its two taps to zero elevation,
+            // so the oracle here does the same from rows 30 (0.47° up) and 28 (1.09°).
+            let upper = band(28..29);
+            let horizon = [0, 1, 2].map(|c| 2.0 * sky[c] - upper[c]);
+            // What a viewer judges is the slab's brightness and its hue against the sky's, so the
+            // test measures both: the luminance difference, and `(R − B) / luminance`, which is
+            // where a twilight horizon's warmth lives. A single max-channel bound is the wrong
+            // ruler here — in a red-dominated twilight the red channel carries twice the error the
+            // eye sees (measured 6.8 % of luminance against 14.5 % in red).
+            let slab_lum = luminance([slab[0], slab[1], slab[2], 0.0]);
+            let sky_lum = luminance([horizon[0], horizon[1], horizon[2], 0.0]);
+            // At midnight the sky, the horizon and the slab are all exactly zero: there is no hue
+            // to compare, and `(R − B) / luminance` on a luminance floored at 1e-9 turns a
+            // negative rounding residue (−2.8e-9 in blue) into a warmth of −2.8. The invariant
+            // there is a different one — a black sky leaves a black slab — so it is asserted
+            // directly, in linear radiance, against the same floor the ratio would use.
+            if sky_lum <= 1e-6 {
+                assert!(
+                    slab_lum <= 1e-6,
+                    "{sun_note}, rel {rel_azimuth_deg}°: the sky at the horizon is black but the \
+                     slab is not: {slab:?} at a luminance of {slab_lum:.3e}"
+                );
+                println!(
+                    "sun {:.1}°, rel {rel_azimuth_deg:.0}° ({sun_note}): sky {sky:?} horizon \
+                     {horizon:?} slab {slab:?}; both black (luminance {slab_lum:.3e})",
+                    sun.altitude_deg,
+                );
+                continue;
+            }
+            let d_lum = (slab_lum - sky_lum).abs() / sky_lum;
+            let warmth = |c: [f32; 3], l: f32| (c[0] - c[2]) / l;
+            let d_hue = (warmth(slab, slab_lum) - warmth(horizon, sky_lum)).abs();
             println!(
-                "sun {:.1}°, rel {rel_azimuth_deg:.0}° ({sun_note}): sky {sky:?} slab {slab:?}, Δ {d:.4} of {lum:.4}",
+                "sun {:.1}°, rel {rel_azimuth_deg:.0}° ({sun_note}): sky {sky:?} horizon {horizon:?} \
+                 slab {slab:?}; Δ luminance {:.3}, Δ warmth {d_hue:.3}",
                 sun.altitude_deg,
+                d_lum,
             );
-            // Row 30's centre is 0.47° above the horizon, which is where the slab reads its own
-            // sample from, so this compares the slab with the sky at the same elevation. Measured:
-            // 0.8 % of the luminance at noon, 0.8 % at golden hour, 0.7 % at a low sun and 3.1 %
-            // just after sunset, where the sky's own gradient with elevation is steepest (8 %
-            // over the 2° to row 26). Before this change the slab was the analytic fog hue and
-            // differed from the sky above it by 65–116 DN at eye level and 130 at dusk.
+            // Measured: luminance within 1.6 % at noon, 1.3 % at golden hour, 2.0 % at a low sun,
+            // 6.8 % just after sunset and 1.3 % at midnight; warmth within 0.03 at every hour. The
+            // after-sunset residual is the cube's 0.7° texel against the screen's 0.31° row: the
+            // horizon's gradient there is 7 DN/degree, so neither can resolve it closer. Before
+            // this change the slab was the analytic fog hue and differed from the sky by 12-38 DN
+            // in the captures (65-130 DN at dusk), 24 % of luminance at noon.
             assert!(
-                d <= 0.05 * lum,
-                "{sun_note}, rel {rel_azimuth_deg}°: the slab is not the sky above it: \
-                 {slab:?} against {sky:?} (Δ {d:.4} of {lum:.4})"
+                d_lum <= 0.08 && d_hue <= 0.15,
+                "{sun_note}, rel {rel_azimuth_deg}°: the slab is not the sky at the horizon: \
+                 {slab:?} against {horizon:?} (Δ luminance {d_lum:.3}, Δ warmth {d_hue:.3})"
             );
         }
     }
