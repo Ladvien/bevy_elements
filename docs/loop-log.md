@@ -4827,3 +4827,30 @@ the note stands unchanged.
 4. **The block network's distance look** (iteration 58): the talus at 40 m reads as a shingle fan.
 5. **Stylistic variants of the ground** (the user's ask): golem-generated texture sets each taking its
    own colour through `with_colour`, with a capture tour.
+
+## Iteration 64 — 2026-10-27 — Gravel, Stone and Snow routes encode into the mask (#38)
+
+**Item and rank.** Issue #38 (a bug: three of four `PathKind`s draw nothing) beat the runner-up, the
+oldest open issue #37 (wesl-check tooling gap, not wrong crate behaviour), and every enhancement; it is a
+one-function fix a shipping game (Sanctuary's cobbled roads) is blocked on. Issues seen and skipped as
+enhancements: #39-#43. No release issue.
+
+**Change.** `paths::mask_image` stored `texel[1].clamp(0,1)`, but the lane is `kind + depth/0.5` over
+0..4 and the shader reads `texel.y * 4.0`. Now `encode_kind_lane`: `/ 4`, rounded **up** (round-to-nearest
+puts kind 3 at byte 191 = 2.996, which `floor` reads as 2 — caught by the new test, not by the issue's
+analysis), depth fraction held at 0.97. Test: `every_kind_and_rut_depth_round_trips_the_eight_bit_kind_lane`
+(4 kinds × depths 0, 0.03, 0.25, 0.49; kind exact, depth ±0.01 m). It failed before (Snow decoded as 2) and
+passes after; `cargo test --release --lib paths::` 13 passed.
+
+**Not verified (blocker for the visual gate).** No GPU host was reachable this pass: `big` does not resolve,
+this laptop has no `xvfb-run`/`nvidia-smi` and its window captures are byte-black (AGENTS.md), `mac_air`
+has no checkout. Acceptance criteria 2-4 of #38 (a capture of `trails` with `ELEMENTS_PATHS=road` showing
+the road more than 10 levels off the turf; one route of each kind drawing four surfaces; `Earth`
+unchanged) and the benchmark are therefore **unchecked**. Earth's encoding changes by at most one byte
+step (ceil vs round), and nothing else in the render path changed. The change is on `loop/iter-64`, not
+merged, and #38 is not closed. The full gate set (doc, wasm, GPU tests) was not run beyond `paths::`
+tests and clippy.
+
+**Next five.** 1. Capture-verify #38 and merge. 2. #37 wesl-check on Bevy-importing modules.
+3. #40 `TerrainGrid` height following drawn triangles. 4. `DistanceFog::color` on distant terrain.
+5. Horizon residual line at 19-20 h.
