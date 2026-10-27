@@ -8,11 +8,21 @@
   Mie-extinguished air whose radiance and hue follow the sun's altitude and azimuth — so the two
   diverged exactly when the sun was low (measured 116 DN low at 19:00, 130 DN in the worst channel at
   dusk). `ground_haze` now takes the sky, sampled by `horizon_sky(dir)` from the sky cube in the ray's
-  own azimuth 0.5° above the horizon, and the weather's air mixes it toward the fog colour by its own
+  own azimuth above the horizon, and the weather's air mixes it toward the fog colour by its own
   extinction, the law the ground below already obeys. The GPU test asserts the invariant: the sky above
-  the horizon and the slab below are the same colour in three azimuths at four hours, within 5 % of
-  luminance (measured 0.6 % at noon, golden hour and a low sun; 3.1 % just after sunset).
+  the horizon and the slab below are the same colour in three azimuths at five hours, within 8 % of
+  luminance and 0.15 of warmth (measured on `big`: 1.4 % at noon, 1.0 % at golden hour, 1.7 % at a low
+  sun, 7.3 % just after sunset).
   `docs/research/horizon-colour.md`, `262207d`.
+
+- **The night horizon is not a grey sea, and the dusk horizon has no bright lip.** The sky cube carries
+  a night fill so the *lighting* cube is not black at midnight; read back into the slab it drew
+  (9.4, 12.5, 15.5) DN under a sky of (1.3, 1.0, 1.0) — a visible grey band across every night horizon,
+  uniform to a per-channel sd of 0.00. That
+  fill is no longer added, and the horizon's radiance is extrapolated to zero elevation from two taps
+  half a degree apart, because a single tap a little above the horizon reads the twilight gradient (the
+  slab's lip was 10.6 DN bright at 20 h). Midnight now reads (0.7, 0.7, 0.7) against (1.9, 1.0, 1.0), and
+  the 20 h lip 2.2 DN. The GPU test covers midnight, where a black sky must leave a black slab.
 
 ## [0.6.0] — 2026-10-27
 
