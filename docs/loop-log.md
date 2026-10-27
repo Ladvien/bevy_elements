@@ -4862,3 +4862,20 @@ not gated by this pass and not built on, so this iteration is numbered 65. #37 w
 4. #41/#39 wetness as drawn and a footprint press threshold.
 5. Items 1-5 of iteration 63 (distant terrain fog hue, the 19-20 h horizon line, precipitation
    climatology, block network at 40 m, ground styles).
+
+## Iteration 66 — 2026-10-27 — `wesl-check` compiles six shader-def variants
+
+Host: the same Mac as iteration 65 (no Xvfb, no NVIDIA GPU, no route to `big`, no `gh`; the issue list was read through the API and #38 still needs a GPU capture, so it stays first on the backlog). Item: the follow-up iteration 65 named, chosen because it is fully verifiable here.
+
+- **Change** (`tools/wesl-check/src/main.rs` only): the check ran with every shader def off, so `@if(PREPASS_PIPELINE)`, `DEFERRED_PREPASS` and the optional paths were pruned before naga saw them. It now compiles every module under six def sets (`VARIANTS`: forward, prepass, prepass+normal+motion, deferred, forward+optional with `GROUND_TEXTURES`/`GROUND_COLOURS`/`PATHS`/`BLEND_MULTIPLY`/`VISIBILITY_RANGE_DITHER`/`VERTEX_OUTPUT_INSTANCE_INDEX`, prepass+ortho) and prints `== variant <name>` headers.
+- **Verification**: all six variants, 44 modules each, `the WGSL is ok`, exit 0. Mutation in `terrain/render.wesl` line 828 (`deferred_output(in, pbr_input)` → `deferred_output(in)`), restored afterwards: only the `deferred` variant failed ("expected 2, got 1"), exit 1; the forward-only check of iteration 65 passed this.
+- **Not covered**: defs are a hand-kept list; a new `@if` name in `src/` is compiled disabled until it is added to `VARIANTS`. Combinations are not exhaustive.
+- **Gates**: 1-5 not run (no crate code changed). Visual and performance gates do not apply to a tool change.
+
+### Next five items, ranked
+
+1. **#38** `PathNetwork` Gravel/Stone/Snow draw nothing: `loop/iter-64` (`9761f22`) holds a fix never gated; gate on `big`, merge or redo.
+2. #42 ground detail amplitude / finest-feature knob.
+3. #41/#39 wetness as drawn and a footprint press threshold.
+4. A check that every `@if(NAME)` in `src/` appears in `VARIANTS`.
+5. Items 1-5 of iteration 63.
