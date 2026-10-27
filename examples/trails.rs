@@ -455,6 +455,30 @@ fn lay_paths(mut commands: Commands) {
             .with_ruts(0.03),
         );
     }
+    if all || which == "stone" {
+        paths.push(Path::new(
+            vec![
+                Vec3::new(-26.0, 0.0, 20.0),
+                Vec3::new(-8.0, 0.0, 18.0),
+                Vec3::new(8.0, 0.0, 19.0),
+                Vec3::new(26.0, 0.0, 22.0),
+            ],
+            1.6,
+            PathKind::Stone,
+        ));
+    }
+    if all || which == "packed" {
+        paths.push(Path::new(
+            vec![
+                Vec3::new(-26.0, 0.0, -2.0),
+                Vec3::new(-8.0, 0.0, -1.0),
+                Vec3::new(8.0, 0.0, -3.0),
+                Vec3::new(26.0, 0.0, -1.0),
+            ],
+            1.2,
+            PathKind::Snow,
+        ));
+    }
     if !paths.is_empty() {
         commands.insert_resource(PathNetwork::new(paths));
     }
