@@ -447,7 +447,7 @@ pub(crate) fn mask_image(mask: &PathMask) -> Image {
     let mut bytes = Vec::with_capacity(mask.texels_data.len() * 4);
     for texel in &mask.texels_data {
         let r = encode(texel[0] / PATH_DISTANCE_RANGE_M, 0.5);
-        let g = encode_kind_lane(texel[1]);
+        let g = (texel[1].clamp(0.0, 1.0) * 255.0).round() as u8;
         let b = encode(0.5 * texel[2], 0.5);
         let a = (texel[3].clamp(0.0, 1.0) * 255.0).round() as u8;
         bytes.extend_from_slice(&[r, g, b, a]);
