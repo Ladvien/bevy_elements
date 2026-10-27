@@ -85,9 +85,9 @@ No system is implemented without its `docs/research/<system>.md`, committed firs
   It compiles every one of the crate's modules to WGSL, keeping each module's own declarations,
   and parses the result with naga, in about twenty seconds and without a GPU, and it names the
   line. (Before iteration 45 it stripped a library module to an empty string, and "the WGSL is
-  ok" checked nothing of a library's functions past the parser.) A module it reports as "not
-  checked" is one whose *Bevy* import could not be stubbed; the crate's own code in it is still
-  checked as far as the compiler got.
+  ok" checked nothing of a library's functions past the parser.) Bevy's own modules are
+  stubbed with their real structs and signatures (`stub_source`), so a wrong call into Bevy fails
+  too; an import with no stub is a failure. Add a stub when a shader imports a new Bevy item.
 - **A name used from another WESL module must be in the import list.** A call to a function that
   `common.wesl` exports but that `render.wesl` does not import compiles *without an error* — naga
   emits a broken shader, no `failed to process shader` line appears, and the surface renders as a
