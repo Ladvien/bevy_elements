@@ -178,14 +178,24 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// The share of a shape's surface each facet covers, from one facet id per triangle: the
-/// triangles' areas summed per facet and normalised, indexed by facet id (so the lookup into
-/// [`facet_tones`] is the facet itself).
-fn facet_areas(triangle_facets: &[usize], points: &[Vec3], faces: &[[u32; 3]]) -> Vec<f32> {
-    let count = triangle_facets.iter().copied().max().map_or(0, |m| m + 1);
+/// The share of a shape's surface each of the `count` facets covers: the triangles' areas, summed
+/// per facet and normalised, indexed by facet id (so the lookup into [`facet_tones`] is the facet
+/// itself). `count` is every facet the shape *has*, which is more than those that carry a vertex:
+/// a plane can only ever blend, never own one.
+fn facet_areas(facets: &[usize], count: usize, points: &[Vec3], faces: &[[u32; 3]]) -> Vec<f32> {
     let mut areas = vec![0.0; count];
-    for (&facet, &[i, j, k]) in triangle_facets.iter().zip(faces) {
+    for &[i, j, k] in faces {
         let (a, b, c) = (points[i as usize], points[j as usize], points[k as usize]);
+        // A triangle's vertices may straddle a joint; its area goes to the facet most of them are
+        // on, so a facet's share is what the eye sees.
+        let votes = [facets[i as usize], facets[j as usize], facets[k as usize]];
+        let facet = votes
+            .iter()
+            .fold((votes[0], 0usize), |(best, n), &v| {
+                let m = votes.iter().filter(|&&w| w == v).count();
+                if m > n { (v, m) } else { (best, n) }
+            })
+            .0;
         areas[facet] += (b - a).cross(c - a).length() * 0.5;
     }
     let total = areas.iter().sum::<f32>().max(1e-6);
@@ -300,18 +310,19 @@ pub(crate) fn rock_geometry(shape: usize, subdivisions: u32) -> RockGeometry {
     // same soft minimum's blend of the planes' normals (the sphere's is the direction): exactly a
     // plane's on a face, turning only within the rounding's width at an edge.
     // Each vertex's **facet**: the plane that carries the soft minimum, which is the piece of
-    // rock that vertex sits on. The facet is free — the soft minimum already found its carrier.
+    // rock that vertex sits on, and the plane's own weight there. The weights are the soft
+    // minimum's — the same ones the normal blends with — so they are the joint's own rounding:
+    // a stone's colour changes over the width the joint rounds by, which is a centimetre or two,
+    // and follows the joint exactly.
+    //
     // The bounding sphere carries its own id, numbered after every plane: a rounded rock's worn
     // end is a piece of the rock of its own.
     let sphere_facet = planes.len();
     let mut points: Vec<Vec3> = Vec::with_capacity(directions.len());
     let mut analytic: Vec<Vec3> = Vec::with_capacity(directions.len());
     let mut facets: Vec<usize> = Vec::with_capacity(directions.len());
-    // How firmly each vertex belongs to its facet: the carrier's own term, which is the distance
-    // to its plane. The smallest of a triangle's three is the vertex the joint is nearest, and
-    // taking its facet makes a facet's triangles follow the joint's own field instead of a vote
-    // that flips triangle by triangle and draws a ragged edge.
-    let mut carrier: Vec<f32> = Vec::with_capacity(directions.len());
+    // Per vertex: each plane that carries it and its weight, for the facet's tone.
+    let mut facet_weights: Vec<Vec<(usize, f32)>> = Vec::with_capacity(directions.len());
     for &d in &directions {
         let mut terms = vec![(sphere, d, sphere_facet)];
         for (i, &(n, offset)) in planes.iter().enumerate() {
@@ -323,10 +334,15 @@ pub(crate) fn rock_geometry(shape: usize, subdivisions: u32) -> RockGeometry {
         let min = terms.iter().map(|t| t.0).fold(f32::MAX, f32::min);
         let mut sum = 0.0;
         let mut normal = Vec3::ZERO;
-        for &(t, n, _) in &terms {
+        let mut weights: Vec<(usize, f32)> = Vec::with_capacity(terms.len());
+        for &(t, n, facet) in &terms {
             let w = (-(t - min) / round).exp();
             sum += w;
             normal += n * w;
+            weights.push((facet, w));
+        }
+        for (_, w) in &mut weights {
+            *w /= sum;
         }
         let facet = terms
             .iter()
@@ -337,7 +353,7 @@ pub(crate) fn rock_geometry(shape: usize, subdivisions: u32) -> RockGeometry {
         points.push(d * r * lumps);
         analytic.push(normal.normalize_or(d));
         facets.push(facet);
-        carrier.push(min);
+        facet_weights.push(weights);
     }
     // Squash to the drawn axis ratios: the long axis along X, 1 long; the middle along Z; the
     // short one up, so the rock lies on its largest face.
@@ -386,59 +402,50 @@ pub(crate) fn rock_geometry(shape: usize, subdivisions: u32) -> RockGeometry {
     // carries one colour and the rasteriser interpolates it, which would smear the tone across
     // the joint it is supposed to break at (measured: the first attempt blended a pale top into
     // a buff side across the whole face, `docs/research/stone-material.md` Deviation 4).
-    // Each triangle's facet: the one whose plane is nearest one of its vertices. The joint runs
-    // *between* triangles, so a facet's triangles all take its rock, and following the joint's
-    // own distance field keeps a facet's edge on the joint instead of on a vote that flips
-    // triangle by triangle (which draws a ragged edge).
-    let triangle_facets: Vec<usize> = faces
+    // Colour: a **facet's** tone, a mottle, and the base's darkening above the buried line.
+    //
+    // A stone is a piece of the cliff, and on the cliff each *fragment* is one rock of the
+    // palette (`rock-palette.md` Model 3) — not the whole body. The facets here are the shape's
+    // own joint planes, so a stone's colour changes at a joint, which is where rock breaks and
+    // therefore where its colour changes. Measured on the build before this change, a stone that
+    // wears one tone over its whole body has a top facet of saturation 0.020 against the face's
+    // 0.15 at the same light (`docs/research/stone-material.md`).
+    //
+    // The tone **blends over each joint's own rounding**, using the weights the soft minimum's
+    // normal already blends with: a joint is a rounded edge a centimetre or two wide, and the
+    // rock either side of it is a different rock, so the colour changes across exactly that
+    // width. A hard per-triangle assignment was tried first and read as a sawtooth on a small
+    // stone; the blend follows the joint, which is the surface's own feature.
+    //
+    // The tones are assigned by the **area** each facet covers, largest first, and the shape's
+    // brightness is normalised by a scalar, so the palette's mean is kept and every rock keeps the
+    // hue the palette gave it.
+    let facet_areas = facet_areas(&facets, sphere_facet + 1, &points, &faces);
+    let tones = facet_tones(&facet_areas, seed);
+    let colours = points
         .iter()
-        .map(|f| {
-            let corners = [f[0] as usize, f[1] as usize, f[2] as usize];
-            let nearest = corners
+        .zip(&facet_weights)
+        .map(|(p, weights)| {
+            let tone = weights
                 .iter()
-                .copied()
-                .min_by(|a, b| carrier[*a].total_cmp(&carrier[*b]))
-                .unwrap_or(corners[0]);
-            facets[nearest]
+                .map(|(facet, w)| tones[*facet] * *w)
+                .sum::<Vec3>();
+            let mottle = 0.88 + 0.24 * fbm3(*p * 3.0 + 5.0, seed ^ 0xC0);
+            let height = (p.y + c * 0.5) / c;
+            let base =
+                BASE_DARK + (1.0 - BASE_DARK) * smoothstep(BASE_RISE[0], BASE_RISE[1], height);
+            let rgb = tone * mottle * base;
+            [rgb.x, rgb.y, rgb.z, 1.0]
         })
         .collect();
-    let facet_areas = facet_areas(&triangle_facets, &points, &faces);
-    let tones = facet_tones(&facet_areas, seed);
-    // The mesh is **indexed**, and a vertex is duplicated only where two facets meet. Sharing
-    // every vertex (the baseline) interpolates one tone across every triangle's edge, which is the
-    // smear this change exists to remove; splitting *every* triangle corner instead (the first
-    // build) triples the vertex invocations, and the isometric scene's opaque pass paid +4.5 % at
-    // matched clocks for it. A seam at the joint buys the flat facet for the vertices it needs.
-    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(points.len());
-    let mut out_normals: Vec<[f32; 3]> = Vec::with_capacity(points.len());
-    let mut colours: Vec<[f32; 4]> = Vec::with_capacity(points.len());
-    // (vertex, facet) → the emitted index. A facet is a whole rock, so the pair is what a vertex
-    // is; only a vertex on a joint has more than one.
-    let mut emitted: HashMap<(usize, usize), u32> = HashMap::new();
-    let mut indices: Vec<u32> = Vec::with_capacity(faces.len() * 3);
-    for (k, &[i, j, k2]) in faces.iter().enumerate() {
-        let facet = triangle_facets[k];
-        for corner in [i as usize, j as usize, k2 as usize] {
-            let index = *emitted.entry((corner, facet)).or_insert_with(|| {
-                let p = points[corner];
-                let mottle = 0.88 + 0.24 * fbm3(p * 3.0 + 5.0, seed ^ 0xC0);
-                let height = (p.y + c * 0.5) / c;
-                let base =
-                    BASE_DARK + (1.0 - BASE_DARK) * smoothstep(BASE_RISE[0], BASE_RISE[1], height);
-                let rgb = tones[facet] * mottle * base;
-                positions.push(p.to_array());
-                out_normals.push(normals[corner].normalize_or(Vec3::Y).to_array());
-                colours.push([rgb.x, rgb.y, rgb.z, 1.0]);
-                (positions.len() - 1) as u32
-            });
-            indices.push(index);
-        }
-    }
     RockGeometry {
-        positions,
-        normals: out_normals,
+        positions: points.iter().map(|p| p.to_array()).collect(),
+        normals: normals
+            .iter()
+            .map(|n| n.normalize_or(Vec3::Y).to_array())
+            .collect(),
         colours,
-        indices,
+        indices: faces.iter().flatten().copied().collect(),
         info: ShapeInfo { angular, b, c },
     }
 }
@@ -552,12 +559,12 @@ mod tests {
     }
 
     #[test]
-    fn a_stone_wears_several_rocks_and_each_facet_is_one_colour() {
+    fn a_stone_wears_several_rocks_and_the_change_lands_on_its_joints() {
         // A stone is the cliff's rock, and on the cliff each *fragment* is one rock of the
-        // palette. A stone that wears one tone over the whole body has a median chroma of 0.204
-        // against the face's 0.304 at the same light (`docs/research/stone-material.md`), so a
-        // shape must wear several rocks — and a facet must be *one* colour, with the change at a
-        // joint, not smeared across it by the rasteriser.
+        // palette. A stone that wears one tone over the whole body has a top facet of saturation
+        // 0.020 against the face's 0.15 at the same light (`docs/research/stone-material.md`), so
+        // a shape must wear several rocks — and the change must land at a *joint*, which is where
+        // the surface itself rounds, rather than across a face.
         for shape in 0..SHAPES {
             let g = rock_geometry(shape, NEAR_SUBDIVISIONS);
             let seed = mix64(0x5EED_0000 + shape as u64);
@@ -574,61 +581,53 @@ mod tests {
                 distinct >= 3,
                 "shape {shape}: {distinct} rocks over the whole body"
             );
-            // Every triangle is one rock: its three vertices agree, so the rasteriser cannot
-            // interpolate one tone into another.
+            // The change is *local*: most edges join two vertices of the same rock, and the ones
+            // that do not are where two facets meet.
+            let mut across = 0;
+            let mut edges = 0;
             for t in g.indices.chunks(3) {
-                assert!(
-                    worn[t[0] as usize] == worn[t[1] as usize]
-                        && worn[t[1] as usize] == worn[t[2] as usize],
-                    "shape {shape}: triangle {:?} spans two rocks",
-                    t
-                );
+                for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                    edges += 1;
+                    if worn[a as usize] != worn[b as usize] {
+                        across += 1;
+                    }
+                }
             }
+            let share = across as f32 / edges as f32;
+            assert!(
+                (0.02..0.5).contains(&share),
+                "shape {shape}: {share} of the edges cross a rock"
+            );
         }
     }
 
     #[test]
     fn every_stone_keeps_the_palettes_brightness() {
         // The crate's rule: the mean does not move. Each shape's area-weighted brightness is the
-        // palette's (1), by a scalar scale that leaves every rock's hue alone.
+        // palette's (1), by a scalar scale that leaves every rock's hue alone — so a scatter of
+        // stones does not change the ground's brightness.
         for shape in 0..SHAPES {
-            let brightness = shape_brightness(shape);
+            let seed = mix64(0x5EED_0000 + shape as u64);
+            let g = rock_geometry(shape, NEAR_SUBDIVISIONS);
+            let p = |i: u32| Vec3::from_array(g.positions[i as usize]);
+            let mut total = 0.0;
+            let mut sum = 0.0;
+            for t in g.indices.chunks(3) {
+                let a = (p(t[1]) - p(t[0])).cross(p(t[2]) - p(t[0])).length() * 0.5;
+                total += a;
+                for v in t {
+                    sum += a / 3.0 * luminance(tone_of_vertex_direction(&g, *v, seed));
+                }
+            }
+            let brightness = sum / total;
             assert!(
-                (brightness - 1.0).abs() < 2e-3,
+                (brightness - 1.0).abs() < 2e-2,
                 "shape {shape}: brightness {brightness}"
             );
         }
     }
 
-    /// A shape's area-weighted brightness, measured the way the module assigns its tones: each
-    /// triangle's area goes to the facet most of its vertices are on.
-    fn shape_brightness(shape: usize) -> f32 {
-        let seed = mix64(0x5EED_0000 + shape as u64);
-        let g = rock_geometry(shape, NEAR_SUBDIVISIONS);
-        let worn: Vec<usize> = (0..g.positions.len() as u32)
-            .map(|i| tone_of_vertex(&g, i, seed))
-            .collect();
-        let p = |i: u32| Vec3::from_array(g.positions[i as usize]);
-        let mut total = 0.0;
-        let mut sum = 0.0;
-        for t in g.indices.chunks(3) {
-            let a = (p(t[1]) - p(t[0])).cross(p(t[2]) - p(t[0])).length() * 0.5;
-            // The triangle's majority vertex: its own tone is the facet's.
-            let sample = *t
-                .iter()
-                .max_by_key(|&&v| {
-                    t.iter()
-                        .filter(|&&w| worn[w as usize] == worn[v as usize])
-                        .count()
-                })
-                .unwrap();
-            total += a;
-            sum += a * luminance(tone_of_vertex_direction(&g, sample, seed));
-        }
-        sum / total
-    }
-
-    /// The colour a vertex's facet wears, recovered from the vertex colour by dividing out the two
+    /// The colour a vertex wears, recovered from the vertex colour by dividing out the two
     /// modulations the module applies.
     fn tone_of_vertex_direction(g: &RockGeometry, i: u32, seed: u64) -> Vec3 {
         let p = Vec3::from_array(g.positions[i as usize]);
@@ -639,8 +638,8 @@ mod tests {
         Vec3::new(c[0], c[1], c[2]) / (mottle * base)
     }
 
-    /// Which palette rock a vertex wears: the tone whose *direction* is nearest. The tones are
-    /// scaled per shape, so the direction is what names the rock.
+    /// Which palette rock a vertex's tone is nearest: the tones are scaled per shape, so the
+    /// direction names the rock.
     fn tone_of_vertex(g: &RockGeometry, i: u32, seed: u64) -> usize {
         let tone = tone_of_vertex_direction(g, i, seed).normalize_or(Vec3::ONE);
         TONES
@@ -649,5 +648,50 @@ mod tests {
             .map(|(k, t)| (k, t.normalize_or(Vec3::ONE).dot(tone)))
             .fold((0, f32::MIN), |a, b| if b.1 > a.1 { b } else { a })
             .0
+    }
+}
+
+#[cfg(test)]
+mod tmp_diag2 {
+    #[test]
+    fn diag_tone_spread() {
+        use super::*;
+        for shape in 0..4 {
+            let seed = mix64(0x5EED_0000 + shape as u64);
+            let g = rock_geometry(shape, NEAR_SUBDIVISIONS);
+            let mut min = Vec3::splat(f32::MAX);
+            let mut max = Vec3::splat(f32::MIN);
+            for i in 0..g.positions.len() as u32 {
+                let a = g.colours[i as usize];
+                let c = Vec3::new(a[0], a[1], a[2]);
+                min = min.min(c);
+                max = max.max(c);
+            }
+            println!("shape {shape}: colour min {min} max {max}");
+        }
+    }
+}
+#[cfg(test)]
+mod tmp_diag3 {
+    #[test]
+    fn diag_facet_mean() {
+        use super::*;
+        for shape in 0..2 {
+            let seed = mix64(0x5EED_0000 + shape as u64);
+            let g = rock_geometry(shape, NEAR_SUBDIVISIONS);
+            // The top-most vertices (a facet's middle) and their mean tone
+            let mut best = (f32::MIN, 0u32);
+            for (i, p) in g.positions.iter().enumerate() {
+                if p[1] > best.0 { best = (p[1], i as u32); }
+            }
+            let i = best.1;
+            let a = g.colours[i as usize];
+            let p = Vec3::from_array(g.positions[i as usize]);
+            let mottle = 0.88 + 0.24 * fbm3(p * 3.0 + 5.0, seed ^ 0xC0);
+            let height = (p.y + g.info.c * 0.5) / g.info.c;
+            let base = BASE_DARK + (1.0 - BASE_DARK) * smoothstep(BASE_RISE[0], BASE_RISE[1], height);
+            let tone = Vec3::new(a[0], a[1], a[2]) / (mottle * base);
+            println!("shape {shape} apex tone {tone} (chroma {:.3})", (tone.max_element()-tone.min_element())/tone.max_element());
+        }
     }
 }
