@@ -4879,3 +4879,20 @@ Host: the same Mac as iteration 65 (no Xvfb, no NVIDIA GPU, no route to `big`, n
 3. #41/#39 wetness as drawn and a footprint press threshold.
 4. A check that every `@if(NAME)` in `src/` appears in `VARIANTS`.
 5. Items 1-5 of iteration 63.
+
+## Iteration 67 — 2026-10-27 — `wesl-check` fails on an `@if` def no variant turns on
+
+Host: the same Mac as iterations 65-66 (no Xvfb, no NVIDIA GPU, no route to `big`, no `gh`). #38 still needs a GPU capture, so it stays first; this pass took item 4 of iteration 66, which is verifiable here.
+
+- **Change** (`tools/wesl-check/src/main.rs` only): `untested_defs` scans every `.wesl` under the root for `@if(...)` expressions and fails, naming the file, when a tested name is in no `VARIANTS` entry. It found a real hole at once: `UINT_SOURCE` (`terrain/heightmap.wesl`, set from `terrain/gpu.rs` for `R16Uint`) was compiled disabled in every variant. A seventh variant `uint-source` now compiles it.
+- **Verification**: seven variants, 44 modules each, `the WGSL is ok`, exit 0. Mutation: appending `@if(NOT_A_REAL_DEF)` to `heightmap.wesl` printed the new error and exit 1; restored.
+- **Not covered**: defs set only in Rust that no `@if` names are not checked; combinations are not exhaustive.
+- **Gates**: 1-5 not run (no crate code changed, no GPU). Visual and performance gates do not apply to a tool change.
+
+### Next five items, ranked
+
+1. **#38** `PathNetwork` Gravel/Stone/Snow draw nothing: `loop/iter-64` (`9761f22`) holds a fix never gated; gate on `big`, merge or redo.
+2. #42 ground detail amplitude / finest-feature knob.
+3. #41/#39 wetness as drawn and a footprint press threshold.
+4. Items 1-5 of iteration 63.
+5. A check that every def `gpu.rs`/`mod.rs` pushes as `ShaderDefVal` is in `VARIANTS`.

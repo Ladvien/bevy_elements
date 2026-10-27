@@ -432,7 +432,51 @@ const VARIANTS: &[(&str, &[&str])] = &[
         "prepass+ortho",
         &["PREPASS_PIPELINE", "UNCLIPPED_DEPTH_ORTHO_EMULATION", "VISIBILITY_RANGE_DITHER"],
     ),
+    // `terrain/heightmap.wesl` is built twice, with and without this def (`terrain/gpu.rs`).
+    ("uint-source", &["UINT_SOURCE"]),
 ];
+
+/// Every name an `@if(...)` in a `.wesl` file under `dir` tests, with the file that tests it.
+fn feature_names(dir: &Path, found: &mut Vec<(String, String)>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            feature_names(&path, found);
+        } else if path.extension().is_some_and(|e| e == "wesl")
+            && let Ok(text) = std::fs::read_to_string(&path)
+        {
+            let mut rest = text.as_str();
+            while let Some(at) = rest.find("@if(") {
+                rest = &rest[at + 4..];
+                let Some(end) = rest.find(')') else { break };
+                for name in rest[..end].split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+                    if !name.is_empty() {
+                        found.push((name.to_string(), path.display().to_string()));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A def no variant turns on is compiled disabled, so its branch reaches naga never.
+fn untested_defs(root: &Path) -> usize {
+    let mut found = Vec::new();
+    feature_names(root, &mut found);
+    found.sort();
+    found.dedup();
+    let mut failed = 0;
+    for (name, file) in found {
+        if !VARIANTS.iter().any(|(_, defs)| defs.contains(&name.as_str())) {
+            println!("{file}: `@if({name})` is in no variant of VARIANTS, so its branch is never compiled");
+            failed += 1;
+        }
+    }
+    failed
+}
 
 fn router(root: &Path) -> Router {
 
@@ -476,6 +520,7 @@ fn main() {
         println!("== variant {name} ({})", defs.join(", "));
         failed += check(root, defs);
     }
+    failed += untested_defs(root);
     if failed > 0 {
         eprintln!("{failed} module(s) failed");
         std::process::exit(1);
