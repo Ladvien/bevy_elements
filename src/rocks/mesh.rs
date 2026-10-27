@@ -3,6 +3,8 @@
 //! the edges first), roughened by a little noise, and squashed to the talus's axis ratios.
 //! Twelve shapes, two families: the talus's fresh angular blocks and the meadow's rounded ones.
 
+use std::sync::OnceLock;
+
 use bevy::asset::RenderAssetUsages;
 use bevy::math::{IVec3, Quat, Vec3};
 use bevy::mesh::{Indices, Mesh, PrimitiveTopology};
@@ -85,6 +87,10 @@ pub(crate) struct RockGeometry {
     pub colours: Vec<[f32; 4]>,
     pub indices: Vec<u32>,
     pub info: ShapeInfo,
+    /// The palette tone each of the shape's facets wears, indexed by facet id. It is a property
+    /// of the *shape*, not of the mesh: the near and the far mesh of one rock both read this
+    /// table, so the switch between them does not change a stone's colour.
+    pub tones: Vec<Vec3>,
 }
 
 /// An icosphere: the icosahedron's 12 vertices, each triangle split into four `subdivisions`
@@ -252,6 +258,28 @@ fn luminance(c: Vec3) -> f32 {
 /// The geometry of shape `shape` (0..[`SHAPES`]) on an icosphere of `subdivisions`. The same
 /// shape at two subdivisions has the same silhouette: the near and far meshes of one rock.
 pub(crate) fn rock_geometry(shape: usize, subdivisions: u32) -> RockGeometry {
+    rock_geometry_with(shape, subdivisions, Some(shape_tones(shape)))
+}
+
+/// The palette tone each of `shape`'s facets wears, computed **once per shape** from its
+/// canonical (finest) tessellation.
+///
+/// The table is a property of the shape: the tones go out by the *area* each facet covers, and
+/// those areas are measured on a mesh, so a table derived from whichever mesh is being built
+/// hands the near and the far mesh of one rock different rocks — measured at up to 19° of hue,
+/// which pops as the mesh switches at `22 · D` (`docs/research/stone-material.md` Outcome).
+/// Measuring on `NEAR_SUBDIVISIONS` always makes the table the shape's, and the near mesh — the
+/// one a player stands next to — keeps the colours it was signed off with.
+fn shape_tones(shape: usize) -> &'static [Vec3] {
+    static CACHE: [OnceLock<Vec<Vec3>>; SHAPES] = [const { OnceLock::new() }; SHAPES];
+    CACHE[shape]
+        .get_or_init(|| rock_geometry_with(shape, NEAR_SUBDIVISIONS, None).tones)
+        .as_slice()
+}
+
+/// The geometry of `shape`, wearing `tones` when a table is given and deriving one from its own
+/// facet areas when it is not (the canonical pass `shape_tones` runs).
+fn rock_geometry_with(shape: usize, subdivisions: u32, tones: Option<&[Vec3]>) -> RockGeometry {
     let seed = mix64(0x5EED_0000 + shape as u64);
     let draw = |k: u64| unit(mix64(seed ^ k.wrapping_mul(0x2545_F491_4F6C_DD1D)));
     let range = |r: [f32; 2], k: u64| r[0] + (r[1] - r[0]) * draw(k);
@@ -406,23 +434,6 @@ pub(crate) fn rock_geometry(shape: usize, subdivisions: u32) -> RockGeometry {
     // wears one tone over its whole body has a median chroma of 0.204 against the face's 0.304
     // at the same light (`docs/research/stone-material.md`).
     //
-    // The tones are assigned by the **area** each facet covers, largest facet first, and the
-    // shape's brightness is normalised by a scalar, so the palette's mean is kept and each rock
-    // keeps the hue the palette gave it.
-    //
-    // A facet is **one colour**, so its vertices are split from its neighbours': a shared vertex
-    // carries one colour and the rasteriser interpolates it, which would smear the tone across
-    // the joint it is supposed to break at (measured: the first attempt blended a pale top into
-    // a buff side across the whole face, `docs/research/stone-material.md` Deviation 4).
-    // Colour: a **facet's** tone, a mottle, and the base's darkening above the buried line.
-    //
-    // A stone is a piece of the cliff, and on the cliff each *fragment* is one rock of the
-    // palette (`rock-palette.md` Model 3) — not the whole body. The facets here are the shape's
-    // own joint planes, so a stone's colour changes at a joint, which is where rock breaks and
-    // therefore where its colour changes. Measured on the build before this change, a stone that
-    // wears one tone over its whole body has a top facet of saturation 0.020 against the face's
-    // 0.15 at the same light (`docs/research/stone-material.md`).
-    //
     // The tone **blends over each joint's own rounding**, using the weights the soft minimum's
     // normal already blends with: a joint is a rounded edge a centimetre or two wide, and the
     // rock either side of it is a different rock, so the colour changes across exactly that
@@ -431,9 +442,13 @@ pub(crate) fn rock_geometry(shape: usize, subdivisions: u32) -> RockGeometry {
     //
     // The tones are assigned by the **area** each facet covers, largest first, and the shape's
     // brightness is normalised by a scalar, so the palette's mean is kept and every rock keeps the
-    // hue the palette gave it.
-    let facet_areas = facet_areas(&facets, sphere_facet + 1, &points, &faces);
-    let tones = facet_tones(&facet_areas, seed);
+    // hue the palette gave it. The table is the *shape's* — [`shape_tones`] derives it once from
+    // the near mesh and the far mesh wears the same one, so the mesh switch is not a colour
+    // change.
+    let tones = match tones {
+        Some(tones) => tones.to_vec(),
+        None => facet_tones(&facet_areas(&facets, sphere_facet + 1, &points, &faces), seed),
+    };
     let colours = points
         .iter()
         .zip(&facet_weights)
@@ -459,6 +474,7 @@ pub(crate) fn rock_geometry(shape: usize, subdivisions: u32) -> RockGeometry {
         colours,
         indices: faces.iter().flatten().copied().collect(),
         info: ShapeInfo { angular, b, c },
+        tones,
     }
 }
 
@@ -636,6 +652,25 @@ mod tests {
                 (brightness - 1.0).abs() < 2e-2,
                 "shape {shape}: brightness {brightness}"
             );
+        }
+    }
+
+
+    #[test]
+    fn a_rocks_two_meshes_wear_the_same_rock() {
+        // The near and the far mesh of a stone switch at 22 · D. The palette table is the
+        // *shape's*, so the switch is a change of triangle count and nothing else: every facet
+        // wears the same tone in both meshes, to the bit. A table derived from whichever mesh was
+        // being built instead gave the far mesh other rocks — up to 19° of hue apart — and the
+        // stone changed colour where its mesh switched.
+        for shape in 0..SHAPES {
+            let near = rock_geometry(shape, NEAR_SUBDIVISIONS);
+            let far = rock_geometry(shape, FAR_SUBDIVISIONS);
+            assert_eq!(near.tones.len(), far.tones.len(), "shape {shape}: facet count");
+            for (facet, (n, f)) in near.tones.iter().zip(&far.tones).enumerate() {
+                assert_eq!(n, f, "shape {shape}: facet {facet} wears {f} in the far mesh, {n} near");
+            }
+            assert!((near.info.b - far.info.b).abs() < 1e-6 && (near.info.c - far.info.c).abs() < 1e-6);
         }
     }
 
