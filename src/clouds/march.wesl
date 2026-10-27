@@ -244,13 +244,13 @@ fn ground_haze(ground_m: f32, sky: vec3<f32>) -> vec4<f32> {
     return vec4<f32>(colour * (1.0 - t), t);
 }
 
-/// The sky's own radiance `HORIZON_BAND` above the horizon in the ray's azimuth, luminance: the
-/// air a below-horizon ray converges on (`ground_haze`). Read from the sky cube, which holds the
-/// atmosphere (and the cloud, once composed), so a slab that fills the frame past a finite
-/// terrain is the sky in *that column* rather than one mean over the whole horizon: a dusk
-/// horizon is not the same colour every way round, and a mean of it is a band of its own
-/// (`docs/research/horizon-colour.md`). The direction is raised above the horizon so the sample
-/// is sky and not the cube's own ground.
+/// The sky's own radiance at the horizon in the ray's azimuth: the air a below-horizon ray
+/// converges on (`ground_haze`). Read from the sky cube, which holds the atmosphere (and the
+/// cloud, once composed), so a slab that fills the frame past a finite terrain is the sky in
+/// *that column* rather than one mean over the whole horizon: a dusk horizon is not the same
+/// colour every way round, and a mean of it is a band of its own (`docs/research/horizon-colour.md`).
+/// The two taps are raised above the horizon so they are sky and not the cube's own ground, and
+/// the radiance at zero elevation is extrapolated from them.
 fn horizon_sky(dir: vec3<f32>) -> vec3<f32> {
     let flat = vec3<f32>(dir.x, 0.0, dir.z);
     let along = select(vec3<f32>(0.0, 0.0, -1.0), normalize(flat), length(flat) > 1e-4);
@@ -260,15 +260,34 @@ fn horizon_sky(dir: vec3<f32>) -> vec3<f32> {
     // The cube is lit by the sun light, which carries only the cloud's beam `T̄`, so it holds the
     // clear sky dimmed to that; `sky_gain` (`params.sky.x`) restores the dome to the total light,
     // exactly as the composite restores a sky pixel (`clouds.md` Deviation 25). The night sky's
-    // own light lies behind the atmosphere, so it is added rather than gained (`params.atmo.w`).
-    return textureSampleLevel(sky_probe, smp_clamp, cube, 0.0).rgb * params.sky.x
-        + vec3<f32>(params.atmo.w) * NIGHT_SKY_COLOUR;
+    // own light is **not** added here, though the environment cube adds it: that term exists so
+    // the lighting cube is not black at night, and it is not radiance of the sky the screen draws
+    // — read back into the slab it drew a grey sea under a black sky (measured 9.6, 12.4, 15.5 DN
+    // against a sky of 2, 1, 1 at midnight).
+    let lower = textureSampleLevel(sky_probe, smp_clamp, cube, 0.0).rgb;
+    // Extrapolate down to the horizon: the sample sits `HORIZON_SAMPLE_BAND` up the atmosphere's
+    // gradient, which is steep in twilight (the Earth's shadow rising), and reading it as the
+    // horizon's own colour drew a bright band above the slab at dusk. The sky is near-linear over
+    // a couple of degrees, so the radiance at zero elevation is `2 · r(h) − r(2h)`.
+    let upper_world =
+        along * cos(2.0 * HORIZON_SAMPLE_BAND) + vec3<f32>(0.0, sin(2.0 * HORIZON_SAMPLE_BAND), 0.0);
+    let upper = textureSampleLevel(
+        sky_probe,
+        smp_clamp,
+        vec3<f32>(upper_world.x, upper_world.y, -upper_world.z),
+        0.0,
+    )
+    .rgb;
+    return max(lower * 2.0 - upper, vec3<f32>(0.0)) * params.sky.x;
 }
 
 /// Elevation of the band a below-horizon ray reads the sky from, rad: 0.5°. The cube's texel at
 /// the horizon of a 128² face spans about 0.7°, so a fetch closer than that bilinearly averages
 /// the cube's own ground in and the slab goes dark (measured at 0.1°: 12.9 against a sky of 14.2).
-/// The cost of sampling 0.5° up the atmosphere's gradient is 1–2 % (below).
+/// The horizon's own value is extrapolated from the taps here and at twice this elevation; a wider
+/// pair is worse, not better, because the sky's gradient steepens toward the horizon as the sun
+/// sets, so extrapolating from 1° and 2° overshot it (measured 5.8 DN bright at 20 h against 3.1
+/// with this pair).
 const HORIZON_SAMPLE_BAND: f32 = 0.0087;
 
 /// Where along a ray the far veil's cloud lies: about one build-up length past where it starts.
