@@ -233,10 +233,44 @@ fn aerial_along(dir: vec3<f32>, depth: f32, o_r: f32, sky: vec3<f32>) -> Aerial 
 /// planet within the march range would otherwise show through as a dark band at the horizon
 /// (measured 68 DN on `ground_cover` at 6 m eye). Luminance: the fog colour is display-referred,
 /// so it is divided by the camera's exposure.
-fn ground_haze(ground_m: f32) -> vec4<f32> {
+fn ground_haze(ground_m: f32, sky: vec3<f32>) -> vec4<f32> {
+    // The weather's air over the far field, as the composite fogs a sky pixel (`air.x` is the
+    // extinction above clear air, so a clear sky leaves this exactly 0): what the slab shows is
+    // the atmosphere in that column seen through the weather, converging on the fog colour as
+    // the weather thickens — the same law the ground below obeys.
+    let air = 1.0 - exp(-params.air.x * MAX_MARCH_M);
+    let colour = mix(sky, params.haze.xyz / max(params.probe.x, 1e-30), air);
     let t = exp(-params.haze.w * max(ground_m, MAX_MARCH_M));
-    return vec4<f32>(params.haze.xyz / max(params.probe.x, 1e-30) * (1.0 - t), t);
+    return vec4<f32>(colour * (1.0 - t), t);
 }
+
+/// The sky's own radiance `HORIZON_BAND` above the horizon in the ray's azimuth, luminance: the
+/// air a below-horizon ray converges on (`ground_haze`). Read from the sky cube, which holds the
+/// atmosphere (and the cloud, once composed), so a slab that fills the frame past a finite
+/// terrain is the sky in *that column* rather than one mean over the whole horizon: a dusk
+/// horizon is not the same colour every way round, and a mean of it is a band of its own
+/// (`docs/research/horizon-colour.md`). The direction is raised above the horizon so the sample
+/// is sky and not the cube's own ground.
+fn horizon_sky(dir: vec3<f32>) -> vec3<f32> {
+    let flat = vec3<f32>(dir.x, 0.0, dir.z);
+    let along = select(vec3<f32>(0.0, 0.0, -1.0), normalize(flat), length(flat) > 1e-4);
+    let world = along * cos(HORIZON_SAMPLE_BAND) + vec3<f32>(0.0, sin(HORIZON_SAMPLE_BAND), 0.0);
+    // Cubemaps are left-handed: the cube direction is the world's with z negated.
+    let cube = vec3<f32>(world.x, world.y, -world.z);
+    // The cube is lit by the sun light, which carries only the cloud's beam `T̄`, so it holds the
+    // clear sky dimmed to that; `sky_gain` (`params.sky.x`) restores the dome to the total light,
+    // exactly as the composite restores a sky pixel (`clouds.md` Deviation 25). The night sky's
+    // own light lies behind the atmosphere, so it is added rather than gained (`params.atmo.w`).
+    return textureSampleLevel(sky_probe, smp_clamp, cube, 0.0).rgb * params.sky.x
+        + vec3<f32>(params.atmo.w) * NIGHT_SKY_COLOUR;
+}
+
+/// Elevation of the band a below-horizon ray reads the sky from, rad: 0.1°. As near the horizon
+/// as the sky cube resolves — its texel at the horizon of a 128² face spans about 0.7°, and a
+/// bilinear fetch there averages those texels — so the slab is the sky's own limit at the
+/// horizon and not a sample taken up a gradient. Measured: 0.5° read 1–2 % bright, this reads
+/// under 1 %.
+const HORIZON_SAMPLE_BAND: f32 = 0.00175;
 
 /// Where along a ray the far veil's cloud lies: about one build-up length past where it starts.
 fn veil_depth(shell: vec2<f32>) -> f32 {
@@ -253,7 +287,7 @@ fn veil_depth(shell: vec2<f32>) -> f32 {
 fn far_veil(dir: vec3<f32>, shell: vec2<f32>, o_r: f32, air: Aerial, sky_e: vec3<f32>) -> vec4<f32> {
     let ground = ground_before_layer(o_r, dir.y, shell.x, params.camera.w);
     if ground > 0.0 {
-        return ground_haze(ground);
+        return ground_haze(ground, horizon_sky(dir));
     }
     let t_start = max(shell.x, FADE_START_M);
     let length = shell.y - t_start;
