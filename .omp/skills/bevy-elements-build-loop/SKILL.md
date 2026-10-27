@@ -77,6 +77,42 @@ You do all the work yourself, including looking at the images and judging them. 
 
 Write down concrete findings with locations (file and region `x,y,w,h` or pixel coordinates) and severity (blocker / noticeable / cosmetic), not impressions: banding, seams, popping, flicker, ghosting, aliasing, clipping, wrong colour, flat lighting, unreadable detail. Judge beauty separately from correctness: composition, colour harmony, contrast, depth cues, lighting realism, atmosphere. Keep the findings in `/tmp/iN/findings.md`; they feed section 4 and the log.
 
+## Filed issues come before new features
+
+**A filed issue is a consumer telling you what broke, which outranks anything this pass invented.**
+Before you pick an item, list the repository's open issues and triage them:
+
+```sh
+gh issue list --repo Ladvien/bevy_elements --state open --limit 100 \
+  --json number,title,labels,createdAt --template '{{range .}}#{{.number}} {{.title}} [{{.labels}}]{{"\n"}}{{end}}'
+```
+
+(If `gh` is absent, the same list is
+`https://api.github.com/repos/Ladvien/bevy_elements/issues?state=open&per_page=100`.)
+
+Then, in this order:
+
+1. **A bug issue is the pass's item, ahead of any enhancement.** Anything reporting wrong behaviour —
+   a crash, a panic, a visual artifact, a value that is implausible, a documented promise that is not
+   kept — is a bug. Take the oldest such issue that is still reproducible, and say why it beats the
+   others.
+2. **An enhancement issue is ranked with your own candidates**, not above them: an issue is one
+   person's idea of what matters, and the ranking below still decides. Note the issue number beside
+   the item so the rank list records that it came from outside.
+3. **Close the loop.** An issue your pass fixes is referenced in the commit body (`Fixes #N`) **and**
+   in the report, so the next pass can see it was addressed. Do not close an issue you did not fix,
+   and do not close one whose fix this pass did not verify.
+4. **Re-check a release issue, do not act on it.** An issue asking to publish or bump a version is
+   the owner's call, never a loop's (see the release rule above). Record it as seen and skip it.
+
+**When the API fallback answers `403` or `429`** (rate limit — 60 requests/hour per IP unauthenticated,
+shared by everything on this network), do not treat it as "no issues": write one line saying the list
+could not be read and continue. Never spend a second call to retry it in the same pass, and never infer
+from silence that nothing is filed.
+
+**An empty issue list costs nothing:** if it is empty or `gh` is unreachable, write one line saying so
+and continue — never spend a pass on the lookup.
+
 ## 4. Pick the single most valuable item
 
 Rank candidates from your findings, the loop log's backlog and the extra instructions, always asking what matters most to a game developer who will ship this:
