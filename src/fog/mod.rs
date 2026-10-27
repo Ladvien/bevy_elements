@@ -2,19 +2,23 @@
 //! whose density a compute kernel writes every frame. See `docs/research/fog.md`.
 
 mod gpu;
+mod horizon;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::asset::embedded_asset;
 use bevy::camera::Exposure;
 use bevy::light::FogVolume;
+use bevy::light::Atmosphere;
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, ShaderType, TextureDimension, TextureFormat};
+use bevy::render::storage::ShaderBuffer;
 
 use crate::celestial::{CelestialFrame, CloudLight, SunState, cloud_light, dusk_tint, scene_illuminance};
 use crate::climate::{Weather, WeatherDirector, WeatherPreset};
 use crate::clouds::{CloudShadows, CloudWeatherMap};
 use crate::gpu::grid::storage_volume;
+use crate::gpu::readback::{Readbacks, decode};
 use crate::plugin::{ElementsCamera, ElementsSystems, ElementsUnits, ElementsView, ensure_gpu_core};
 use crate::precipitation::model::{
     marshall_palmer_lambda, precipitation_split, rain_extinction, snow_extinction,
@@ -269,23 +273,90 @@ impl Plugin for FogPlugin {
     fn build(&self, app: &mut App) {
         ensure_gpu_core(app);
         embedded_asset!(app, "density.wesl");
+        embedded_asset!(app, "horizon.wesl");
         app.init_resource::<FogRuntime>()
             .init_resource::<WeatherDirector>()
             .init_resource::<CelestialFrame>()
-            .add_systems(Startup, spawn_volume)
+            .add_systems(Startup, (spawn_volume, spawn_horizon))
             .add_systems(
                 Update,
                 (
                     // The clouds move the weather map's origin there; the fog kernel samples it.
-                    update_volume.after(crate::clouds::CloudGpuUpdate),
+                    update_volume
+                        .after(crate::clouds::CloudGpuUpdate)
+                        .in_set(ElementsSystems::Simulation),
                     // The composite reads the camera's fog colour; write it first, or the sky
                     // lags the ground by a frame (invisible except on a weather change).
-                    update_distance_fog.before(crate::clouds::CloudGpuUpdate),
-                )
-                    .in_set(ElementsSystems::Simulation),
+                    update_distance_fog
+                        .before(crate::clouds::CloudGpuUpdate)
+                        .in_set(ElementsSystems::Simulation),
+                    update_horizon_params.in_set(ElementsSystems::Simulation),
+                    read_horizon.in_set(ElementsSystems::Readback),
+                ),
             );
         gpu::plugin(app);
+        horizon::plugin(app);
     }
+}
+
+/// Spawn the buffer the horizon kernel fills and this frame's parameters.
+fn spawn_horizon(mut commands: Commands, mut buffers: ResMut<Assets<ShaderBuffer>>) {
+    let empty = vec![Vec4::ZERO; horizon::HORIZON_AZIMUTHS as usize];
+    let samples = crate::gpu::grid::storage_buffer(&mut buffers, "elements_fog_horizon", empty);
+    commands.insert_resource(horizon::HorizonGpu {
+        samples,
+        inner_radius_m: 6_360_000.0,
+        camera_radius_m: 6_360_000.0,
+        active: false,
+    });
+}
+
+/// The planet's radius for the kernel: the crate's own `Atmosphere`, so a game that replaced it
+/// gets its own horizon, and the followed camera's radius from the planet's centre. Inactive
+/// without an atmosphere — there is then no sky to measure and the analytic hue stands.
+fn update_horizon_params(
+    view: Res<ElementsView>,
+    atmospheres: Query<&Atmosphere>,
+    mut horizon: ResMut<horizon::HorizonGpu>,
+) {
+    let Some(atmosphere) = atmospheres.iter().next() else {
+        horizon.active = false;
+        return;
+    };
+    horizon.inner_radius_m = atmosphere.inner_radius;
+    // `ElementsView::eye` is the camera in the metre frame; the altitude above the ground is
+    // negligible against a 6 360 km planet, so the eye's height over the origin is it.
+    horizon.camera_radius_m = atmosphere.inner_radius + view.eye.y.max(0.0);
+    horizon.active = true;
+}
+
+/// Read the kernel back into the snapshot: the sky's own radiance at the horizon, cd/m². The mean
+/// is taken here rather than in the shader (`horizon.wesl`).
+fn read_horizon(
+    horizon: Option<Res<horizon::HorizonGpu>>,
+    mut readbacks: Readbacks,
+) {
+    let Some(horizon) = horizon else {
+        return;
+    };
+    if !horizon.active {
+        return;
+    }
+    readbacks.request("horizon", horizon.samples.clone(), |bytes, snapshot| {
+        let Some(values) = decode::<Vec4>(bytes) else {
+            return;
+        };
+        let (sum, count) = values
+            .iter()
+            .filter(|v| v.is_finite() && v.w > 0.5)
+            .fold((Vec3::ZERO, 0u32), |(s, n), v| {
+                (s + Vec3::new(v.x, v.y, v.z), n + 1)
+            });
+        if count == 0 {
+            return;
+        }
+        snapshot.horizon = Some(sum / count as f32);
+    });
 }
 
 fn spawn_volume(
@@ -498,6 +569,7 @@ fn update_distance_fog(
     view: Res<ElementsView>,
     units: Res<ElementsUnits>,
     shadows: Option<Res<CloudShadows>>,
+    snapshot: Option<Res<EnvironmentSnapshot>>,
     mut cameras: FogCameras,
 ) {
     // Fog colour is added after exposure (bevy_pbr fog.wesl), so it carries the scene's
@@ -509,13 +581,22 @@ fn update_distance_fog(
         cloud_light(weather.cloud_cover, shadows.as_deref()),
     ) / std::f32::consts::PI;
     let hue = fog_hue(sun.altitude_deg, weather.dust);
+    // The sky's own radiance just above the horizon, once the kernel has measured it: the fog
+    // must be the colour of the sky behind it, not a hue that happens to be near it
+    // (`docs/research/horizon-colour.md`). Until the first readback, and without an atmosphere
+    // to measure, the analytic hue stands.
+    let measured = snapshot.as_ref().and_then(|s| s.horizon);
     for (entity, dressing, mut fog, exposure, projection, transform) in &mut cameras {
         if !dressing.distance_fog {
             continue;
         }
         let exposure = exposure.copied().unwrap_or_default().exposure();
-        let brightness = luminance * exposure;
-        let c = hue * brightness;
+        let c = match measured {
+            // The measured radiance is unexposed (`sky_view_lut`'s own units), and the fog colour
+            // is added after exposure, so it takes the camera's.
+            Some(sky) => sky * exposure,
+            None => hue * (luminance * exposure),
+        };
         fog.color = Color::linear_rgb(c.x, c.y, c.z);
         fog.falloff = match projection {
             Some(Projection::Orthographic(o)) => {

@@ -38,6 +38,10 @@ pub struct EnvironmentSnapshot {
     pub(crate) cover: Option<CoverSnapshot>,
     /// The trail field's deepest points at the last readback, if trails run.
     pub(crate) trails: Option<TrailSnapshot>,
+    /// The sky's own radiance just above the horizon at the last readback, linear cd/m²
+    /// unexposed: `DistanceFog`'s colour, so the fog, the far field and the space past a finite
+    /// terrain read the sky that is behind them (`docs/research/horizon-colour.md`).
+    pub(crate) horizon: Option<Vec3>,
     /// Real time of the last completed readback.
     pub(crate) updated_at: Option<Duration>,
 }
