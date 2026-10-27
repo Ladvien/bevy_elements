@@ -4691,3 +4691,139 @@ As `docs/research/stone-material.md`: Papavasiliou 2015 (the score-weighted pale
 3. **Stylistic variants of the ground** (the user's ask): golem-generated texture sets each taking its own colour through `with_colour`, with a capture tour.
 4. **Textures on the rock**: a triplanar PBR detail over the procedural rock material, settable like the ground's.
 5. **Restore a capture host with GPU timestamps.** `big` is the only machine that reports `main_opaque_pass_3d`/`early prepass`, and it is down: every cost claim since iteration 57 is unverifiable. Either bring `big` back or make the benchmark report a clock-stable frame-time ratio on Metal.
+
+## Iteration 63 — 2026-10-27 — The horizon slab at night and at dusk, re-verified on `big`
+
+**Commits:** the inherited implementation and its note (already on `main` as `e19ce0c` + `262207d`); this
+pass's GPU-test fix, its doc corrections, the two new AGENTS traps, the changelog, and this log.
+**Issue:** none. **Sibling repos:** none.
+
+**This pass chose no new item.** `main` carried an uncommitted tree from a killed pass — the
+`horizon_sky` correction to iteration 62's work, matching snapshot
+`refs/wiggum/pass-10-final-20261027-131331`. Per the loop's rule this pass verified it end to end rather
+than starting anything else. It found one shipping-visible defect (a night grey sea, inherited) plus a
+test that crashes the suite, fixed both, and replaced every number the killed pass had written.
+
+**`big` is back.** `ping` answers, `nvidia-smi` reads P2 at 1860–1920 MHz, and
+`bench_elements` reports `main_opaque_pass_3d`/`early prepass` again — so this is the first pass since
+iteration 56 whose cost numbers are real. Iteration 58's backlog item 5 ("restore a capture host with
+GPU timestamps") is closed by that fact alone.
+
+### Why the item ranked first (re-checked)
+
+`fog.md` Validation 12 and iteration 61's finding: a frame whose ground stops before the horizon draws
+a perfectly uniform slab (per-channel sd 0.00–0.5 DN over thousands of pixels) in the camera's
+`DistanceFog` colour. Iteration 62's inherited work reads the sky cube instead. The runner-up was the
+weather's precipitation climatology (iteration 49), a calibration gap invisible without
+instrumenting the record.
+
+### What changed
+
+- **The night fill is not read back as radiance** (BLOCKER, fixed here). `horizon_sky` added
+  `params.atmo.w · NIGHT_SKY_COLOUR`, which exists so the *lighting* cube is not black at midnight.
+  Read into the slab it drew a flat grey sea: **(9.4, 12.5, 15.5) DN under a (1.3, 1.0, 1.0) sky,
+  per-channel sd 0.00**, across the whole lower half of every night frame. Now (0.7, 0.7, 0.7)
+  against (1.9, 1.0, 1.0).
+- **The GPU test's degenerate case** (fixed here). `the_air_past_the_ground_is_the_sky_in_its_own_column`
+  **FAILED** as inherited: at midnight all three bands are exactly `0.0`, and
+  `(R − B) / max(luminance, 1e-9)` turned a `−2.8e-9` blue residue into a warmth of **−2.79**. The
+  test now asserts the invariant that holds there — a black sky leaves a black slab — and passes.
+- **The documentation's numbers were three mutually inconsistent sets.** The shader comment claimed
+  the 1°/2° pair "overshot 5.8 DN at 20 h against 3.1"; the killed log claimed "12.7 DN with 1°/2°
+  and 4.6 DN with 0.5°/1°"; the note's parameter table said the band is 1.0° while the constant is
+  0.0087 rad = 0.5°. All three are replaced by this pass's measurements (below), and the note's
+  Deviations now state the shipped pair and cite the numbers.
+
+### Measurements
+
+Slab (rows 377-491) against the sky 4-12 rows above the terrain's edge (row 371), `terrain_tour`,
+1280 × 720, `ELEMENTS_FRAMES=200`, on `big`, 400 m above the plains looking level.
+
+**The honest baseline is `f1046f2`, before the whole feature** (`/tmp/i63/pre/`), not the killed pass's
+tree: the inherited work was already the fix. Against it this item closes a 10-90 DN band at every
+hour, not just the night one:
+
+| frame | `f1046f2` (pre-feature) | this tree | before → after |
+|---|---|---|---|
+| `hi_h6` dawn | 208.0 211.4 215.1 (Δ **26.7**) | 235.3 234.6 226.3 | 26.7 → **0.7** |
+| `hi_h9` | 224.1 226.9 229.8 (Δ 9.8) | 215.7 224.1 226.0 | 9.8 → **1.4** |
+| `hi_h12` noon | 224.0 226.8 229.7 (Δ **22.9**) | 203.0 214.0 218.5 | 22.9 → **2.0** |
+| `hi_h17` | 224.1 226.9 229.9 (Δ 7.9) | 230.7 235.4 233.3 | 7.9 → **0.9** |
+| `hi_h18.5` | 193.2 197.0 200.8 (Δ **37.9**) | 232.0 228.4 215.5 | 37.9 → **1.3** |
+| `hi_h19.5` | 133.2 114.1 100.7 (Δ **90.1**) | 226.9 178.6 156.2 | 90.1 → **4.3** |
+| `hi_h20` after sunset | 123.8 110.2 101.7 (Δ 15.9) | 136.8 120.0 117.3 | 15.9 → **2.2** |
+| `hi_h22` | 49.9 51.6 53.5 (Δ 9.9) | 57.5 62.3 63.1 | 9.9 → **1.1** |
+| **`hi_h0.5` midnight** | 10.1 10.6 11.2 (Δ **10.2**, sd 0.00) | 0.7 0.7 0.7 (Δ 1.2) | 10.2 → **1.2** |
+
+The pre-feature slab is the cold analytic fog hue at every hour — too blue at noon, too grey at dusk,
+and the grey sea at midnight — which is what `docs/research/horizon-colour.md`'s finding table measured
+on `mac_air`.
+
+Against the **intermediate** tree (`da4c1c3`, i.e. the killed pass's work before this pass's two
+fixes), the delta this pass contributed is the night and the dusk:
+
+| frame | `da4c1c3` | this tree |
+|---|---|---|
+| `hi_h19.5` | 6.9 | **4.3** |
+| `hi_h20` | 7.7 | **2.2** |
+| `hi_h22` | 3.8 | **1.1** |
+| **`hi_h0.5`** | **14.5** (9.4 12.5 15.5, sd 0.00) | **1.2** (0.7 0.7 0.7) |
+
+- **The tap pair was measured, not inherited.** Building the same tree with `HORIZON_SAMPLE_BAND` =
+  0.0175 rad (taps at 1° and 2°) reads **3.2 DN at 20 h** and **6.9 DN at 19.5 h** against the shipped
+  0.5°/1° pair's **2.2** and **4.3**, and 2.5 against 2.0 at noon (`/tmp/i63/wide/`). The narrower
+  pair is the better one; the shader comment's direction was right and the killed log's number was
+  wrong.
+- **Cost** (`bench_elements`, 4K mountains, High, interleaved, three trials per side, clocks logged
+  every second). The opaque pass over the early prepass, which cancels the P-state:
+  base 66.5, 67.1, 66.5; new 67.0, 65.6, 67.4 — **within ±1 %**. `elements_clouds_composite`:
+  0.106-0.109 ms base against 0.105-0.106 ms new. Clocks: base P2 1860 MHz (all three), new P2 1920,
+  1920, 1875 — the new side sat *higher*, so the ratio is the honest comparison and the change is
+  free. (Per AGENTS, the `min` column reads 0.000 on this host; the means are what is compared.)
+- Tests: **no new test file**; the existing GPU test gained the midnight case (inherited) and now
+  passes. Full gate set below.
+
+### The critique and the verdict
+
+`/tmp/i63/critique.md`, written before the verdict. **GREAT** for the slab dawn-to-dusk, **GREAT** for
+the night (it was FAIL), **GREAT** under fog/snow/rain (unchanged where the air law saturates both
+sides), **GREAT** above real terrain (`high900`: 1.3 → 1.2 DN, neutral as it must be).
+
+Remaining flaw, logged rather than hidden: at 20 h the slab still ends on a 2.2 DN line at the
+geometric horizon, because the sky's gradient steepens toward zero elevation faster than a 128² cube
+face (0.7°/texel) can resolve. Present in the baseline too; the next item.
+
+### Gates
+
+1. `cargo build --release`, `cargo test` (all suites, 21 doctests), `cargo build --examples
+   --all-features` — pass.
+2. `cargo clippy --all-targets --all-features -- -D warnings` — pass.
+3. `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features` — pass.
+4. `cargo build --lib --target wasm32-unknown-unknown` — pass.
+5. GPU, one process per module: integration binaries pass, `clouds` **11**, `terrain` **10**,
+   `cover` **8**, `dust` **6**, `the_horizon_sky` **1**, `the_air_past_the_ground_is_the_sky_in_its_own_column`
+   **1** (all 15 cases, after the fix).
+6. `tools/wesl-check`: every crate module it can compile passes; the 11 Bevy-importing modules report
+   "not checked" (issue #37 — a known gap in the checker, not this change).
+
+### Sources
+
+As `docs/research/horizon-colour.md`: Wenzel 2006 (corpus `s2006-advances-materials-11`, §6.4-6.5),
+Decima's height fog (corpus `s2017-advances-pdf-slides-2`), Hillaire 2020 (`10.1111_cgf.14050`),
+Bevy 0.20's `atmosphere/{render_sky,sky_view_lut,functions}.wesl`, `fog.md` Deviations 3-5 and
+Validation 12, `clouds.md` Deviations 28-29. Home-still preflight: healthy (18 258 documents, distill
+idle on CUDA, scribe idle). No new document was needed, so nothing was indexed — `Pending index` in
+the note stands unchanged.
+
+### The next five items, ranked
+
+1. **`DistanceFog::color` itself, on distant terrain** (`fog.md` Validation 12): the slab is fixed, but
+   a ridge 1.5 km out is still fogged by the analytic hue and still bands against the sky at dusk.
+2. **The horizon's residual line at 19-20 h**: the cube's 0.7° texel cannot resolve the twilight
+   gradient. A taller probe face, or an analytic extrapolation with the gradient's own curvature,
+   would close the last 2-4 DN.
+3. **The weather's precipitation climatology** (iteration 49): the temperate preset rains 2-13× an
+   observed wet station's totals on ~1.5× its wet days.
+4. **The block network's distance look** (iteration 58): the talus at 40 m reads as a shingle fan.
+5. **Stylistic variants of the ground** (the user's ask): golem-generated texture sets each taking its
+   own colour through `with_colour`, with a capture tour.
