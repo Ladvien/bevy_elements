@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+### Added
+
+- **`TerrainLook::detail` and `TerrainLook::finest_m` set the ground's micro-detail (#42).** `detail` (default 1) multiplies the albedo grain, the bump relief and the clump the turf palette takes from the same noise; 0 leaves the palette's colour field and the terrain's own shape. `finest_m` (default `None`) is the smallest feature the host's camera resolves, in metres per pixel: the band limit's footprint is floored with it, so the 9 cm fine band is dropped at `0.09` and the 1.25 m coarse band and everything below it above `1.25`, and a route's speckle goes with them. Both reach the owned terrain and a game's `GroundMaterial`, are uniform writes (no pipeline change), and the defaults render as before. `ELEMENTS_DETAIL` and `ELEMENTS_FINEST_M` set them in `terrain_tour` and `external_ground`. Not done: the issue's debug view of the detail's bands.
+
+### Changed
+
+- **`TerrainLook` has two more public fields**, so a struct literal needs `..Default::default()` (`TerrainLook { tint, saturation, ..default() }`).
+
 ### Fixed
 
 - **The `trails` example lays Stone and packed-snow routes** (`ELEMENTS_PATHS=stone|packed`), so every `PathKind` has a capture path. Captured on the RTX 3090: Gravel and Stone routes draw after the #38 fix (a grey road, a pale slab band on turf); a Snow route is a faint compacted band in snow.
