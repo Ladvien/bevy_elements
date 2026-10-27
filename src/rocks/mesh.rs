@@ -639,6 +639,37 @@ mod tests {
         }
     }
 
+
+    #[test]
+    fn probe_lod_tones() {
+        for shape in 0..SHAPES {
+            let seed = mix64(0x5EED_0000 + shape as u64);
+            let near = rock_geometry(shape, NEAR_SUBDIVISIONS);
+            let far = rock_geometry(shape, FAR_SUBDIVISIONS);
+            let n: Vec<Vec3> = (0..near.positions.len() as u32)
+                .map(|i| tone_of_vertex_direction(&near, i, seed).normalize_or(Vec3::ONE))
+                .collect();
+            let f: Vec<Vec3> = (0..far.positions.len() as u32)
+                .map(|i| tone_of_vertex_direction(&far, i, seed).normalize_or(Vec3::ONE))
+                .collect();
+            let mean = |v: &Vec<Vec3>| v.iter().copied().sum::<Vec3>() / v.len() as f32;
+            let (mn, mf) = (mean(&n), mean(&f));
+            // Per-position: for each far vertex take the nearest near vertex's tone direction.
+            let mut worst = 0.0f32;
+            for (i, p) in far.positions.iter().enumerate() {
+                let p = Vec3::from_array(*p);
+                let mut best = (f32::MAX, 0usize);
+                for (j, q) in near.positions.iter().enumerate() {
+                    let d = (Vec3::from_array(*q) - p).length_squared();
+                    if d < best.0 { best = (d, j); }
+                }
+                let dot = f[i].dot(n[best.1]).clamp(-1.0, 1.0);
+                worst = worst.max(dot.acos().to_degrees());
+            }
+            println!("shape {shape}: near mean {mn:?} far mean {mf:?} worst angle {worst:.1} deg");
+        }
+    }
+
     /// The colour a vertex wears, recovered from the vertex colour by dividing out the two
     /// modulations the module applies.
     fn tone_of_vertex_direction(g: &RockGeometry, i: u32, seed: u64) -> Vec3 {
