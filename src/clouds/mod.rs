@@ -315,6 +315,11 @@ pub(crate) struct CloudParams {
     /// z texels per face edge, w the weight a marched texel takes in its history (1 while the
     /// history is invalid).
     pub probe: Vec4,
+    /// The still sea (`StillWater`): x its level, m; y 1 while one is set.
+    pub sea: Vec4,
+    /// xy: the minimum corner, zw: the maximum corner, of the region (world XZ, m) the sea and
+    /// its skirt cover. The composite leaves the pixels whose ray meets the sea there to the water.
+    pub sea_box: Vec4,
 }
 
 /// The per-view images: this frame's march result and the two history textures.
@@ -864,7 +869,11 @@ fn update_gpu(
     weather: Res<Weather>,
     sun: Res<SunState>,
     frame: Res<CelestialFrame>,
-    (flash, units): (Res<LightningFlash>, Res<ElementsUnits>),
+    (flash, units, sea): (
+        Res<LightningFlash>,
+        Res<ElementsUnits>,
+        (Option<Res<crate::StillWater>>, Option<Res<crate::TerrainState>>),
+    ),
     quality: Res<ElementsQuality>,
     layer: Res<CloudLayer>,
     atmospheres: Query<&Atmosphere>,
@@ -968,6 +977,19 @@ fn update_gpu(
     let cloud = CloudLight::from_beam(shadows.mean_transmittance);
     let (diffuse_colour, diffuse_brightness) = cloud_ambient(&sun, frame.moon_lux, cloud);
     let airlight = diffuse_colour * (diffuse_brightness * AIRLIGHT_PER_SKY_RADIANCE);
+    // The still sea: its level and the box of ground and skirt the water draws.
+    let (sea, sea_box) = match (&sea.0, &sea.1) {
+        (Some(still), Some(terrain)) => {
+            let reach = crate::hydrology::WATER_SKIRT_REACH_M;
+            let lo = terrain.grid.origin - Vec2::splat(reach);
+            let hi = terrain.grid.origin + terrain.grid.extent() + Vec2::splat(reach);
+            (
+                Vec4::new(terrain.grid.y0 + still.level / units.per_metre(), 1.0, 0.0, 0.0),
+                Vec4::new(lo.x, lo.y, hi.x, hi.y),
+            )
+        }
+        _ => (Vec4::ZERO, Vec4::ZERO),
+    };
     gpu.params = CloudParams {
         camera: camera.extend(inner),
         atmo: Vec4::new(outer, 32_000.0, 32.0, NIGHT_SKY_LUMINANCE),
@@ -1011,6 +1033,8 @@ fn update_gpu(
         ),
         units: Vec4::new(units.per_metre(), 0.0, 0.0, 0.0),
         probe,
+        sea,
+        sea_box,
     };
 }
 
