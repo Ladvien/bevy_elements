@@ -752,6 +752,7 @@ fn a_look_written_every_frame_compiles_nothing() {
         written = TerrainLook {
             tint: Vec3::new(1.0 - 0.5 * t, 1.0 - 0.4 * t, 1.0),
             saturation: 1.0 - 0.6 * t,
+            ..TerrainLook::default()
         };
         app.insert_resource(written);
         app.update();
