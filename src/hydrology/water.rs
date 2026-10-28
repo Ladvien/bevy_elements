@@ -399,7 +399,7 @@ fn pass_materials(
     };
     let base = StandardMaterial {
         base_color: Color::BLACK,
-        perceptual_roughness: WATER_ROUGHNESS,
+        perceptual_roughness: std::env::var("X_ROUGH").ok().and_then(|v| v.parse().ok()).unwrap_or(WATER_ROUGHNESS),
         reflectance: WATER_REFLECTANCE,
         metallic: 0.0,
         ..default()

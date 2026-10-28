@@ -60,7 +60,12 @@ fn setup(
     commands.spawn((
         Camera3d::default(),
         RenderTarget::Image(image.into()),
-        ElementsCamera::default(),
+        ElementsCamera {
+            distance_fog: std::env::var("X_NOFOG").is_err(),
+            volumetric_fog: std::env::var("X_NOVOL").is_err(),
+            atmosphere: std::env::var("X_NOATM").is_err(),
+            ..default()
+        },
         at,
     ));
     commands.spawn(
@@ -468,14 +473,23 @@ fn column_facing(hour: f64, preset: WeatherPreset, yaw_deg: f32) -> Vec<Vec3> {
         Vec3::Y,
     );
     let mut app = build_at(1.0, Some(eye), preset, hour);
-    app.world_mut().insert_resource(StillWater { level: 0.0 });
+    if std::env::var("X_NOSEA").is_err() {
+        app.world_mut().insert_resource(StillWater { level: 0.0 });
+    }
     run_until(&mut app, "the terrain", |app| {
         app.world()
             .get_resource::<TerrainState>()
             .is_some_and(|s| s.is_live())
     });
     // The ring arrives on the 4 Hz readback; the fog follows it the next frame.
-    for _ in 0..240 {
+    let frames: i32 = std::env::var("X_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(240);
+    for i in 0..frames {
+        if i == 100 && std::env::var("X_NOLIGHT").is_ok() {
+            let w = app.world_mut();
+            let es: Vec<Entity> = w.query_filtered::<Entity, With<DirectionalLight>>().iter(w).collect();
+            println!("LIGHTS {}", es.len());
+            for e in es { w.despawn(e); }
+        }
         app.update();
     }
     dump_target(&mut app, &format!("-h{hour}-{preset:?}-y{yaw_deg}"));
@@ -551,4 +565,12 @@ fn gpu_the_far_sea_takes_the_tint_of_the_sky_it_faces() {
         warm > 1.05 * cool,
         "the sea is one tint all round: {warmth:?}"
     );
+}
+
+#[test]
+#[ignore = "needs a GPU"]
+fn scratch_midnight() {
+    let _lock = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let column = column_at(0.0, WeatherPreset::Clear);
+    println!("ROW {:?}", [&column[70], &column[84], &column[86], &column[100], &column[140], &column[240]]);
 }

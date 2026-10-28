@@ -352,3 +352,19 @@ fn broken_cloud_shows_in_the_probe() {
     assert!(clear < 0.01, "the atmosphere cube has no cloud: {clear}");
     assert!((0.2..=0.7).contains(&composed), "cloud share {composed}");
 }
+
+#[test]
+#[ignore = "needs a GPU"]
+fn scratch_night_probe() {
+    let c = capture(WeatherPreset::Clear, 0.0, Some(0.0), 120);
+    let n = c.size;
+    for (lo, hi) in [(-90.0, -30.0), (-30.0, -2.0), (-2.0, 2.0), (2.0, 10.0), (10.0, 40.0), (40.0, 90.0)] {
+        println!("NIGHT band {lo}..{hi}: atmo {:.3e} composed {:.3e}", band(&c.atmosphere, n, lo, hi), band(&c.composed, n, lo, hi));
+    }
+    let mut all: Vec<(f32, Vec3, Vec3)> = texels(&c.composed, n).map(|(d, _, v)| (luminance(v), d, v)).collect();
+    all.sort_by(|a, b| b.0.total_cmp(&a.0));
+    for (l, d, v) in all.iter().take(8) { println!("NIGHT hot {l:.3e} dir {d:?} {v:?} elev {:.1}", d.y.asin().to_degrees()); }
+    let hist = |lo: f32, hi: f32| all.iter().filter(|a| a.0 >= lo && a.0 < hi).count();
+    println!("NIGHT hist <1e-3 {} 1e-3..4e-3 {} 4e-3..1e-2 {} >1e-2 {}", hist(0.0, 1e-3), hist(1e-3, 4e-3), hist(4e-3, 1e-2), hist(1e-2, 1e9));
+    println!("NIGHT sky_light {:?} ambient {} model_lux {}", c.sky_light, c.ambient, c.model_lux);
+}
