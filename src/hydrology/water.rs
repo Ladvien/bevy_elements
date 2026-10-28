@@ -76,7 +76,7 @@ const WATER_REFLECTANCE: f32 = 0.353_553_4;
 const WATER_ROUGHNESS: f32 = 0.089;
 /// The uniform's level when no [`StillWater`] is set: so far below any ground that `level − bed`
 /// never exceeds the simulated depth.
-const NO_STILL_LEVEL: f32 = -1.0e9;
+pub(crate) const NO_STILL_LEVEL: f32 = -1.0e9;
 const EMBEDDED_SHADER: &str = "embedded://bevy_elements/hydrology/water.wesl";
 
 /// A body of water that stands at a fixed level and is not simulated: a sea, a lake or a moat a

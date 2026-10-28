@@ -37,7 +37,7 @@ No new pass, buffer or binding. One `vec4` in the water uniform. Per-fragment co
 
 ## Deviations from this plan
 
-- Not in this iteration, issue #44 stays open: (2) `WaterContact` rings on still water (the wave kernel reads the simulated depth in `waves.wesl` `water_at`); (3) zero hydrology substeps with a still level and no sources (the scheduler runs every frame); (5) the sea past the terrain grid's border (the shader clamps its taps to the grid edge).
+- Not in this iteration, issue #44 stays open: (2, done in iteration 80) `WaterContact` rings on still water: `waves.wesl` `water_at` takes `max(simulated, level − ground)` from `params.sim.w`, the same expression as the water shader, no new binding; (3) zero hydrology substeps with a still level and no sources (the scheduler runs every frame); (5) the sea past the terrain grid's border (the shader clamps its taps to the grid edge).
 
 ## Pending index
 
