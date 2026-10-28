@@ -36,7 +36,7 @@ pub use plugin::{
 pub use gpu::readback::ElementsReadback;
 
 // Gameplay queries.
-pub use query::{Environment, EnvironmentSnapshot};
+pub use query::{Environment, EnvironmentSnapshot, GroundLook};
 
 // Celestial: clock, location, sun, moon, exposure; `astro` holds the ephemeris functions.
 pub use celestial::{
