@@ -122,7 +122,9 @@ No source's number is changed: Wong's constants, CRREL's 500 kg/m³, Alvarado's 
 
 **Validation targets.** CPU: soil at wetness 0 / 0.5 / 1, dry sand, 2 cm of snow and a cliff each answer the walker's number from the table above (0.0047 m, about 0.04 m, 0.30 m cap, 0.034 m, the CRREL-capped snow depth, 0); slope derived from a ramp surface equals the ramp's angle; `None` off the grid. GPU (acceptance 3, to run on `big`): the answer matches the deepest point of the trail field after the same imprint to 1 mm.
 
-**Not done.** The GPU comparison has not been run (no GPU gate on this host); `paths_resist_prints` stays on the backlog.
+**Outcome.** The GPU comparison ran on the Apple M1 Max (`the_depth_a_step_would_press_is_the_depth_it_presses`): the answer is the kernel's target (snow 0.2400 m, wet soil 0.0379, dry soil 0.0048, dry sand 0.0339) and the field's deepest texel is 0.2365, 0.0373, 0.0047, 0.0327: 1.5, 1.5, 1.6 and 3.6 % under it, never over. The issue's 1 mm tolerance holds on soil and fails in snow (3.5 mm) and on sand (1.2 mm): the stamp relaxes toward the target and the deepest 5 cm texel of an elliptical profile does not reach it. The test asserts 0 to 4 % under.
+
+**Not done.** `paths_resist_prints` stays on the backlog.
 
 ## Pending index
 

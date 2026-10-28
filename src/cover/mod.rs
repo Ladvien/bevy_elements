@@ -154,6 +154,8 @@ pub(crate) struct CoverSnapshot {
     pub grid: TerrainGrid,
     pub depth: Arc<[f32]>,
     pub wetness: Arc<[f32]>,
+    /// Snow water equivalent, m: with the depth it gives the snow's density.
+    pub swe: Arc<[f32]>,
 }
 
 impl CoverSnapshot {
@@ -161,6 +163,16 @@ impl CoverSnapshot {
         self.grid
             .contains(p)
             .then(|| self.grid.sample(&self.depth, p).max(0.0))
+    }
+
+    /// Density of the snow at `p` (kg/m³), the trail kernel's own: the bilinear water equivalent
+    /// over the bilinear depth, clamped to 50–917.
+    pub(crate) fn snow_density_at(&self, p: Vec2) -> Option<f32> {
+        self.grid.contains(p).then(|| {
+            let depth = self.grid.sample(&self.depth, p).max(0.0);
+            let swe = self.grid.sample(&self.swe, p);
+            (1000.0 * swe / depth.max(1e-4)).clamp(50.0, 917.0)
+        })
     }
 
     pub(crate) fn wetness_at(&self, p: Vec2) -> Option<f32> {
@@ -244,7 +256,7 @@ pub(crate) struct CoverGpu {
     pub wetness: Handle<ShaderBuffer>,
     pub shelter: Handle<ShaderBuffer>,
     pub cover_cells: Handle<ShaderBuffer>,
-    /// Box-averaged (depth, wetness), `array<vec2<f32>>`.
+    /// Box-averaged (depth, wetness, water equivalent, spare), `array<vec4<f32>>`.
     pub readback: Handle<ShaderBuffer>,
     pub readback_ds: u32,
     pub params: CoverParams,
@@ -416,7 +428,7 @@ fn ensure_cover(
         wetness,
         shelter: zeroed_buffer(&mut buffers, "elements_cover_shelter", cells * 8),
         cover_cells,
-        readback: zeroed_buffer(&mut buffers, "elements_cover_readback", readback_cells * 8),
+        readback: zeroed_buffer(&mut buffers, "elements_cover_readback", readback_cells * 16),
         readback_ds: ds,
         params: CoverParams::default(),
         steps: 0,
@@ -638,7 +650,7 @@ fn read_cover(
             if current.load(Ordering::Relaxed) != epoch {
                 return;
             }
-            let Some(cells) = decode::<[f32; 2]>(bytes) else {
+            let Some(cells) = decode::<[f32; 4]>(bytes) else {
                 return;
             };
             if cells.len() < expected {
@@ -649,6 +661,7 @@ fn read_cover(
                 grid: read_grid,
                 depth: cells.iter().map(|c| c[0]).collect(),
                 wetness: cells.iter().map(|c| c[1]).collect(),
+                swe: cells.iter().map(|c| c[2]).collect(),
             });
         },
     );
