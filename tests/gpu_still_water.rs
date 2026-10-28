@@ -33,6 +33,10 @@ fn pin_weather(mut weather: ResMut<Weather>) {
 #[derive(Resource)]
 struct CameraAt(Transform);
 
+/// The weather the scene is held at, when a test wants other than a clear sky.
+#[derive(Resource)]
+struct PresetAt(WeatherPreset);
+
 #[derive(Resource)]
 struct Target(Handle<Image>);
 
@@ -42,6 +46,7 @@ fn setup(
     mut director: ResMut<WeatherDirector>,
     units: Res<ElementsUnits>,
     camera: Option<Res<CameraAt>>,
+    preset: Option<Res<PresetAt>>,
 ) {
     let u = units.units_per_metre;
     let at = camera.map_or(
@@ -63,7 +68,7 @@ fn setup(
             .with_extent(Vec2::splat(256.0))
             .with_resolution(UVec2::splat(128)),
     );
-    director.force(WeatherPreset::Clear, Duration::ZERO);
+    director.force(preset.map_or(WeatherPreset::Clear, |p| p.0), Duration::ZERO);
 }
 
 fn build() -> App {
@@ -77,7 +82,12 @@ fn build_in(units: f32) -> App {
 }
 
 fn build_viewed(units: f32, camera: Option<Transform>) -> App {
+    build_weathered(units, camera, WeatherPreset::Clear)
+}
+
+fn build_weathered(units: f32, camera: Option<Transform>, preset: WeatherPreset) -> App {
     let mut app = App::new();
+    app.insert_resource(PresetAt(preset));
     if let Some(camera) = camera {
         app.insert_resource(CameraAt(camera));
     }
@@ -388,6 +398,37 @@ fn gpu_a_still_sea_runs_past_the_terrain_grids_edge() {
         "{:?} {:?}",
         with[120],
         with[90]
+    );
+}
+
+/// Fog sits in front of the water: a sea seen through 300 m fog is the fog's grey, not the fogged
+/// bed tinted by the absorb pass (which drew a saturated teal wall under a grey sky, chroma 0.56).
+/// The edge scene's eye, in Fog; the grid's nearest rows are 30-60 m away.
+#[test]
+#[ignore = "needs a GPU"]
+fn gpu_a_fogged_sea_is_the_fogs_colour_not_the_waters() {
+    let _lock = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let pitch = -8.0f32.to_radians();
+    let eye = Transform::from_xyz(0.0, 30.0, 42.0)
+        .looking_to(Vec3::new(0.0, pitch.sin(), -pitch.cos()), Vec3::Y);
+    let mut app = build_weathered(1.0, Some(eye), WeatherPreset::Fog);
+    app.world_mut().insert_resource(StillWater { level: 0.0 });
+    run_until(&mut app, "the terrain", |app| {
+        app.world()
+            .get_resource::<TerrainState>()
+            .is_some_and(|s| s.is_live())
+    });
+    for _ in 0..90 {
+        app.update();
+    }
+    let column = column_rgb(&mut app, TARGET as usize / 2);
+    app.world_mut().write_message(AppExit::Success);
+    let chroma = |c: Vec3| (c.max_element() - c.min_element()) / c.max_element();
+    let near = column[200];
+    println!("fogged sea at row 200: {near:?}, chroma {:.3}", chroma(near));
+    assert!(
+        chroma(near) < 0.2,
+        "the sea in fog is tinted by its absorption: {near:?}"
     );
 }
 
