@@ -71,6 +71,19 @@ An isometric orthographic view of the hills, 18 m of ground on screen: posts sta
 4. **The mountains keep a residual.** On the `mountains` preset at 4 m cells, a quarter of a quad's twist exceeds a 10 cm foot often: in the isometric capture 22 % of the posts' feet stay hidden (45 % before), and the CPU estimate at that site is 14 % of the posts more than 8 cm under the drawn ground and 19 % on slopes above 45°, where an 8 cm foot also buries its own uphill side. The hills (0-3 %), dunes (0 %) and plains (0 %) are clean. A figure on rugged rock would need a query that answers the drawn triangles rather than the bilinear, which the issue does not ask for; it is a backlog item.
 5. **The patch-count test moved its camera half a cell.** `a_flat_terrain_selects_the_measured_patch_counts` stood its camera on the grid's centre, symmetric for the old node boxes; the boxes now start half a cell in, so the camera that sees the same symmetric selection stands half a cell off the centre, and the counts are unchanged.
 
+## Addendum — the drawn-surface query (issue #40)
+
+Deviation 4 named a query that answers the drawn triangles as a backlog item; Sanctuary measured the cost on a 512² town at 9.375 ft cells (p99 0.004 ft, max 0.703 ft, 0.15 % of points over 0.15 ft, at creases where buildings stand).
+
+**Model.** Level 0's quad `(i, j)` has its vertices on samples `i, i+1` × `j, j+1` and its two triangles from `patch_mesh`'s index order `[i, i+N+1, i+1]`, `[i+1, i+N+1, i+N+2]`, i.e. split along `(1, 0)–(0, 1)`. With `w` the fractional position in the sample lattice (the same `g = (p − origin)/cell − ½`, taps clamped as in `TerrainGrid::sample`): if `w.x + w.y ≤ 1` the surface is `h00 + w.x (h10 − h00) + w.y (h01 − h00)`, else `h11 + (1 − w.x)(h01 − h11) + (1 − w.y)(h10 − h11)`. It is continuous across the diagonal (both give the plane through the shared edge) and across quads (each edge is linear in its two samples), equals `sample` at samples, and differs from it by `|w.x w.y − …|`: the bilinear is `h00 + w.x a + w.y b + w.x w.y t` with `t = h00 + h11 − h10 − h01`; the triangle surface differs by `t · w.x w.y` (lower triangle) or the mirrored term, at most `|t|/4` at the diagonal's midpoint. No new source is needed: the formula is the mesh's own index order (`src/terrain/mod.rs` `patch_mesh`) and Model 4 above.
+
+**Parameters.** None. **GPU mapping.** None: a CPU query over the readback `TerrainSnapshot`, like `terrain_height`. Levels above 0 draw coarser surfaces; this answers level 0, as `sample` does.
+
+**Validation targets.** (1) Against `vertex_position`'s level-0 triangles on the hills to 1e-4 m at random points; (2) equal to `sample` at every cell centre and within `|t|/4` of it elsewhere; (3) continuous across quad and patch boundaries; (4) at the clamped edge equal to `sample`.
+
+**Deviation.** `Environment::terrain_height` stays the bilinear (the query a flora or fog consumer wants; its documentation now says so); the new `Environment::terrain_drawn_height` answers the triangles.
+
+
 ## Pending index
 
 None: every source above is in the corpus or a web page.
