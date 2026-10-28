@@ -5046,3 +5046,24 @@ Host: the Mac (CPU gates only; no GPU, no captures). Issues read through the API
 3. #41 wetness as drawn (`ground_look_at`).
 4. #42 remainder: a band debug view and a route-grain capture.
 5. A capture of `stone_mesh` under a plain `StandardMaterial` (visual proof of the export).
+
+
+## Iteration 76 — 2026-10-28 — `StillWater`: a sea at a fixed level, drawn and answered without a simulation (#44, first slice)
+
+Host: the Mac for the CPU gates, `big` (RTX 3090, Xvfb) for GPU tests, captures and the benchmark. Issues read through the API: #38, #39, #41, #42, #43, #44, #45 open; no new bug; #45 is a release request, seen and skipped. Ranked: #44 (a consumer's request that the crate draws only simulated water, the biggest gap for a coastal game) over #39 `paths_resist_prints` and #41 `ground_look_at`; carved to the drawn surface plus the CPU query, the self-contained slice.
+
+- **Change**: `StillWater { level }` resource (world units). Shader: depth is `max(simulated, level − surface)` in the vertex and `column_at`; patch selection also takes patches whose lowest ground is under the level; patch box raised to it; one uniform lane. `Environment::water_depth` returns the higher of the simulated depth and `level − ground`. `terrain_tour` takes `ELEMENTS_STILL`. Research note committed first (`docs/research/still-water.md`).
+- **Sources**: none new; Mei et al. 2007 single height field and the existing `water-rendering.md`. Corpus search for sea-rendering write-ups found none ([INFERENCE]: no shipping-game write-up read).
+- **Evidence**: `tests/gpu_still_water.rs` on big: over a flat bed, red under 0.3 m / red under 8 m = 15.5 (Beer–Lambert alone 32; bed shading and sun leg are in both), depth answers 0.3000 and 8.0000 m, and a level change redraws. Unit test `a_still_level_draws_the_patches_with_ground_under_it`. `gpu_water` (2) and `gpu_waves` (3) still pass on big.
+- **Critique** (`/tmp/i76/critique.md`, captures `/tmp/i76/`): aerial shore gradient and dusk reflection GREAT; shoreline foam NOT YET (no continuous line, a few flecks; the 5 cm contact band is sub-pixel on a gentle shore and sits under the 3–30 mm edge fade, a pre-existing rule for all water; a 1.5 px widening was tried, changed nothing visible, and was reverted); far shoreline stair-steps at the grid's cell size (cosmetic). No close eye-level shore capture (the example's eye went under the ground in three tries) and no temporal sequence: **the visual gate is not fully met**, so #44 stays open and the `docs/water_still.png` still is an aerial one.
+- **Benchmark** (big, `bench_elements` lake, 3840×2160, high; base = HEAD, new = this tree, interleaved): in the run where the clocks matched (early prepass 0.203 vs 0.201 ms) `main_transparent_pass_3d` mean is 1.064 → 1.050 ms; runs 2 and 3 landed in different P-states (prepass 0.19/0.17 vs 0.12/0.13) and are discarded. The scene has simulated water only; no still-water scene was benchmarked. The clock log read at the start and end of each run (P8 idle, one P2) says nothing about the clocks during it.
+- **Gates**: `cargo test --release` (339 lib, integration, doctests), clippy `-D warnings`, rustdoc `-D warnings`, wasm32 lib build, `wesl-check` pass on the Mac; `gpu_still_water`, `gpu_water`, `gpu_waves` pass on big. Other GPU suites not run.
+- **Not done (#44 stays open)**: `WaterContact` rings on still water (`waves.wesl` `water_at` reads simulated depth); zero hydrology substeps with only a still level (the scheduler runs each frame); the sea past the terrain grid's edge; a foot-world (`units_per_metre`) GPU check (the level is divided by `per_metre()` on the CPU, untested on a GPU).
+
+### Next five items, ranked
+
+1. #44 remainder: wave rings on still water, hydrology idle, grid-edge continuation, foot-world test.
+2. Shoreline foam that survives the edge fade (all water): a visible line at aerial and eye distance.
+3. #39 `paths_resist_prints`.
+4. #41 wetness as drawn (`ground_look_at`).
+5. A capture of `stone_mesh` under a plain `StandardMaterial`.

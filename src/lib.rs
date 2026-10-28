@@ -95,8 +95,9 @@ pub use dust::{DustPlugin, DustSettings, DustStats};
 // Hydrology and erosion.
 pub use hydrology::{
     ErodeTerrain, ErosionSettings, HydrologyBoundary, HydrologyPlugin, HydrologySettings,
-    HydrologyStats, MAX_WATER_SOURCES, TerrainBaked, WaterExtension, WaterMaterial, WaterParams,
-    WaterPatch, WaterPlugin, WaterSettings, WaterSink, WaterSource, WaterState, evaporation_mm_h,
+    HydrologyStats, MAX_WATER_SOURCES, StillWater, TerrainBaked, WaterExtension, WaterMaterial,
+    WaterParams, WaterPatch, WaterPlugin, WaterSettings, WaterSink, WaterSource, WaterState,
+    evaporation_mm_h,
 };
 
 // Ground cover: snow and wetness maps.
