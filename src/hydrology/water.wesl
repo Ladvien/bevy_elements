@@ -87,6 +87,12 @@ const PHASE_NOISE_M: f32 = 37.0;
 /// read as glass, with no surface at all.
 const STILL_RIPPLE: f32 = 0.06;
 const MAX_THICKNESS: f32 = 1000.0;
+// Under a still sea the terrain's border is a hard edge in the bed seen through the water. A bed
+// point within this many metres of it is hidden by `EDGE_DEEPENING_M` of extra water thickness,
+// scaled up toward the edge, so the bed sinks into the deep colour the skirt shows past it
+// (`docs/research/still-water.md`, Deviation 7).
+const EDGE_BAND_M: f32 = 24.0;
+const EDGE_DEEPENING_M: f32 = 300.0;
 
 struct WaterVertex {
     @builtin(instance_index) instance_index: u32,
@@ -195,6 +201,20 @@ fn foam_from_thickness(t_ray: f32) -> f32 {
 
 fn edge_alpha(depth: f32) -> f32 {
     return smoothstep(DISCARD_DEPTH, FADE_DEPTH, depth);
+}
+
+// Extra water thickness (m) over a bed point `scene` (metre frame) that lies near the border of the
+// terrain grid: none away from it, `EDGE_DEEPENING_M` at it. Zero without a still level.
+fn edge_deepening(scene: vec2<f32>) -> f32 {
+    if water.still.x < -1.0e8 {
+        return 0.0;
+    }
+    let grid = water.terrain.grid;
+    let lo = grid.origin + 0.5 * grid.cell;
+    let hi = last_sample(grid);
+    let d = min(min(scene.x - lo.x, hi.x - scene.x), min(scene.y - lo.y, hi.y - scene.y));
+    let k = 1.0 - smoothstep(0.0, EDGE_BAND_M, d);
+    return EDGE_DEEPENING_M * k * k;
 }
 
 // Cloud shadow scale ρ = (0.25 + 0.75 T_px) / (0.25 + 0.75 T̄) at a world position, as the
@@ -358,7 +378,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let ray = normalize(view_pos);
     let z_scene = depth_ndc_to_view_z(max(prepass_depth(in.position, 0u), 1e-9));
     let t_ray = clamp((view_pos.z - z_scene) / max(-ray.z, 1e-3) / water.units, 0.0, MAX_THICKNESS);
-    let t_eff = refracted_thickness(t_ray, cos_v, water.absorption.w);
+    // The bed point this pixel shows: the same view ray, scaled to the scene's depth.
+    let eye = view.world_position / water.units;
+    let scene_xz = (eye + (p - eye) * (z_scene / view_pos.z)).xz;
+    let t_eff = refracted_thickness(t_ray, cos_v, water.absorption.w) + edge_deepening(scene_xz);
 
     // Foam: fast flow, the contact with anything the water meets (shoreline, rocks, posts), and
     // the waves that break.
