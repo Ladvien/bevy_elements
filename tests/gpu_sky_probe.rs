@@ -352,3 +352,31 @@ fn broken_cloud_shows_in_the_probe() {
     assert!(clear < 0.01, "the atmosphere cube has no cloud: {clear}");
     assert!((0.2..=0.7).contains(&composed), "cloud share {composed}");
 }
+
+/// A moonless night's fill lights surfaces but is not a bright horizon: the lift (by the camera's
+/// exposure, `docs/research/night-sky-light.md` Deviation 2) fades out toward the horizon, so a
+/// specular reflection there sees the sky the screen draws, and the irradiance on a horizontal
+/// surface is what the uniform lift gave (3.29e-3 measured before the change).
+#[test]
+#[ignore = "needs a GPU"]
+fn the_night_fill_lifts_the_light_on_surfaces_and_not_the_horizon() {
+    let c = capture(WeatherPreset::Clear, 0.0, Some(0.0), 120);
+    let n = c.size;
+    let (low, high) = (
+        band(&c.composed, n, 2.0, 6.0),
+        band(&c.composed, n, 50.0, 90.0),
+    );
+    println!(
+        "RESULT night: horizon band {low:.3e}, zenith band {high:.3e}, irradiance {:?}",
+        c.sky_light
+    );
+    assert!(
+        low < 0.15 * high,
+        "the horizon band carries the lift: {low} against {high}"
+    );
+    assert!(
+        (c.sky_light[0] - 3.29e-3).abs() < 0.2 * 3.29e-3,
+        "the horizontal irradiance moved: {}",
+        c.sky_light[0]
+    );
+}
