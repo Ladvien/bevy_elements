@@ -116,13 +116,31 @@ Then, in this order:
    a crash, a panic, a visual artifact, a value that is implausible, a documented promise that is not
    kept — is a bug. Take the oldest such issue that is still reproducible, and say why it beats the
    others.
-2. **An enhancement issue is ranked with your own candidates**, not above them: an issue is one
+2. **An issue labelled `consumer` is the pass's item next, ahead of the series and your own candidates.**
+   A project built on this crate needs it and is waiting. The `consumer:<name>` label says which project;
+   `consumer:bevy_emerge` is the owner's editor. Its own work resumes when the issue is closed as completed
+   and it moves its git pin to a `main` commit containing the fix. Take the oldest one you can work this pass.
+   - **Build the general form.** The requester is the example, never a name in this crate's API, a path or a
+     default: this crate serves other projects too. Where an issue asks for something shaped to one project,
+     build the general form and say so on the issue.
+   - **Prove it here**, with a test in this repository that fails before and passes after against the issue's
+     acceptance. Never build or run the requesting project to prove it.
+   - **Pushing to `main` is the delivery.** Requesters pin a git revision, so a consumer fix never needs a
+     publish or a version bump.
+   - **One that cannot be worked this pass** (it needs a decision the issue does not settle, or a protected-file
+     change): say exactly what is needed on the issue (`gh issue comment`), write one log line, and go on.
+     A blocked consumer issue never stops the pass.
+   - **Read `git log` first.** While this loop is stopped, the requester's loop may fix the issue here at the
+     source, in its own commits with tests; check whether that has happened so the work is not done twice.
+3. **Any other enhancement issue is ranked with your own candidates**, not above them: an issue is one
    person's idea of what matters, and the ranking below still decides. Note the issue number beside
    the item so the rank list records that it came from outside.
-3. **Close the loop.** An issue your pass fixes is referenced in the commit body (`Fixes #N`) **and**
+4. **Close the loop.** An issue your pass fixes is referenced in the commit body (`Fixes #N`) **and**
    in the report, so the next pass can see it was addressed. Do not close an issue you did not fix,
-   and do not close one whose fix this pass did not verify.
-4. **Re-check a release issue, do not act on it.** An issue asking to publish or bump a version is
+   and do not close one whose fix this pass did not verify. For a `consumer` issue the close is the signal
+   the requester waits for: close it only through a verified fix pushed to `main`, never as not planned
+   without the owner's word.
+5. **Re-check a release issue, do not act on it.** An issue asking to publish or bump a version is
    the owner's call, never a loop's (see the release rule above). Record it as seen and skip it.
 
 **When the API fallback answers `403` or `429`** (rate limit — 60 requests/hour per IP unauthenticated,
