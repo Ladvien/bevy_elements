@@ -38,7 +38,7 @@ No new pass, buffer or binding. One `vec4` in the water uniform. Per-fragment co
 ## Deviations from this plan
 
 - (3, done in iteration 81) Zero hydrology substeps with a still level: `hydrology::model::still_idle` holds the scheduler at 0 while `StillWater` is set, no bake runs, rain and every source rate are ≤ 0, and a depth readback has shown a mean depth under `QUANTUM_M` (5 µm; the crate's own "no water" floor). The readback lags by up to its interval, so water a host writes into the layers is noticed one readback late. Thermal slumping runs inside the substeps and so pauses while idle; it resumes with the first rain or source. [INFERENCE: no corpus source covers this; it is a scheduling rule, not a model.]
-- Not in this iteration, issue #44 stays open: (5) the sea past the terrain grid's border (the shader clamps its taps to the grid edge); a foot-world GPU check. (2, done in iteration 80) `WaterContact` rings on still water: `waves.wesl` `water_at` takes `max(simulated, level − ground)` from `params.sim.w`, the same expression as the water shader, no new binding.
+- Not in this iteration, issue #44 stays open: (5) the sea past the terrain grid's border (the shader clamps its taps to the grid edge); (6, done in iteration 82) the foot-world GPU check: `gpu_still_water::gpu_a_still_level_in_a_foot_world_draws_and_answers_as_in_metres`. (2, done in iteration 80) `WaterContact` rings on still water: `waves.wesl` `water_at` takes `max(simulated, level − ground)` from `params.sim.w`, the same expression as the water shader, no new binding.
 
 ## Pending index
 
