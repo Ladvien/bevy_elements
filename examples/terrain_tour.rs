@@ -20,6 +20,8 @@
 //! - `ELEMENTS_PINS=1` stands thin posts on `Environment::terrain_height` every 2 m over 40 m
 //!   around `ELEMENTS_LOOK`, each on a red foot 10 cm tall: where the drawn ground is not the
 //!   height the query answers, a foot sinks out of sight or stands above the ground.
+//! - `ELEMENTS_STILL=12` declares a still sea at that height (`StillWater`): the water the
+//!   terrain dips under is drawn without the hydrology.
 //!
 //! `cargo run --release --example terrain_tour`
 
@@ -107,6 +109,12 @@ fn setup(
         _ => Terrain::procedural(ProceduralTerrain::hills(seed)),
     };
     commands.spawn(terrain);
+    if let Some(level) = std::env::var("ELEMENTS_STILL")
+        .ok()
+        .and_then(|l| l.parse::<f32>().ok())
+    {
+        commands.insert_resource(StillWater { level });
+    }
     if let Some(target) = terrain_look_env() {
         match std::env::var("ELEMENTS_GRADE_GLIDE")
             .ok()

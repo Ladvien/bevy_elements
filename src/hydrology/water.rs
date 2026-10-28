@@ -74,7 +74,27 @@ const WATER_AABB_PAD_M: f32 = 4.0;
 const WATER_REFLECTANCE: f32 = 0.353_553_4;
 /// Bevy clamps the perceptual roughness to this in its lighting.
 const WATER_ROUGHNESS: f32 = 0.089;
+/// The uniform's level when no [`StillWater`] is set: so far below any ground that `level − bed`
+/// never exceeds the simulated depth.
+const NO_STILL_LEVEL: f32 = -1.0e9;
 const EMBEDDED_SHADER: &str = "embedded://bevy_elements/hydrology/water.wesl";
+
+/// A body of water that stands at a fixed level and is not simulated: a sea, a lake or a moat a
+/// host declares (`docs/research/still-water.md`). Insert it as a resource (or remove it).
+///
+/// Wherever the terrain's surface is below `level`, [`WaterPlugin`] draws water of depth
+/// `level − surface` through its usual absorb and surface passes, with foam where the ground
+/// crosses the level; the hydrology's own water composites over it (the surface is the higher of
+/// the two). [`Environment::water_depth`](crate::Environment::water_depth) answers the same depth.
+/// Changing the level costs nothing but a uniform write: no terrain, no buffer is rebuilt.
+///
+/// The level is a height in world units ([`ElementsUnits`](crate::ElementsUnits)) in the frame of
+/// [`Environment::terrain_height`](crate::Environment::terrain_height).
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Reflect)]
+pub struct StillWater {
+    /// The surface height, world units.
+    pub level: f32,
+}
 
 /// How the water looks. Insert it before the plugin to override the defaults.
 #[derive(Resource, Clone, Debug, PartialEq, Reflect)]
@@ -170,6 +190,9 @@ pub struct WaterParams {
     pub(crate) foam: Vec4,
     /// x: the finest wave cascade's texel (m). y: texels a side. z: 1 when a field is bound.
     pub(crate) waves: Vec4,
+    /// x: the still water level in the metre frame (−1e9 when there is none), above the terrain's
+    /// origin like the surface heights.
+    pub(crate) still: Vec4,
     /// World units to the metre ([`ElementsUnits`](crate::ElementsUnits)): the vertex and
     /// fragment stages divide the positions Bevy gives them by it and multiply the ones they
     /// hand back.
@@ -191,6 +214,7 @@ impl Default for WaterParams {
             flow: Vec4::ZERO,
             foam: Vec4::ZERO,
             waves: Vec4::ZERO,
+            still: Vec4::new(NO_STILL_LEVEL, 0.0, 0.0, 0.0),
             units: 1.0,
         }
     }
@@ -446,15 +470,21 @@ fn ensure_water_pool(
 }
 
 /// The selected patches that hold water: the leaf bounds' deepest cell of the patch is at least
-/// [`MIN_PATCH_DEPTH_M`].
+/// [`MIN_PATCH_DEPTH_M`], or the patch's lowest ground is under the still level by as much.
 pub(crate) fn wet_patches(
     selected: &[crate::terrain::lod::Patch],
     depth: &crate::terrain::lod::BoundsTree,
+    boxes: &crate::terrain::lod::BoundsTree,
+    still_level_m: Option<f32>,
 ) -> Vec<crate::terrain::lod::Patch> {
     selected
         .iter()
         .copied()
-        .filter(|p| depth.get(p.level, p.ix, p.iz).1 >= MIN_PATCH_DEPTH_M)
+        .filter(|p| {
+            depth.get(p.level, p.ix, p.iz).1 >= MIN_PATCH_DEPTH_M
+                || still_level_m
+                    .is_some_and(|l| l - boxes.get(p.level, p.ix, p.iz).0 >= MIN_PATCH_DEPTH_M)
+        })
         .collect()
 }
 
@@ -467,6 +497,7 @@ fn update_water_patches(
     mut runtime: ResMut<WaterRuntime>,
     mut patches: Query<(&mut Transform, &mut Visibility, &mut MeshTag, &mut Aabb)>,
     units: Res<ElementsUnits>,
+    still: Option<Res<StillWater>>,
 ) {
     let (Some(state), Some(lod)) = (state, terrain.lod) else {
         return;
@@ -478,7 +509,8 @@ fn update_water_patches(
     if runtime.slots.is_empty() || view.entity.is_none() {
         return;
     }
-    let mut wanted = wet_patches(&terrain.selected, depth);
+    let still_m = still.map(|s| s.level / units.per_metre());
+    let mut wanted = wet_patches(&terrain.selected, depth, boxes, still_m);
     if wanted.len() > WATER_POOL_CAPACITY {
         if !runtime.warned_capacity {
             warn!(
@@ -516,6 +548,7 @@ fn update_water_patches(
             Vec3::new(units.world(scale.x), scale.y, units.world(scale.z)),
         );
         let (low, high) = boxes.get(patch.level, patch.ix, patch.iz);
+        let high = still_m.map_or(high, |l| high.max(l));
         let bounds = Aabb::from_min_max(
             Vec3::new(0.0, units.world(low - WATER_AABB_PAD_M), 0.0),
             Vec3::new(1.0, units.world(high + WATER_AABB_PAD_M), 1.0),
@@ -551,6 +584,7 @@ pub(crate) fn water_params(
     shadows: (Vec4, Vec4),
     wind_ms: f32,
     units: f32,
+    still_level_m: Option<f32>,
 ) -> WaterParams {
     let u10 = settings.wind_speed_ms.unwrap_or(wind_ms);
     let silt = Color::srgb(
@@ -582,6 +616,7 @@ pub(crate) fn water_params(
             settings.foam_roughness,
         ),
         waves: Vec4::ZERO,
+        still: Vec4::new(still_level_m.unwrap_or(NO_STILL_LEVEL), 0.0, 0.0, 0.0),
         units,
     }
 }
@@ -596,6 +631,7 @@ fn update_water_materials(
     shadows: Option<Res<CloudShadows>>,
     wind: Option<Res<WindState>>,
     waves: Option<Res<WaveState>>,
+    still: Option<Res<StillWater>>,
     runtime: Res<WaterRuntime>,
     units: Res<ElementsUnits>,
     mut materials: ResMut<Assets<WaterMaterial>>,
@@ -616,6 +652,7 @@ fn update_water_materials(
         (shadow, light),
         wind_ms,
         units.per_metre(),
+        still.map(|s| s.level / units.per_metre()),
     );
     params.lod_centre = lod_centre_uniform(terrain.lod_centre);
     let field = waves.as_deref().map(|w| w.field.clone());
