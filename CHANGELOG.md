@@ -2,6 +2,8 @@
 
 ### Added
 
+- **`TerrainLook::detail` and `TerrainLook::finest_m`: a host steers the ground's grain (#42).** `detail` (default 1) multiplies the albedo grain's and the bump's amplitude in both bands and the route grain's; 0 leaves the palette's colour and the hill's shape with no grain and no bump, and the turf palette's clumps (colour, not grain) stay. `finest_m` (default `None`) is the width in metres of one screen pixel on the ground as the game's camera knows it: where it exceeds the footprint the crate derives, it replaces it in the ground detail's and the route grain's band limit, and above the coarse band's feature it drops that band too. Both ride the material's uniform like the tint, so a write is not a pipeline compile. The defaults multiply by exactly 1 and floor at 0. **Migration:** a `TerrainLook { tint, saturation }` literal needs `..default()`. The example harness reads `ELEMENTS_DETAIL` and `ELEMENTS_FINEST_M`. Not included: the issue's band-by-band debug view.
+
 - **`Environment::terrain_drawn_height` and `TerrainGrid::drawn_height`: the height of the drawn triangles.** `terrain_height` is the bilinear of the cell centres, but the level-0 patches draw two triangles per quad (split along `(1, 0)-(0, 1)`), which differ inside a quad by up to a quarter of its twist: 0.7 ft at a crease on Sanctuary's 9.375 ft town grid, 0.15 % of points over 0.15 ft. The new query follows the mesh, equals the bilinear at every cell centre and quad edge, and is continuous across quads (#40).
 
 ### Fixed

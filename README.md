@@ -287,6 +287,8 @@ fn night_palette(mut look: ResMut<TerrainLook>) {
 }
 ```
 
+`TerrainLook::detail` scales the ground's grain and bump (1 is the crate's own, 0 none; the route grain follows) and `TerrainLook::finest_m` tells the band limit how wide one screen pixel is on the ground, so a fixed orthographic zoom whose pixels are wider than the crate's derived footprint can drop the octaves it cannot resolve instead of drawing them as speckle. Both are uniform writes, like the tint.
+
 ### Ground cover
 
 `GroundCoverPlugin` keeps two maps on the `Terrain`'s grid, stepped on game time (the `WorldClock`) at most 20 times a second after hydrology's substeps. **Snow** is a depth and a water equivalent per cell: it accumulates at the cell's own rain–snow split (the lapse rate makes ridges snowier than valleys), keeps less on slopes between 35° and 55° and none under a `PrecipitationBlocker` (the roof's shelter follows the slanted fall of the rain or snow), settles from 100 toward 300 kg/m³ with a 3-day time constant, drifts downwind above 5 m/s (a flux that grows with the cube of the excess, deposited where the wind slows in the lee), is smoothed over a few cells, and melts at 4 mm of water per °C per day, every millimetre arriving in the `water` layer. **Wetness** follows rain and evaporation; the terrain and ground materials shade snow, wet darkening and a porous sheen, and puddles with ripples. On the terrain the grass is a canopy whose wax beads the rain: a wet meadow deepens its green by `bevy_flora`'s wet-leaf rule (saturation × 1.25, brightness kept) and does not gloss, and only the soil, sand, rock and scree between darken and shine. Rain rings on a live terrain only where water stands at least `WetnessSettings::puddle_min_m` deep (`docs/research/wet-ground.md`).
