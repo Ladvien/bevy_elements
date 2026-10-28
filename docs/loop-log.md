@@ -5008,3 +5008,22 @@ Host: the Mac for the CPU checks, `big` (RTX 3090) for the GPU test. Issues read
 3. #42 remainder: a band debug view and a route-grain capture.
 4. Gravel/packed-snow legibility from eye level.
 5. #41 wetness as drawn.
+
+## Iteration 74 — 2026-10-28 — `RockSettings::allowed`: keep the scatter to a host's region (#43)
+
+Host: the Mac for the CPU gates, `big` (RTX 3090) for the GPU test. Issues read through the API: #38, #39, #41, #42, #43, #44, #45 open; no new bug; #45 is a release request, seen and skipped. Ranked: #43 part 1 (a rectangle filter, a self-contained slice that unblocks a host's town) over #44 (a still sea: a new water mode needing a design) and #41 (`ground_look_at`, a CPU mirror of the shader's wet mask).
+
+- **Change**: `RockSettings::allowed: Option<Vec<Rect>>` (default `None`). The filter runs after `tile_rocks`, on each rock's plan position and before the orthographic diameter rule, so no candidate moves and a region only removes. It is part of `FieldKey`; `Some(vec![])` returns before any tile is built. Research addendum committed first.
+- **Sources**: none new (Golombek scatter as in `docs/research/rock-scatter.md`).
+- **Evidence** (big, `tests/gpu_rocks.rs`): 133 rocks unrestricted, 126 inside the 120 m block, 126 kept with the region (all inside), 0 with an empty one. Unit test `a_region_keeps_what_is_inside_any_rectangle`.
+- **Visual and performance gates**: not applicable. Nothing drawn changes at the default (`None` is one `is_none_or`) and no capture was taken; no benchmark was run.
+- **Gates**: `cargo build --release`, `cargo test --release` (lib, integration, doctests), clippy `-D warnings`, rustdoc `-D warnings`, wasm32 lib build pass on the Mac. Only `gpu_rocks` was run on big (no pass or shader changed).
+- **Not done**: the per-facet palette export (acceptance 4). **#43 stays open.** A `ScatteredRock` outside a rect by its tilt-seated translation is allowed up to a metre in the test; the filter itself uses the plan position.
+
+### Next five items, ranked
+
+1. #43 remainder: export the per-facet rock palette for a host's own rocks (no plugin needed).
+2. #39 remainder: `paths_resist_prints`.
+3. #44 still sea.
+4. #41 wetness as drawn (`ground_look_at`).
+5. #42 remainder: a band debug view and a route-grain capture.
