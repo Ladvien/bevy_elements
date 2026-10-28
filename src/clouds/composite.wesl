@@ -5,7 +5,7 @@
 import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput;
 import bevy_render::view::View;
 import bevy_elements::clouds::common::{
-    CloudParams, ground_before_layer, is_orthographic, scene_distance, shell_range,
+    CloudParams, ground_before_layer, is_orthographic, ray_meets_sea, scene_distance, shell_range,
     sky_through_clouds, view_ray,
 };
 
@@ -38,6 +38,10 @@ fn cloud_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         if scene_distance(in.uv, depth, view.world_from_clip, ray, params.units.x) < shell.x {
             return vec4<f32>(0.0, 0.0, 0.0, 1.0);
         }
+    }
+    // The still sea draws the pixels whose ray meets it; the slab below is for what lies past it.
+    if depth <= 0.0 && ray_meets_sea(cam, dir, params) {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
     }
     var cloud = textureLoad(history, pixel, 0);
     if depth <= 0.0 {
