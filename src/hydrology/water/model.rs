@@ -549,7 +549,7 @@ fn only_patches_with_water_are_drawn() {
     let tree = BoundsTree::from_leaves(&lod, bevy::math::UVec2::splat(dims), leaves);
     let flat = BoundsTree::uniform(&lod, 0.0, 0.0);
     let selected = select_patches(&lod, &flat, Vec3::new(160.0, 5.0, 224.0));
-    let wet = super::wet_patches(&selected, &tree);
+    let wet = super::wet_patches(&selected, &tree, &flat, None);
     assert!(!wet.is_empty() && wet.len() < selected.len());
     let leaf = |p: &Patch| p.level == 0 && p.ix == 2 && p.iz == 3;
     assert!(wet.iter().any(leaf), "the lake's leaf is drawn");
@@ -565,4 +565,39 @@ fn only_patches_with_water_are_drawn() {
     // The ripple slope follows Cox & Munk.
     assert!(close(ripple_slope(4.0), 0.153, 1e-3));
     assert!(close(ripple_slope(10.0), 0.233, 1e-3));
+}
+
+/// A still level draws the patches whose lowest ground is under it by 3 mm or more, and only
+/// those; with no level the answer is the simulated water's alone.
+#[test]
+fn a_still_level_draws_the_patches_with_ground_under_it() {
+    use crate::terrain::lod::{BoundsTree, LodConfig, select_patches};
+    let lod = LodConfig::new(Vec2::splat(1024.0), 4.0);
+    let dims = (1024.0 / (32.0 * 4.0)) as u32;
+    // Ground at 5 m, except a basin floor at -2 m in the leaf (2, 3) and a 2 mm dip below the
+    // level in (5, 5).
+    let floor = |x: u32, z: u32| match (x, z) {
+        (2, 3) => -2.0,
+        (5, 5) => -0.002,
+        _ => 5.0,
+    };
+    let leaves = (0..dims * dims).map(|i| {
+        let h = floor(i % dims, i / dims);
+        (h, 5.0)
+    });
+    let boxes = BoundsTree::from_leaves(&lod, bevy::math::UVec2::splat(dims), leaves);
+    let dry = BoundsTree::uniform(&lod, 0.0, 0.0);
+    let flat = BoundsTree::uniform(&lod, 0.0, 0.0);
+    let selected = select_patches(&lod, &flat, Vec3::new(160.0, 5.0, 224.0));
+    assert!(super::wet_patches(&selected, &dry, &boxes, None).is_empty());
+    let wet = super::wet_patches(&selected, &dry, &boxes, Some(0.0));
+    assert!(!wet.is_empty() && wet.len() < selected.len());
+    assert!(
+        wet.iter().all(|p| {
+            let size = 1u32 << p.level;
+            (p.ix * size..(p.ix + 1) * size).contains(&2)
+                && (p.iz * size..(p.iz + 1) * size).contains(&3)
+        }),
+        "only the basin's patches are drawn; a 2 mm dip is not"
+    );
 }
