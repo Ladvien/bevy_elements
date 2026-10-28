@@ -81,6 +81,8 @@ pub struct Environment<'w> {
     history: Option<Res<'w, ClimateHistory>>,
     /// The routes the game laid; absent without the paths plugin.
     paths: Option<Res<'w, crate::PathNetwork>>,
+    /// The still water level a host declared; absent without one.
+    still: Option<Res<'w, crate::StillWater>>,
 }
 
 impl Environment<'_> {
@@ -179,17 +181,31 @@ impl Environment<'_> {
     /// Depth of the water above the ground at `position` (world XZ), m: `Some(0.0)` on dry
     /// ground, `None` outside the terrain, when there is none, and before the first readback
     /// (the simulation has to have run). A bilinear sample of the last readback, up to one
-    /// readback interval old.
+    /// readback interval old. Where a [`StillWater`](crate::StillWater) is set the answer is the
+    /// higher of the simulated surface and the still level, so it needs only the terrain readback
+    /// (no hydrology).
     pub fn water_depth(&self, position: Vec2) -> Option<f32> {
         self.water_depth_metres(self.xz_to_metres(position))
     }
 
     /// [`water_depth`](Self::water_depth) at a metre-frame XZ.
     pub(crate) fn water_depth_metres(&self, position: Vec2) -> Option<f32> {
-        self.snapshot
+        let simulated = self
+            .snapshot
             .water_depth
             .as_ref()
-            .and_then(|w| w.depth_at(position))
+            .and_then(|w| w.depth_at(position));
+        let Some(still) = self.still.as_ref() else {
+            return simulated;
+        };
+        let level = still.level / self.units.per_metre();
+        let still_depth = self
+            .terrain_height_metres(position)
+            .map(|ground| (level - ground).max(0.0));
+        match (simulated, still_depth) {
+            (Some(sim), Some(still)) => Some(sim.max(still)),
+            (sim, still) => sim.or(still),
+        }
     }
 
     /// Depth-averaged velocity of the water at `position` (world XZ), m/s along world X and Z:

@@ -20,7 +20,8 @@ mod water;
 mod water_gpu;
 
 pub use water::{
-    WaterExtension, WaterMaterial, WaterParams, WaterPatch, WaterPlugin, WaterSettings, WaterState,
+    StillWater, WaterExtension, WaterMaterial, WaterParams, WaterPatch, WaterPlugin, WaterSettings,
+    WaterState,
 };
 
 use std::collections::VecDeque;
