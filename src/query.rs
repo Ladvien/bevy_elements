@@ -12,6 +12,7 @@ use crate::celestial::{
 use crate::climate::{ClimateHistory, ClimateSummary, DayConditions, Weather};
 use crate::clouds::CloudShadowSnapshot;
 use crate::cover::CoverSnapshot;
+use crate::fog::HorizonRing;
 use crate::hydrology::{WaterDepthSnapshot, WaterVelocitySnapshot};
 use crate::plugin::ElementsUnits;
 use crate::terrain::{TerrainLeaves, TerrainSnapshot};
@@ -26,6 +27,8 @@ pub struct EnvironmentSnapshot {
     pub(crate) wind: Option<WindSnapshot>,
     /// The cloud shadow map's query grid at the last readback.
     pub(crate) cloud_shadow: Option<CloudShadowSnapshot>,
+    /// The sky's radiance at the horizon all the way round at the last readback.
+    pub(crate) horizon: Option<HorizonRing>,
     /// The terrain surface heights at the last readback, if a terrain exists.
     pub(crate) terrain: Option<TerrainSnapshot>,
     /// The terrain's leaf-patch bounds at the last readback.
