@@ -105,7 +105,7 @@ fn build_weathered(units: f32, camera: Option<Transform>, preset: WeatherPreset)
         })
         .insert_resource(WorldClock {
             paused: true,
-            ..WorldClock::new(CivilDate::new(2026, 6, 21)).at_hour(12.0)
+            ..WorldClock::new(CivilDate::new(2026, 6, 21)).at_hour(std::env::var("SWEEP_HOUR").ok().and_then(|v| v.parse().ok()).unwrap_or(12.0))
         })
         .add_systems(Startup, setup)
         .add_systems(
@@ -444,4 +444,14 @@ fn gpu_the_skirt_in_a_foot_world_draws_as_in_metres() {
         .fold(0.0, f32::max);
     println!("largest difference between the metre and foot columns {worst:.4}");
     assert!(worst < 0.03, "the foot world's column differs by {worst}");
+}
+
+#[test]
+#[ignore = "needs a GPU"]
+fn gpu_zz_sweep() {
+    let _lock = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let (with, _) = edge_columns(1.0, "sweep");
+    for y in [70usize, 80, 84, 85, 86, 87, 90, 100] {
+        println!("ROW {y} {:?}", with[y]);
+    }
 }
