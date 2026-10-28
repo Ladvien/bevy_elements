@@ -5027,3 +5027,22 @@ Host: the Mac for the CPU gates, `big` (RTX 3090) for the GPU test. Issues read 
 3. #44 still sea.
 4. #41 wetness as drawn (`ground_look_at`).
 5. #42 remainder: a band debug view and a route-grain capture.
+
+## Iteration 75 — 2026-10-28 — Stone shapes exported for a host's own scatter (#43)
+
+Host: the Mac (CPU gates only; no GPU, no captures). Issues read through the API: #38, #39, #41, #42, #43, #44, #45 open; no new bug; #45 is a release request, seen and skipped. Ranked: #43 part 2 (the palette export, pure API over an existing builder, unblocks Sanctuary's flat-toned stones) over #44 (a still sea: a new water mode needing a design) and #39 `paths_resist_prints`.
+
+- **Change**: `stone_mesh(shape, StoneDetail)`, `stone_facet_tones`, `stone_palette`, `STONE_SHAPES`, `StoneDetail` re-exported flat; same builder (`rock_geometry`) the scatter uses, so the plugin's meshes are unchanged. Research addendum committed first.
+- **Sources**: none new (`rock-scatter.md` Model 5, `stone-material.md`, `rock-palette.md`).
+- **Evidence**: unit test `a_hosts_stone_wears_a_tone_per_joint_facet_without_the_plugin` (shapes 0, 5, 6, 11; >= 3 distinct facet tones, near and far meshes both span > 0.2 of hue, wrap at `STONE_SHAPES`, palette mean 1) with no plugin or app.
+- **Visual and performance gates**: not applicable, nothing drawn changes (no capture, no benchmark).
+- **Gates**: `cargo test --release` (338 lib, integration, doctests), clippy `-D warnings`, rustdoc `-D warnings`, wasm32 lib build pass. GPU suites not run.
+- **Not done**: no capture of a host-spawned stone under `StandardMaterial`. **#43 stays open** pending the owner confirming Sanctuary's use (acceptance 1, 2, 3, 5 shipped in iteration 74, 4 now).
+
+### Next five items, ranked
+
+1. #39 remainder: `paths_resist_prints`.
+2. #44 still sea.
+3. #41 wetness as drawn (`ground_look_at`).
+4. #42 remainder: a band debug view and a route-grain capture.
+5. A capture of `stone_mesh` under a plain `StandardMaterial` (visual proof of the export).
