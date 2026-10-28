@@ -63,7 +63,7 @@ fn setup(
             .with_extent(Vec2::splat(256.0))
             .with_resolution(UVec2::splat(128)),
     );
-    director.force(WeatherPreset::Clear, Duration::ZERO);
+    director.force(match std::env::var("TP").as_deref() { Ok("fog") => WeatherPreset::Fog, Ok("overcast") => WeatherPreset::Overcast, _ => WeatherPreset::Clear }, Duration::ZERO);
 }
 
 fn build() -> App {
@@ -95,7 +95,7 @@ fn build_viewed(units: f32, camera: Option<Transform>) -> App {
         })
         .insert_resource(WorldClock {
             paused: true,
-            ..WorldClock::new(CivilDate::new(2026, 6, 21)).at_hour(12.0)
+            ..WorldClock::new(CivilDate::new(2026, 6, 21)).at_hour(std::env::var("TH").ok().and_then(|h| h.parse().ok()).unwrap_or(12.0))
         })
         .add_systems(Startup, setup)
         .add_systems(
