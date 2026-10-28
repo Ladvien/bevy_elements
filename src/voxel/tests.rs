@@ -147,6 +147,7 @@ fn snapshot(depth: impl Fn(usize) -> f32) -> CoverSnapshot {
     CoverSnapshot {
         grid,
         wetness: vec![0.0; 32 * 32].into(),
+        swe: vec![0.0; 32 * 32].into(),
         depth,
     }
 }
@@ -711,6 +712,7 @@ fn a_snow_volume_samples_the_cover_map_at_its_world_position() {
         grid,
         depth: vec![1.0_f32; 128 * 128].into(),
         wetness: vec![0.0; 128 * 128].into(),
+        swe: vec![0.0; 128 * 128].into(),
     });
     app.update();
     app.update();
