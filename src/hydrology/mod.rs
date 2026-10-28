@@ -549,6 +549,7 @@ struct Inputs<'w> {
     time: Res<'w, Time<Real>>,
     units: Res<'w, ElementsUnits>,
     erosion_locked: Option<Res<'w, ErosionLocked>>,
+    still: Option<Res<'w, StillWater>>,
 }
 
 /// The raw descriptions of the sources and sinks (positions in the metre frame, from their world
@@ -616,6 +617,7 @@ fn run_hydrology(
         view,
         time,
         erosion_locked,
+        still,
         units,
     } = inputs;
     let erosion_on = erosion_enabled(&erosion, erosion_locked.is_some());
@@ -707,7 +709,28 @@ fn run_hydrology(
         n as u32
     } else {
         let dt = time.delta_secs_f64();
-        runtime.scheduler.step(dt, settings.time_scale, step_s, max)
+        let area = f64::from(grid.extent().x) * f64::from(grid.extent().y);
+        let source_rate: f64 = runtime
+            .inputs
+            .entries
+            .iter()
+            .map(|e| f64::from(e.2))
+            .filter(|r| *r > 0.0)
+            .sum();
+        let mean_depth = (runtime.processed > 0).then(|| stats.volume_m3 / area);
+        if model::still_idle(
+            still.is_some(),
+            false,
+            weather.precipitation_mm_h,
+            source_rate,
+            mean_depth,
+        ) {
+            // Nothing to simulate: no substeps, and no backlog to burst through on resuming.
+            runtime.scheduler.reset();
+            0
+        } else {
+            runtime.scheduler.step(dt, settings.time_scale, step_s, max)
+        }
     };
 
     let baking = runtime.bake.is_some();

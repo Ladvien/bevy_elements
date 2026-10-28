@@ -72,6 +72,24 @@ pub(crate) fn wet_depth_m(cell_m: f32) -> f32 {
     WET_FRACTION * cell_m
 }
 
+/// Whether a [`StillWater`](crate::StillWater) host has nothing for the simulation to do: no bake,
+/// no rain, no source, and a readback that found the terrain dry (mean depth below one
+/// [`QUANTUM_M`], the least depth the simulation delivers). `mean_depth_m` is `None` before the
+/// first readback, when the terrain's water is unknown.
+pub(crate) fn still_idle(
+    still: bool,
+    baking: bool,
+    rain_mm_h: f32,
+    source_rate_m3_s: f64,
+    mean_depth_m: Option<f64>,
+) -> bool {
+    still
+        && !baking
+        && rain_mm_h <= 0.0
+        && source_rate_m3_s <= 0.0
+        && mean_depth_m.is_some_and(|d| d < QUANTUM_M)
+}
+
 /// Substeps per frame from real time: a signed remainder carries between frames so the long-run
 /// rate is exact, and the backlog is capped at one maximal frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -303,6 +321,23 @@ pub(crate) fn thermal_moves(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A still-level host idles only when every way water could arrive is shut and a readback
+    /// found the terrain dry; any one of them keeps the simulation running.
+    #[test]
+    fn a_still_sea_idles_the_simulation_only_while_nothing_can_make_water() {
+        let dry = Some(0.0);
+        assert!(still_idle(true, false, 0.0, 0.0, dry));
+        assert!(!still_idle(false, false, 0.0, 0.0, dry), "no still level");
+        assert!(!still_idle(true, true, 0.0, 0.0, dry), "a bake");
+        assert!(!still_idle(true, false, 0.5, 0.0, dry), "rain");
+        assert!(!still_idle(true, false, 0.0, 0.1, dry), "a source");
+        assert!(!still_idle(true, false, 0.0, 0.0, None), "no readback yet");
+        assert!(
+            !still_idle(true, false, 0.0, 0.0, Some(1e-3)),
+            "water on the ground"
+        );
+    }
 
     fn substeps_in(fps: f64, seconds: f64, time_scale: f32, max: u32) -> (u64, f64) {
         let mut scheduler = Scheduler::default();
