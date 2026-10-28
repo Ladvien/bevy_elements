@@ -5086,3 +5086,22 @@ Host: the Mac (CPU gates only; `big` reachable but no GPU test run, no captures)
 3. #44 remainder: wave rings on still water, grid-edge continuation, foot-world GPU check.
 4. Shoreline foam that survives the edge fade (all water).
 5. #42 remainder: a band debug view and a route-grain capture.
+
+## Iteration 78 — 2026-10-28 — `Environment::sinkage_at`: the depth a step would press (#39, second slice)
+
+Host: the Mac (Apple M1 Max, Metal). Issues read through the API: #38, #39, #41, #42, #43, #44, #45 open; no new bug; #45 is a release request, seen and skipped. Ranked: #39 acceptance 3 (`sinkage_at`, the half the iteration-after-`min_depth_m` note deferred; a CPU mirror of the kernel already existed) over #41 `FootprintPressure` (needs a fade state and a policy) and #44's wave rings (GPU look work, no captures on this host).
+
+- **Change**: `Environment::sinkage_at(position, half, load_n) -> Option<f32>`: the kernel's `sinkage(g, p, b)` evaluated on the readbacks' ground. The trails mirror (`trails::model::mirror`, was test-only) is now compiled in; `TerrainSnapshot::slope_deg` rebuilds the kernel's gradient stencil on the CPU; the cover readback grew from `vec2` to `vec4` per cell so the snow's water equivalent (hence density) reaches the CPU (`CoverSnapshot::swe`, `snow_density_at`). The query takes the contact's half extents too: the issue's `(position, load_n)` has no area to derive a pressure from.
+- **Sources**: none new (`docs/research/trails.md`, addendum committed first).
+- **Evidence**: unit tests `a_step_presses_what_the_ground_under_it_takes`, `a_step_has_no_answer_without_ground_or_contact`, `the_slope_is_the_gradients_angle_everywhere_on_a_ramp`; GPU test `the_depth_a_step_would_press_is_the_depth_it_presses` (`tests/gpu_trails.rs`): asked 0.2400 / 0.0379 / 0.0048 / 0.0339 m (snow, wet soil, dry soil, dry sand) against a trail field deepest texel of 0.2365 / 0.0373 / 0.0047 / 0.0327, i.e. 1.5–3.6 % under, never over. **Acceptance 3's 1 mm is not met in snow (3.5 mm) or on sand (1.2 mm)**: the stamp relaxes toward the target and the deepest 5 cm texel of the profile does not reach it; the test asserts 0–4 % under.
+- **Visual and performance gates**: nothing drawn changes (readback kernel output is unchanged in its first two lanes); no capture, no benchmark. The readback buffer doubles (8 → 16 B per readback cell: 2 MiB at 512², 8 MiB at 1024²) and the readback kernel adds one lane to its sum; not timed.
+- **Gates** (Mac): `cargo test --release` (344 lib, integration, doctests), clippy `-D warnings`, rustdoc `-D warnings`, wasm32 lib build, `tools/wesl-check`, GPU: all 7 of `gpu_trails`, all 8 of `cover::gpu_tests`. Other GPU suites not run.
+- **Not done (#39 stays open)**: `paths_resist_prints`. A `TrailGround` a game supplies is not read by `sinkage_at`.
+
+### Next five items, ranked
+
+1. #41 remainder: GPU fixture comparing `ground_look_at` to a rendered pixel at dry/damp/soaked; `FootprintPressure` ramp.
+2. #39 remainder: `paths_resist_prints`.
+3. #44 remainder: wave rings on still water, grid-edge continuation, foot-world GPU check.
+4. Shoreline foam that survives the edge fade (all water).
+5. #42 remainder: a band debug view and a route-grain capture.
