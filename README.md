@@ -596,6 +596,8 @@ fn seek_shelter(env: Environment) {
 
 `wind_at` answers from the GPU field as of the last readback (4 Hz by default, `ElementsReadback`) and falls back to the prevailing wind outside it or before the first readback; `snapshot_age` says how old the answer is. The queries work in an app with no window (a headless server rendering only to an image): there each frame waits for its own GPU work, since nothing presents to pace it, so a readback still lands one frame after it is requested.
 
+`terrain_height(Vec2)` is the ground's bilinear at a world XZ (`None` off the terrain); `terrain_drawn_height(Vec2)` is the surface the full-detail patches actually draw, interpolated over the mesh's triangles (split along `(1, 0)-(0, 1)`), which equals the bilinear at every cell centre and differs inside a quad by at most a quarter of its twist. Seat a figure on a crease (a pad's edge, a ramp) with the second; `TerrainGrid::drawn_height` is the same on a layer you hold.
+
 `water_depth(Vec2)` is the water above the ground at a world XZ: `None` until the first readback or off the terrain, `Some(0.0)` on dry ground. `water_velocity(Vec2)` is the depth-weighted flow velocity (half resolution). Both are bilinear samples of the last readback.
 
 `snow_depth(Vec2)` is the snow on the ground in metres and `wetness(Vec2)` how wet it is (0 dry, 1 a full 2 mm film); like the water queries they are `None` before the first readback or off the terrain.
