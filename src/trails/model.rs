@@ -1,5 +1,5 @@
-//! The trail model's CPU side: the window's placement and the imprint's upload, and (in tests)
-//! the mirror of the kernels' sinkage, rim and slump rules. Every number is
+//! The trail model's CPU side: the window's placement and the imprint's upload, and the
+//! mirror of the kernels' sinkage rules. Every number is
 //! `docs/research/trails.md`; `trails.wesl` evaluates the same formulas and the tests here pin
 //! them (Validation 1).
 
@@ -113,9 +113,9 @@ impl ImprintGpu {
     }
 }
 
-#[cfg(test)]
 pub(crate) mod mirror {
-    //! CPU mirrors of `trails.wesl`'s ground rules, in the same f32 arithmetic.
+    //! CPU mirrors of `trails.wesl`'s ground rules, in the same f32 arithmetic: the tests pin
+    //! them to the kernel's numbers and `Environment::sinkage_at` answers from them.
 
     /// Bekker's pressure–sinkage constants `(n, k_c, k_φ)`: `p = (k_c/b + k_φ) z^n` with `p` in
     /// kPa, the plate width `b` and the sinkage `z` in m, `k_c` in kN/m^(n+1), `k_φ` in

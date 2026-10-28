@@ -400,3 +400,49 @@ fn a_press_threshold_passes_wet_soil_and_sand() {
     assert!(damp >= 0.01, "wet soil presses: {damp}");
     assert!(sand >= 0.01, "dry sand presses: {sand}");
 }
+
+/// A foot on ground laid to `snow_m` of snow holding `swe_m` of water, `wetness` and `sediment_m`
+/// of sediment: the deepest `|h|` it leaves, and `Environment::sinkage_at` for the same foot at
+/// the same point, asked once the readbacks have seen the ground.
+fn pressed_and_asked(snow_m: f32, swe_m: f32, wetness: f32, sediment_m: f32) -> (f32, Option<f32>) {
+    let mut sim = Sim::new();
+    sim.lay_snow(snow_m, swe_m);
+    sim.lay_wetness(wetness);
+    sim.lay_sediment(sediment_m);
+    sim.spawn_imprint(Vec3::new(0.0, snow_m - 0.05, 4.0));
+    sim.frames(60);
+    let (h, _, _) = sim.field();
+    let asked = {
+        use bevy::ecs::system::RunSystemOnce;
+        sim.app
+            .world_mut()
+            .run_system_once(|env: Environment| env.sinkage_at(Vec2::new(0.0, 4.0), FOOT, LOAD_N))
+            .expect("the query system runs")
+    };
+    sim.finish();
+    (-h.iter().copied().fold(0.0f32, f32::min), asked)
+}
+
+/// #39 acceptance 3: `Environment::sinkage_at` answers what the kernel then presses, in fresh
+/// snow, on soil at wetness 0.5, on dry soil and on dry sand, to a millimetre.
+#[test]
+#[ignore = "needs a GPU"]
+fn the_depth_a_step_would_press_is_the_depth_it_presses() {
+    let _lock = serial();
+    let cases = [
+        ("snow", SNOW_M, SNOW_SWE_M, 0.0, 0.0),
+        ("dry soil", 0.0, 0.0, 0.0, 0.0),
+        ("wet soil", 0.0, 0.0, 0.5, 0.0),
+        ("dry sand", 0.0, 0.0, 0.0, 1.0),
+    ];
+    let mut misses = Vec::new();
+    for (name, snow, swe, wet, sediment) in cases {
+        let (pressed, asked) = pressed_and_asked(snow, swe, wet, sediment);
+        println!("{name}: pressed {pressed:.4} m, asked {asked:?}");
+        let asked = asked.unwrap_or_else(|| panic!("{name}: no answer"));
+        misses.push((name, pressed, asked));
+    }
+    for (name, pressed, asked) in misses {
+        assert!((pressed - asked).abs() <= 0.001, "{name}: {pressed} vs {asked}");
+    }
+}
