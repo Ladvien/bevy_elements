@@ -1025,3 +1025,26 @@ fn a_bake_asked_for_before_the_terrain_exists_still_runs() {
     assert_eq!(sim.stats().substeps, 200);
     sim.finish();
 }
+
+/// A host that holds a still sea and has no rain, no source and no water on the ground runs no
+/// substeps (issue #44, acceptance 3); rain wakes the simulation.
+#[test]
+#[ignore = "needs a GPU"]
+fn a_still_sea_with_nothing_wet_runs_no_substeps() {
+    let _lock = serial();
+    let mut sim = Sim::new(Config::new(tank(64, 2.0)));
+    sim.app.insert_resource(StillWater { level: 1.0 });
+    sim.set_time_scale(1.0);
+    // Past the first depth readback, which is what shows the terrain is dry.
+    sim.frames(200);
+    let before = sim.stats().substeps;
+    sim.frames(60);
+    let idle = sim.stats().substeps - before;
+    assert_eq!(idle, 0, "substeps counted over 60 idle frames");
+
+    sim.app.world_mut().resource_mut::<Pin>().mm_h = 30.0;
+    sim.frames(60);
+    let raining = sim.stats().substeps - before;
+    assert!(raining > 0, "rain did not wake the simulation");
+    sim.finish();
+}
