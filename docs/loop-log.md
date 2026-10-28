@@ -5123,3 +5123,22 @@ Host: the Mac (CPU gates only; no GPU test, capture or benchmark). Issues read t
 3. #44 remainder: wave rings on still water, grid-edge continuation, foot-world GPU check.
 4. Shoreline foam that survives the edge fade (all water).
 5. #42 remainder: a band debug view and a route-grain capture.
+
+## Iteration 80 — 2026-10-28 — `WaterContact` rings on `StillWater` (#44, second slice)
+
+Host: the Mac (Apple M1 Max, Metal; CPU gates and the waves GPU file; no captures, no benchmark). Issues read through the API: #43, #44, #45, #46, #38 open; no new bug (#47, #39, #41, #42 are closed). #45 is a release request, seen and skipped; #46 duplicates `sinkage_at` (shipped, iteration 78). Ranked: #44 rings (the consumer's own "not done" item that matters to a wading game: "feet through water") over #43 (waiting on the owner's adoption decision) and the foam work (needs big's captures).
+
+- **Change**: `waves.wesl` `water_at` takes `max(simulated depth, level − ground)` with the level in `WaveParams::sim.w` (was spare), the same expression as the water shader. `run_waves` writes the level (÷ `units.per_metre()`), `NO_STILL_LEVEL` made `pub(crate)`. No new binding or pass.
+- **Sources**: none new (`docs/research/still-water.md` and `waves.md`; deviation (2) marked done).
+- **Evidence**: `gpu_waves::a_body_dropped_on_a_still_sea_sends_out_rings`: 0.25 m sphere onto a 1 m still level over a 0 m bed, no simulated water: largest |h| 1 m away within 1 s is 31.7 mm after, 0 before (test fails on the old shader); acceptance asks 1 mm. The other three `gpu_waves` tests pass.
+- **Visual and performance gates**: not met in the strict sense: no capture of rings on a still sea and no benchmark. The change is one `max` and one subtract in a per-texel function of a pass whose cost is dominated by the convolution; not timed. #44 stays open.
+- **Gates** (Mac): `cargo test --release` (345 lib, integration, doctests), clippy `-D warnings`, rustdoc `-D warnings`, wasm32 lib build, `tools/wesl-check`, `gpu_waves` (4).
+- **Not done (#44 stays open)**: zero hydrology substeps with only a still level; the sea past the grid's edge; a foot-world GPU check; a capture of the rings.
+
+### Next five items, ranked
+
+1. #44 remainder: hydrology idle with only a still level (acceptance 3), foot-world GPU check.
+2. Shoreline foam that survives the edge fade (all water), needs big.
+3. #41 remainder: GPU fixture comparing `ground_look_at` to a rendered pixel; `FootprintPressure`.
+4. #39 `paths_resist_prints`.
+5. #42 remainder: a band debug view and a route-grain capture.

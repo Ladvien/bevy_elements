@@ -25,6 +25,7 @@ use bevy::render::render_resource::{
 use bevy::render::storage::ShaderBuffer;
 
 use crate::gpu::grid::zeroed_buffer;
+use crate::hydrology::{NO_STILL_LEVEL, StillWater};
 use crate::plugin::{
     ElementsQuality, ElementsSystems, ElementsUnits, ElementsView, ensure_gpu_core,
 };
@@ -108,7 +109,8 @@ pub(crate) struct WaveParams {
     /// x: texels a side. y: contacts uploaded. z: 1 to clear the whole field. w: the head tile's
     /// edge in finest texels.
     counts: UVec4,
-    /// x: the finest texel, m. y: substep, s. z: damping, s⁻¹.
+    /// x: the finest texel, m. y: substep, s. z: damping, s⁻¹. w: the [`StillWater`] level in the
+    /// metre frame (−1e9 for none).
     sim: Vec4,
     /// xyz: each cascade's band-centre wavenumber, rad/m.
     band: Vec4,
@@ -293,6 +295,7 @@ fn run_waves(
     contacts: Query<(Entity, &WaterContact, &GlobalTransform)>,
     env: Environment,
     units: Res<ElementsUnits>,
+    still: Option<Res<StillWater>>,
 ) {
     let (Some(terrain), Some(terrain_gpu), Some(mut gpu)) = (terrain, terrain_gpu, gpu) else {
         return;
@@ -365,7 +368,12 @@ fn run_waves(
         terrain: TerrainParamsGpu::new(&terrain.grid, 1, true),
         origins,
         counts: UVec4::new(size, keyed.len() as u32, 0, tile),
-        sim: Vec4::new(base, SUBSTEP_S, settings.damping_per_s.max(0.0), 0.0),
+        sim: Vec4::new(
+            base,
+            SUBSTEP_S,
+            settings.damping_per_s.max(0.0),
+            still.map_or(NO_STILL_LEVEL, |s| s.level / units.per_metre()),
+        ),
         band: Vec4::new(
             band_centre(cascade_texel(base, 0)),
             band_centre(cascade_texel(base, 1)),

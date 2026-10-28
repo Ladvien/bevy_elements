@@ -58,7 +58,8 @@ struct WaveParams {
     origins: array<vec4<i32>, 3>,
     // x: texels a side. y: contacts. z: 1 to clear the field. w: head tile edge, finest texels.
     counts: vec4<u32>,
-    // x: the finest texel (m). y: substep (s). z: damping (1/s).
+    // x: the finest texel (m). y: substep (s). z: damping (1/s). w: the still water level (m,
+    // −1e9 for none).
     sim: vec4<f32>,
     // xyz: each cascade's band-centre wavenumber (rad/m).
     band: vec4<f32>,
@@ -152,7 +153,9 @@ fn centre(c: u32, w: vec2<i32>) -> vec2<f32> {
     return (vec2<f32>(w) + 0.5) * texel_m(c);
 }
 
-// The water at world XZ: (undisturbed surface height, depth), m. No water off the terrain.
+// The water at world XZ: (undisturbed surface height, depth), m. No water off the terrain. The
+// still level (`params.sim.w`, −1e9 for none) is one more surface: the column is the higher of the
+// simulated depth and the level over the ground.
 fn water_at(xz: vec2<f32>) -> vec2<f32> {
     let t = grid_taps(params.terrain.grid, xz);
     if !t.inside {
@@ -161,7 +164,9 @@ fn water_at(xz: vec2<f32>) -> vec2<f32> {
     let a = mix(terrain_cells[t.i00].xz, terrain_cells[t.i10].xz, t.w.x);
     let b = mix(terrain_cells[t.i01].xz, terrain_cells[t.i11].xz, t.w.x);
     let c = mix(a, b, t.w.y);
-    return vec2<f32>(params.terrain.misc.x + c.x + c.y, c.y);
+    let ground = params.terrain.misc.x + c.x;
+    let column = max(c.y, params.sim.w - ground);
+    return vec2<f32>(ground + column, column);
 }
 
 fn velocity_at(xz: vec2<f32>) -> vec2<f32> {
