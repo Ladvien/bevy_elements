@@ -57,6 +57,11 @@ struct CloudParams {
     /// `haze.xyz` over it is the fog's luminance), y the slot block edge k, z texels per face edge,
     /// w the weight a marched texel takes in its history (1 when the history is invalid).
     probe: vec4<f32>,
+    /// The still sea (`StillWater`, `hydrology/water.rs`): x its level, m; y 1 while one is set.
+    sea: vec4<f32>,
+    /// xy: world XZ of the minimum corner of the region the sea and its skirt cover, m. zw: the
+    /// maximum corner.
+    sea_box: vec4<f32>,
 }
 
 const PI: f32 = 3.14159265358979;
@@ -208,6 +213,19 @@ fn ground_before_layer(o_r: f32, mu: f32, shell_in: f32, big_r: f32) -> f32 {
         return ground.x;
     }
     return -1.0;
+}
+
+/// Whether a ray from `cam` along `dir` meets the still sea's plane inside the region the sea
+/// covers. The water draws such a pixel itself (its absorb pass hides what is behind it), so the
+/// composite leaves it alone, as it does a pixel with a mesh; `ground_haze`'s slab belongs to the
+/// pixels past the sea.
+fn ray_meets_sea(cam: vec3<f32>, dir: vec3<f32>, p: CloudParams) -> bool {
+    if p.sea.y < 0.5 || dir.y > -1e-4 || cam.y <= p.sea.x {
+        return false;
+    }
+    let t = (cam.y - p.sea.x) / -dir.y;
+    let hit = cam.xz + dir.xz * t;
+    return all(hit >= p.sea_box.xy) && all(hit <= p.sea_box.zw);
 }
 
 /// A view ray: its origin and unit direction.
