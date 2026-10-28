@@ -49,6 +49,12 @@ pub struct RockSettings {
     pub range_scale: f32,
     /// Seed of the scatter.
     pub seed: u64,
+    /// Where rocks may lie, in the metre frame (`Rect` x is world X, y is world Z). `None`
+    /// places no restriction; `Some(rects)` keeps a rock only where its position is inside at
+    /// least one rectangle, so `Some(vec![])` keeps none. The rocks that remain are the
+    /// unrestricted scatter's rocks inside the region, in the same places, so a change of region
+    /// moves none (`docs/research/rock-scatter.md`, addendum). Default `None`.
+    pub allowed: Option<Vec<Rect>>,
 }
 
 impl Default for RockSettings {
@@ -59,6 +65,7 @@ impl Default for RockSettings {
             meadow_floor: 0.015,
             range_scale: 1.0,
             seed: 0,
+            allowed: None,
         }
     }
 }
@@ -71,6 +78,11 @@ impl RockSettings {
             meadow_cover: self.meadow_cover.max(0.0),
         }
     }
+}
+
+/// Whether a rock at `xz` (metre frame) is inside the allowed region: `None` allows everywhere.
+fn is_allowed(allowed: Option<&[Rect]>, xz: Vec2) -> bool {
+    allowed.is_none_or(|rects| rects.iter().any(|r| r.contains(xz)))
 }
 
 /// One scattered rock: the entity that carries its transform. Its two children draw it (a near
@@ -328,6 +340,7 @@ struct FieldKey {
     grid_y0: f32,
     cover: CoverParams,
     seed: u64,
+    allowed: Option<Vec<Rect>>,
     /// The view's scale: a camera that zooms or a focus that moves to another orthographic view
     /// changes what is drawn, so the scatter is rebuilt.
     view: [f32; 4],
@@ -481,6 +494,7 @@ fn scatter(
         grid_y0: snap.grid.y0,
         cover,
         seed: settings.seed,
+        allowed: settings.allowed.clone(),
         view: scale.key(),
         units: u,
     };
@@ -497,7 +511,7 @@ fn scatter(
             .collect();
         field.key = Some(key);
     }
-    if cover.max_cover() <= 0.0 || range_per_m <= 0.0 {
+    if cover.max_cover() <= 0.0 || range_per_m <= 0.0 || settings.allowed.as_deref() == Some(&[]) {
         return;
     }
     // A class the view does not draw keeps an empty lattice, so nothing is built for it.
@@ -546,7 +560,7 @@ fn scatter(
         // diameter threshold, and `RockStats` reports what is on the ground.
         let mut count = 0;
         for rock in &rocks {
-            if !scale.draws(rock.diameter_m) {
+            if !is_allowed(settings.allowed.as_deref(), rock.xz) || !scale.draws(rock.diameter_m) {
                 continue;
             }
             count += 1;
@@ -767,6 +781,21 @@ mod tests {
             Vec2::new(height_m * 16.0 / 9.0, height_m),
         );
         Projection::from(projection)
+    }
+
+    #[test]
+    fn a_region_keeps_what_is_inside_any_rectangle() {
+        let a = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let b = Rect::new(20.0, 0.0, 30.0, 10.0);
+        let rects = [a, b];
+        // No region restricts nothing; an empty one keeps nothing.
+        assert!(is_allowed(None, Vec2::new(1e6, -1e6)));
+        assert!(!is_allowed(Some(&[]), Vec2::ZERO));
+        // World X is the rectangle's x, world Z its y, and the union of rectangles is kept.
+        assert!(is_allowed(Some(&rects), Vec2::new(5.0, 5.0)));
+        assert!(is_allowed(Some(&rects), Vec2::new(25.0, 5.0)));
+        assert!(!is_allowed(Some(&rects), Vec2::new(15.0, 5.0)));
+        assert!(!is_allowed(Some(&rects), Vec2::new(5.0, 15.0)));
     }
 
     #[test]
