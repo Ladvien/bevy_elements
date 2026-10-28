@@ -741,7 +741,65 @@ fn ensure_terrain(
 /// Despawn the patch pool (the terrain's children), if any.
 fn clear_pool(commands: &mut Commands, runtime: &mut TerrainRuntime) {
     for slot in runtime.pool.drain(..) {
+        // `try_`: the slots are the terrain's children, so a host that despawned the terrain
+        // entity already took them.
         commands.entity(slot.entity).despawn();
+    }
+}
+
+#[cfg(test)]
+mod pool_tests {
+    use super::*;
+    use bevy::ecs::error::{FallbackErrorHandler, panic};
+    use bevy::ecs::system::RunSystemOnce;
+
+    fn world_with_pool(slots: usize) -> (World, Entity, Vec<Entity>) {
+        let mut world = World::new();
+        world.insert_resource(FallbackErrorHandler(panic));
+        let terrain = world.spawn_empty().id();
+        let children: Vec<Entity> = (0..slots)
+            .map(|_| world.spawn(ChildOf(terrain)).id())
+            .collect();
+        let mut runtime = TerrainRuntime::default();
+        runtime.pool = children
+            .iter()
+            .map(|&entity| PoolSlot {
+                entity,
+                patch: None,
+            })
+            .collect();
+        world.insert_resource(runtime);
+        (world, terrain, children)
+    }
+
+    fn run_clear(world: &mut World) {
+        let result = world.run_system_once(
+            |mut commands: Commands, mut runtime: ResMut<TerrainRuntime>| {
+                clear_pool(&mut commands, &mut runtime);
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    /// A host that despawns the terrain takes the pool with it; clearing the pool afterwards must
+    /// not report the slots as missing (#47).
+    #[test]
+    fn clearing_the_pool_after_the_terrain_despawned_reports_nothing() {
+        let (mut world, terrain, children) = world_with_pool(8);
+        world.despawn(terrain);
+        assert!(children.iter().all(|&c| world.get_entity(c).is_err()));
+        run_clear(&mut world);
+        assert!(world.resource::<TerrainRuntime>().pool.is_empty());
+    }
+
+    /// A pool rebuilt under a live terrain still despawns the old slots.
+    #[test]
+    fn clearing_the_pool_under_a_live_terrain_despawns_the_slots() {
+        let (mut world, terrain, children) = world_with_pool(8);
+        run_clear(&mut world);
+        assert!(world.resource::<TerrainRuntime>().pool.is_empty());
+        assert!(children.iter().all(|&c| world.get_entity(c).is_err()));
+        assert!(world.get_entity(terrain).is_ok());
     }
 }
 
