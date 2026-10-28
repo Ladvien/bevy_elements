@@ -399,8 +399,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         * smoothstep(threshold - 0.12, threshold + 0.15, 0.3 * flow.patch_noise + 0.7 * lace);
     let foam = max(max(f_speed, f_contact), f_breaking);
 
-@if(BLEND_MULTIPLY) {
+    // What the absorb pass leaves of the scene behind the water, per channel.
     let x = (1.0 - f) * beer_lambert(water.absorption.xyz, t_eff) * bed_seen * (1.0 - foam);
+@if(BLEND_MULTIPLY) {
     var out: FragmentOutput;
     // Premultiplied by the edge alpha, written directly: a transmittance is not fogged or tonemapped.
     out.color = vec4<f32>(x * a_edge, a_edge);
@@ -416,26 +417,24 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     pbr_input.material.metallic = 0.0;
     pbr_input.N = n;
     pbr_input.world_normal = n;
-    // The ground fog already scattered over the bed this pixel shows; the film adds no fog of its
-    // own (a fog blend would pull the added radiance toward the fog colour twice). A skirt tile has
-    // no bed behind it (the absorb pass left black), so it takes the camera's fog itself.
+    var out: FragmentOutput;
+    let lit = apply_pbr_lighting(pbr_input);
+    let film = vec4<f32>(lit.rgb * cloud_shadow_ratio(p), a_edge);
+    // A skirt tile has no bed behind it (the absorb pass left black), so it takes the camera's fog
+    // itself. Over the grid the bed was fogged before the absorb pass multiplied it, so that
+    // multiply also tinted the fog in front of the water (a fogged sea turned teal against a grey
+    // sky). Fog sits in front of the surface, so the film is fogged here and the share of the
+    // fog the absorb pass removed is put back: with `x` the pass's transmittance and `Lf` the fog
+    // radiance over this pixel, the bed's fog `Lf` came out as `x · Lf` and `Lf · (1 − x)` is added.
     var bed_fogged = true;
 @if(VERTEX_OUTPUT_INSTANCE_INDEX) {
     bed_fogged = mesh_functions::get_tag(in.instance_index) < SKIRT_TAG;
 }
-    // Where the still sea's bed fades out at the grid's border (`bed_seen` < 1) the bed no longer
-    // carries the fog, so that share is fogged here, and the join with the skirt shows no step.
-    var with_fog = pbr_input;
+    let fogged = main_pass_post_lighting_processing(pbr_input, film);
+    out.color = fogged;
     if bed_fogged {
-        pbr_input.material.flags = pbr_input.material.flags & ~pbr_types::STANDARD_MATERIAL_FLAGS_FOG_ENABLED_BIT;
-    }
-    var out: FragmentOutput;
-    let lit = apply_pbr_lighting(pbr_input);
-    out.color = vec4<f32>(lit.rgb * cloud_shadow_ratio(p), a_edge);
-    let unfogged = main_pass_post_lighting_processing(pbr_input, out.color);
-    out.color = unfogged;
-    if bed_fogged && bed_seen < 1.0 {
-        out.color = mix(main_pass_post_lighting_processing(with_fog, vec4<f32>(lit.rgb * cloud_shadow_ratio(p), a_edge)), unfogged, bed_seen);
+        let fog_only = main_pass_post_lighting_processing(pbr_input, vec4<f32>(0.0, 0.0, 0.0, a_edge));
+        out.color = vec4<f32>(fogged.rgb - x * fog_only.rgb, fogged.a);
     }
     return out;
 }
