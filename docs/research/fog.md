@@ -131,3 +131,5 @@ Half-float range check: σ_V at 40 000 m visibility is 9.78e-5, at height 120 m 
 - `wronski-2014-volumetric-fog` (SIGGRAPH 2014 course; URL above, no DOI)
 - `10.1145_2776880.2787702` (Hillaire 2015; slides only, not downloaded/converted)
 - `koschmieder-1924` (not obtainable by DOI; used via Bevy docs)
+
+**Update (iteration 87):** Validation 12's remedy, the atmosphere's horizon colour, is built: the fog colour is the sky's horizon radiance toward the camera's heading under a clear sky (`docs/research/fog-colour.md`). Measured at 12, 19.5 and 21 h the horizon line over a far sea fell from 9, 18 and 9 levels to 0.3, 1.6 and 3.5.
