@@ -118,6 +118,11 @@ fn morph_k(distance: f32, lod: u32) -> f32 {
     return clamp((distance - range.x) / (range.y - range.x), 0.0, 1.0);
 }
 
+// A tag at or above this value marks a skirt tile (the sea past the terrain grid, `water.rs`): its
+// 33 × 33 mesh is placed by the transform's scale, the grid's taps clamp to the edge sample, and
+// nothing morphs.
+const SKIRT_TAG: u32 = 1000u;
+
 // The terrain's CDLOD vertex with the morph measured against the terrain surface (so the water
 // morphs with the ground under it), lifted by the water depth. In the metre frame: the instance
 // matrix's translation (world units) is divided by `units`.
@@ -125,6 +130,11 @@ fn water_vertex_position(local: vec3<f32>, instance_index: u32) -> vec4<f32> {
     let m = mesh_functions::get_world_from_local(instance_index);
     let lod = mesh_functions::get_tag(instance_index);
     let origin = vec3<f32>(m[3].x, m[3].y, m[3].z) / water.units;
+    if lod >= SKIRT_TAG {
+        let size = vec2<f32>(m[0].x, m[2].z) / water.units;
+        let sxz = origin.xz + local.xz * size;
+        return vec4<f32>(sxz.x, origin.y + terrain_height(sxz) + water_depth_at(sxz) + LIFT, sxz.y, 1.0);
+    }
     let gi = round(local.xz * 32.0);
     let step = water.terrain.grid.cell * f32(1u << lod);
     var wxz = origin.xz + gi * step;
