@@ -5067,3 +5067,22 @@ Host: the Mac for the CPU gates, `big` (RTX 3090, Xvfb) for GPU tests, captures 
 3. #39 `paths_resist_prints`.
 4. #41 wetness as drawn (`ground_look_at`).
 5. A capture of `stone_mesh` under a plain `StandardMaterial`.
+
+## Iteration 77 — 2026-10-28 — `Environment::ground_look_at`: the ground's cover in the shader's own terms (#41, first slice)
+
+Host: the Mac (CPU gates only; `big` reachable but no GPU test run, no captures). Issues read through the API: #38, #39, #41, #42, #43, #44, #45 open; no new bug; #45 is a release request, seen and skipped. Ranked: #41 part 1 and 3 (a self-contained CPU query a consumer asked for; the shader's inputs already sit in the readback) over #39 `paths_resist_prints` (shader + storage-buffer budget, needs big) and #44's wave rings (GPU work).
+
+- **Change**: `GroundLook { wet, puddle, snow, drawn_wet }` and `Environment::ground_look_at(xz)`, from `CoverSnapshot` and `WaterDepthSnapshot` with `WetnessSettings` for the puddle thresholds; `drawn_wet = min(max(wet, puddle), 1.4)`, the `wet` `weather_surface` shades on bare ground. `cover::model` gained `puddle_mask` and `DRENCHED_MAX` (the crate's non-test copy of the shader constant). Research addendum in `wet-ground.md` committed first.
+- **Sources**: none new; the shader (`terrain/render.wesl`, `surface_cover.wesl`) and `wet-ground.md`.
+- **Evidence**: unit tests `the_ground_look_is_the_shaders_curves_over_the_readback` and `the_ground_look_is_unknown_off_the_map_and_reads_world_units` (each field against its curve, `None` off the map and without cover, world units in feet).
+- **Visual and performance gates**: not applicable, nothing drawn changes; no benchmark.
+- **Gates** (Mac): `cargo test --release` (341 lib, integration, doctests), clippy `-D warnings`, rustdoc `-D warnings`, wasm32 lib build pass. GPU suites not run.
+- **Not done (#41 stays open)**: acceptance 1 and 2 as pixel comparisons on a GPU fixture at three wetness levels (the answer reads the same buffer the shader binds; not compared to a drawn pixel); `FootprintPressure` (ramp, acceptance 3); the canopy share and rut-floor puddle are not in `drawn_wet`; no 1000-query cost figure.
+
+### Next five items, ranked
+
+1. #41 remainder: GPU fixture comparing `ground_look_at` to a rendered pixel at dry/damp/soaked; `FootprintPressure` ramp.
+2. #39 remainder: `paths_resist_prints`.
+3. #44 remainder: wave rings on still water, grid-edge continuation, foot-world GPU check.
+4. Shoreline foam that survives the edge fade (all water).
+5. #42 remainder: a band debug view and a route-grain capture.
