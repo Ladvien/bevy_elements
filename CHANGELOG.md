@@ -20,6 +20,8 @@
 
 ### Fixed
 
+- **Despawning the terrain entity no longer logs one WARN per pooled patch (#47).** The patch pool's slots are the terrain's children, so a host's despawn of the terrain already took them, and `clear_pool` then despawned each remembered slot with `despawn()`, which warns when the entity is gone: 256 `Entity despawned` lines per restart at `High`. It uses `try_despawn()`; a pool rebuilt under a live terrain still removes its old slots. Test `terrain::pool_tests` counts the ECS warnings (8 for 8 slots before, 0 after) with a `log` dev-dependency.
+
 - **The `trails` example lays Stone and packed-snow routes** (`ELEMENTS_PATHS=stone|packed`), so every `PathKind` has a capture path. Captured on the RTX 3090: Gravel and Stone routes draw after the #38 fix (a grey road, a pale slab band on turf); a Snow route is a faint compacted band in snow.
 
 - **`tools/wesl-check` now compiles the 11 shaders that import from Bevy.** It reported

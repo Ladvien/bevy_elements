@@ -860,6 +860,7 @@ dependencies = [
  "bevy_isomesh",
  "bytemuck",
  "isomesh",
+ "log",
  "serde",
  "serde_json",
 ]
