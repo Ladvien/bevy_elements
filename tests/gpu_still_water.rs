@@ -552,3 +552,28 @@ fn gpu_the_far_sea_takes_the_tint_of_the_sky_it_faces() {
         "the sea is one tint all round: {warmth:?}"
     );
 }
+
+/// Linear luminance of a column's gamma-encoded levels (`column_at` returns 8-bit levels).
+fn linear_luminance(level: Vec3) -> f32 {
+    let c = (level / 255.0).powf(2.2);
+    0.2126 * c.x + 0.7152 * c.y + 0.0722 * c.z
+}
+
+/// A sea at a grazing view reflects the sky the screen draws, not the lighting fill: at midnight
+/// the sea 8 to 15 rows under the horizon is within 4x of the sky just over it. The night fill
+/// in the sky cube is lifted by the exposure for the light it casts on surfaces, and Bevy's
+/// specular reflection of the horizon took the lift too: 100x the sky, a grey slab under a black
+/// sky (`docs/research/night-sky-light.md` Deviation 5).
+#[test]
+#[ignore = "needs a GPU"]
+fn gpu_a_night_sea_is_not_brighter_than_the_sky_it_reflects() {
+    let _lock = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let column = column_at(0.0, WeatherPreset::Clear);
+    let mean = |rows: std::ops::Range<usize>| {
+        rows.clone().map(|y| linear_luminance(column[y])).sum::<f32>() / rows.len() as f32
+    };
+    let sky = mean(76..83);
+    let sea = mean(93..100);
+    println!("ROW night sky {sky:.3e}, sea {sea:.3e}, ratio {:.1}", sea / sky);
+    assert!(sea < 4.0 * sky, "the sea is {}x the sky at midnight", sea / sky);
+}
