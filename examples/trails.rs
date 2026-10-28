@@ -14,7 +14,8 @@
 //! `ELEMENTS_TERRAIN=mesh` replaces the crate's terrain with a game's own: a hilly mesh in
 //! `WeatheredMaterial` (`with_trails()`), described to the trails by a `TrailGround` of the same
 //! height function, its snow and wetness `SurfaceWeathering`'s, no `Terrain` spawned
-//! (`docs/research/trails-game-ground.md`). `ELEMENTS_FRAMES` and `ELEMENTS_SHOT` work as in the
+//! (`docs/research/trails-game-ground.md`). `ELEMENTS_DETAIL` and `ELEMENTS_FINEST_M` set
+//! `TerrainLook`'s detail knobs (the route grain follows them). `ELEMENTS_FRAMES` and `ELEMENTS_SHOT` work as in the
 //! other examples.
 
 mod common;
@@ -25,7 +26,7 @@ use std::time::Duration;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_elements::*;
-use common::{ExampleHarness, camera};
+use common::{ExampleHarness, camera, terrain_look_env};
 
 /// The loops' centre, world XZ.
 const CENTRE: Vec2 = Vec2::new(0.0, 0.0);
@@ -155,6 +156,9 @@ fn main() {
         } else {
             trail_ground
         });
+    }
+    if let Some(look) = terrain_look_env() {
+        app.insert_resource(look);
     }
     app.add_plugins((DefaultPlugins, ElementsPlugins, ExampleHarness))
         .insert_resource(clock)

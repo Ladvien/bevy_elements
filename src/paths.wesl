@@ -178,7 +178,7 @@ const PATH_STONE_M: f32 = 0.30;
 
 // The route's own grain: the ground's detail belongs to turf and soil, and a lane needs a surface
 // of its own. Band-limited by the pixel's footprint, as every detail in this crate is.
-fn path_grain(p: vec2<f32>, kind: f32, footprint_m: f32, mask_grain: f32) -> PathGrain {
+fn path_grain(p: vec2<f32>, kind: f32, footprint_m: f32, mask_grain: f32, detail: f32) -> PathGrain {
     var out: PathGrain;
     out.albedo = 1.0;
     out.grad = vec3<f32>(0.0);
@@ -199,6 +199,8 @@ fn path_grain(p: vec2<f32>, kind: f32, footprint_m: f32, mask_grain: f32) -> Pat
         weight = 0.55;
         amplitude = 0.24;
     }
+    // The game's detail multiplier (`TerrainLook::detail`) scales the albedo and the tilt alike.
+    amplitude = amplitude * detail;
     var sum = 0.0;
     var grad = vec2<f32>(0.0);
     // The coarsest octave is deliberately wide (four times the base) so the surface still varies
