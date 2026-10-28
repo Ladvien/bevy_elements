@@ -21,7 +21,7 @@ pub(crate) const FAR_SUBDIVISIONS: u32 = 2;
 
 /// The rock palette (`rock-palette.md`, `ROCK_TONE_*` in `common.wesl`): basalt, sandstone,
 /// limestone, varnish, each a multiplier on the rock's albedo; their mean is exactly 1.
-const TONES: [Vec3; 4] = [
+pub(crate) const TONES: [Vec3; 4] = [
     Vec3::new(0.848, 1.015, 1.309),
     Vec3::new(1.223, 1.083, 0.832),
     Vec3::new(1.214, 1.270, 1.256),
