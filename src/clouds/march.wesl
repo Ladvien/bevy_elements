@@ -590,6 +590,28 @@ fn probe_ray(
     return finish_ray(r, aerial_along(dir, r.depth_sum / r.depth_weight, o_r, sky), veil);
 }
 
+/// Sines of the elevations over which the night fill's lift fades in from the horizon (8° and 40°).
+const NIGHT_LIFT_FROM: f32 = 0.13917;
+const NIGHT_LIFT_TO: f32 = 0.64279;
+/// Keeps a horizontal surface's irradiance what the uniform lift gave: `1 / (2 ∫ w s ds)` for the
+/// ramp above, computed numerically.
+const NIGHT_LIFT_NORMALISE: f32 = 1.19839;
+/// The drawn night sky's luminance at the horizon over its zenith's (3.2e-4 over 3.3e-3 linear,
+/// measured at midnight, clear).
+const NIGHT_HORIZON_RATIO: f32 = 0.15;
+
+/// The night sky's light in the cube toward a direction of elevation sine `up`, as a multiple of
+/// the night sky's radiance colour. Bevy multiplies the cube by the camera's exposure, so a value
+/// `exposure` lifts the light that falls on a surface (`docs/research/night-sky-light.md`,
+/// Deviation 2) and a value of one is the sky the screen draws; a specular reflection of the
+/// horizon (a sea at a grazing view) must see the latter, not a sky `exposure` times brighter
+/// than the one over it (Deviation 5). The lift grows from the horizon's physical ratio to the
+/// full lift as the direction rises, normalised so a horizontal surface is lit as before.
+fn night_fill(up: f32, exposure: f32) -> f32 {
+    let w = smoothstep(NIGHT_LIFT_FROM, NIGHT_LIFT_TO, up);
+    return NIGHT_HORIZON_RATIO * (1.0 - w) + NIGHT_LIFT_NORMALISE * exposure * w;
+}
+
 /// The sky probe: one thread per texel of the cube (`z` the face). A texel in this frame's slot
 /// of its k×k block marches its direction and blends the result into its history; every texel
 /// is composed with Bevy's atmosphere cube as the screen composite composes a sky pixel
@@ -632,6 +654,6 @@ fn cloud_sky_probe(@builtin(global_invocation_id) id: vec3<u32>) {
     // cube is display-referred (`params.probe.x` is the camera's exposure), so the radiance
     // is converted with it, as the fog's haze is. Without it a moonless night is a black
     // screen: the sky is lit and the ground on it is not (`docs/research/night-sky-light.md`).
-    let night = vec3<f32>(params.atmo.w) * NIGHT_SKY_COLOUR * params.probe.x;
+    let night = vec3<f32>(params.atmo.w) * NIGHT_SKY_COLOUR * night_fill(dir.y, params.probe.x);
     textureStore(probe_out, texel, face, vec4<f32>(s.rgb + sky * s.a + night, 1.0));
 }
