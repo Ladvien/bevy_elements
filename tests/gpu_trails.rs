@@ -42,6 +42,10 @@ struct Sim {
 
 impl Sim {
     fn new() -> Self {
+        Self::with(TrailSettings::default())
+    }
+
+    fn with(trails: TrailSettings) -> Self {
         let mut app = App::new();
         app.add_plugins((
             support::headless_plugins(),
@@ -51,6 +55,7 @@ impl Sim {
                 .disable::<LightningPlugin>()
                 .disable::<CloudPlugin>(),
         ))
+        .insert_resource(trails)
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
             1.0 / 60.0,
         )))
@@ -210,6 +215,40 @@ fn an_imprint_presses_its_depth_and_raises_its_rim() {
         rim / carved
     );
     sim.finish();
+}
+
+/// The deepest `|h|` under one still foot at `SNOW_M - 0.05` above `snow_m` of snow, after the
+/// field has seen it for 20 frames.
+fn deepest_after_a_step(trails: TrailSettings, snow_m: f32, snow_swe_m: f32) -> f32 {
+    let mut sim = Sim::with(trails);
+    sim.lay_snow(snow_m, snow_swe_m);
+    sim.spawn_imprint(Vec3::new(0.0, snow_m - 0.05, 4.0));
+    sim.frames(20);
+    let (h, _, _) = sim.field();
+    sim.finish();
+    -h.iter().copied().fold(0.0f32, f32::min)
+}
+
+/// #39: `min_depth_m` stops a print the ground would take shallower than it (dry soil, 0.5 cm),
+/// keeps one in fresh snow, and at its default changes nothing.
+#[test]
+#[ignore = "needs a GPU"]
+fn a_press_threshold_skips_dry_soil_and_keeps_snow() {
+    let _lock = serial();
+    let gate = TrailSettings {
+        min_depth_m: 0.01,
+        ..default()
+    };
+    let dry_default = deepest_after_a_step(TrailSettings::default(), 0.0, 0.0);
+    let dry_gated = deepest_after_a_step(gate.clone(), 0.0, 0.0);
+    let snow_gated = deepest_after_a_step(gate, SNOW_M, SNOW_SWE_M);
+    println!("dry {dry_default:.4} m, dry gated {dry_gated:.4} m, snow gated {snow_gated:.4} m");
+    assert!(dry_default > 0.003, "dry soil presses by default: {dry_default}");
+    assert_eq!(dry_gated, 0.0, "dry soil under a 1 cm threshold");
+    assert!(
+        (snow_gated - EXPECTED_DEPTH_M).abs() <= 0.03 * EXPECTED_DEPTH_M,
+        "snow presses through the threshold: {snow_gated}"
+    );
 }
 
 /// Validation 3: an imprint moving at 20 m/s carves an unbroken rut.

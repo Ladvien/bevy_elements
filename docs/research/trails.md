@@ -106,7 +106,7 @@ No source's number is changed: Wong's constants, CRREL's 500 kg/m³, Alvarado's 
 
 **GPU mapping.** One new `vec4<f32>` (`press`, x: the threshold) at the end of `TrailParams`; one early `return` in `trail_stamp` after `want`. No new buffer, binding or pass.
 
-**Validation targets.** CPU: the gate `presses(ground, min_depth, load, width)` is false for dry soil at 0.01 m and true for wet soil, sand and any snow, and true for every ground at 0. GPU: on game ground at wetness 0 with `min_depth_m` 0.01, the trail field's largest |h| after a 760 N foot is 0; at wetness 0.5 at least 0.01 m; at 0 the field is unchanged.
+**Validation targets.** GPU only (the gate is a comparison in the kernel; `a_press_threshold_skips_dry_soil_and_keeps_snow`): on flat terrain with no snow, one 760 N foot leaves 0.0047 m at the default and 0 at `min_depth_m` 0.01; in 30 cm of snow it presses 0.2365 m through the threshold. Not tested: wet soil at 0.5, sand. The issue's target: on game ground at wetness 0 with `min_depth_m` 0.01, the trail field's largest |h| after a 760 N foot is 0; at wetness 0.5 at least 0.01 m; at 0 the field is unchanged.
 
 **Not done (deliberate).** `Environment::sinkage_at` (the issue's second shape) and `paths_resist_prints`: the issue asks for either shape and lists the route rule as related; the threshold alone removes the duplicated physics for the reported case. The route rule is left on the backlog.
 
