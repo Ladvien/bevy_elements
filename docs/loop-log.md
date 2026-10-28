@@ -5180,3 +5180,23 @@ Host: the Mac (Apple M1 Max, Metal; no captures, no benchmark; `big` does not re
 3. #41 remainder: GPU fixture comparing `ground_look_at` to a rendered pixel; `FootprintPressure`.
 4. #39 `paths_resist_prints`.
 5. #42 remainder: a band debug view and a route-grain capture.
+
+## Iteration 83 — 2026-10-28 — The still sea runs past the grid's edge (#44, fifth slice)
+
+Host: the Mac (Apple M1 Max, Metal; no captures beyond the test's own frame dumps, no benchmark; `big` does not resolve). Issues read through the API: #46, #45, #44, #43, #38 open; no new bug. #38 is fixed on `main` (its own comment says so) and awaits the owner's close; #45 is a release request, seen and skipped; #46 duplicates `sinkage_at` (shipped, iteration 78); #43 waits on Sanctuary's adoption decision. Ranked: #44 acceptance 5 (the sea past the grid's edge, the last functional item of #44) over the foam work (needs big) and #41/#39 remainders.
+
+- **Change**: four skirt tiles (`WaterSkirt`, absorb and surface each) carry the `StillWater` sea 100 km beyond the grid, placed by their transform's scale (`MeshTag` ≥ `SKIRT_TAG` in `water.wesl`), drawn only while a `StillWater` is set, with the camera's distance fog kept on (no bed behind them). The cloud composite now returns identity for a depth-0 pixel whose ray meets the still plane inside the sea's region (`CloudParams::sea`, `sea_box`; `ray_meets_sea`): before it painted the fogged-ground slab (a replace blend) over any water pass at pixels with no mesh. Found by bisection: forcing the skirt's absorb output to black changed nothing, so something later replaced those pixels.
+- **Sources**: none new (`docs/research/still-water.md`, "Past the grid").
+- **Evidence** (`tests/gpu_still_water.rs`, 4 tests pass): `gpu_a_still_sea_runs_past_the_terrain_grids_edge`: largest row step under the horizon 0.0847 with the skirt, 0.4019 without; `gpu_the_skirt_in_a_foot_world_draws_as_in_metres`: columns differ by at most 0.0005. Unit test `the_skirt_tiles_the_ring_around_the_grid_without_gap_or_overlap`. Critique: `/tmp/i83/critique.md` (verdict NOT YET: one angle, one hour, clear weather only; no other GPU host).
+- **Findings not fixed**: a 1-px bright line at the horizon (+13 levels) and a hard step across the in-grid sea at row 152 of the test frame, both present at `HEAD` before the change.
+- **Visual and performance gates**: not met in the strict sense (one angle on Metal; no benchmark: eight extra 2048-triangle draws while a `StillWater` is set, fragment cost is the water's own over the sea's pixels).
+- **Gates** (Mac): `cargo test --release` (347 lib + integration + doctests), clippy `-D warnings`, rustdoc `-D warnings`, wasm32 lib build, `tools/wesl-check`, `gpu_water` (10), `gpu_waves`, `gpu_hydrology`, `gpu_still_water` (4), `clouds::gpu_tests` (11 + `the_horizon_sky`).
+- **#44 stays open**: no capture of the rings (acceptance 2 is tested, not seen) and no night, dusk or fog view of the skirt.
+
+### Next five items, ranked
+
+1. A multi-angle, multi-hour, fog and night capture of the skirt and the ring on big (the gate this pass could not meet).
+2. The hard step across the in-grid still sea about 34 m inside the grid's edge in the test frame (find its cause).
+3. Shoreline foam that survives the edge fade (all water), needs big.
+4. #41 remainder: GPU fixture comparing `ground_look_at` to a rendered pixel; `FootprintPressure`.
+5. #39 `paths_resist_prints`.
