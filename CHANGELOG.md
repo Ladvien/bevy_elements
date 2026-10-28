@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Added
+
+- **`Environment::terrain_drawn_height` and `TerrainGrid::drawn_height`: the height of the drawn triangles.** `terrain_height` is the bilinear of the cell centres, but the level-0 patches draw two triangles per quad (split along `(1, 0)-(0, 1)`), which differ inside a quad by up to a quarter of its twist: 0.7 ft at a crease on Sanctuary's 9.375 ft town grid, 0.15 % of points over 0.15 ft. The new query follows the mesh, equals the bilinear at every cell centre and quad edge, and is continuous across quads (#40).
+
 ### Fixed
 
 - **The `trails` example lays Stone and packed-snow routes** (`ELEMENTS_PATHS=stone|packed`), so every `PathKind` has a capture path. Captured on the RTX 3090: Gravel and Stone routes draw after the #38 fix (a grey road, a pale slab band on turf); a Snow route is a faint compacted band in snow.
