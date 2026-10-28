@@ -352,3 +352,14 @@ fn broken_cloud_shows_in_the_probe() {
     assert!(clear < 0.01, "the atmosphere cube has no cloud: {clear}");
     assert!((0.2..=0.7).contains(&composed), "cloud share {composed}");
 }
+
+#[test]
+#[ignore = "needs a GPU"]
+fn scratch_night_probe() {
+    let c = capture(WeatherPreset::Clear, 0.0, Some(0.0), 120);
+    let n = c.size;
+    for (lo, hi) in [(-90.0, -30.0), (-30.0, -2.0), (-2.0, 2.0), (2.0, 10.0), (10.0, 40.0), (40.0, 90.0)] {
+        println!("NIGHT band {lo}..{hi}: atmo {:.3e} composed {:.3e}", band(&c.atmosphere, n, lo, hi), band(&c.composed, n, lo, hi));
+    }
+    println!("NIGHT sky_light {:?} ambient {} model_lux {}", c.sky_light, c.ambient, c.model_lux);
+}
