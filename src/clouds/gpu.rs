@@ -27,7 +27,7 @@ use bevy::render::render_resource::binding_types::{
 };
 use bevy::render::render_resource::{
     AddressMode, BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries,
-    BlendComponent, BlendFactor, BlendOperation, BlendState, CachedRenderPipelineId,
+    BlendComponent, BlendFactor, BlendOperation, BlendState, BufferBinding, CachedRenderPipelineId,
     ColorTargetState, ColorWrites, ComputePassDescriptor, FilterMode, FragmentState, LoadOp,
     MipmapFilterMode, Operations, PipelineCache, RenderPassColorAttachment, RenderPassDescriptor,
     RenderPipelineDescriptor, Sampler, SamplerBindingType, SamplerDescriptor, ShaderStages,
@@ -72,6 +72,9 @@ struct CloudPipelines {
     resolve: Kernel,
     /// The sky probe (`docs/research/sky-light.md`): `march.wesl`'s second entry point.
     probe: Kernel,
+    /// The horizon ring (`docs/research/fog-colour.md`): `march.wesl`'s third entry point, on the
+    /// probe's bind group.
+    horizon: Kernel,
     composite: CachedRenderPipelineId,
     composite_layout: BindGroupLayoutDescriptor,
     repeat: Sampler,
@@ -245,6 +248,7 @@ fn init_pipelines(
                     14,
                     texture_storage_2d_array(TextureFormat::Rgba16Float, write),
                 ),
+                (15, storage_buffer_sized(false, None)),
             ),
         ),
     );
@@ -338,7 +342,8 @@ fn init_pipelines(
         shadow: kernel(shadow, "cloud_shadow", &shadow_layout),
         march: kernel(march.clone(), "cloud_march", &march_layout),
         resolve: kernel(resolve, "cloud_resolve", &resolve_layout),
-        probe: kernel(march, "cloud_sky_probe", &probe_layout),
+        probe: kernel(march.clone(), "cloud_sky_probe", &probe_layout),
+        horizon: kernel(march, "cloud_horizon_ring", &probe_layout),
         composite,
         composite_layout,
         repeat: make_sampler(AddressMode::Repeat),
@@ -423,6 +428,7 @@ fn prepare_views(
     view_uniforms: Res<ViewUniforms>,
     previous_uniforms: Res<PreviousViewUniforms>,
     images: Res<RenderAssets<GpuImage>>,
+    buffers: Res<RenderAssets<GpuShaderBuffer>>,
     cache: Res<PipelineCache>,
     device: Res<RenderDevice>,
     views: Query<(Entity, &ViewPrepassTextures, &AtmosphereTextures, &Msaa), With<CloudView>>,
@@ -463,6 +469,12 @@ fn prepare_views(
         (history_a, history_b)
     } else {
         (history_b, history_a)
+    };
+    let Some(horizon) = buffers
+        .get(&cloud.horizon)
+        .map(|b| b.buffer.as_entire_buffer_binding())
+    else {
+        return;
     };
     for (entity, prepass, atmosphere, msaa) in &views {
         // The layouts bind a single-sampled depth and the composite writes the main texture
@@ -521,6 +533,7 @@ fn prepare_views(
             &device,
             (base, detail, weather, sky_probe),
             atmosphere,
+            horizon.clone(),
         );
         commands.entity(entity).insert(CloudViewGroups {
             march: march_group,
@@ -545,6 +558,7 @@ fn probe_bind_group(
     device: &RenderDevice,
     (base, detail, weather, sky): (&GpuImage, &GpuImage, &GpuImage, &GpuImage),
     atmosphere: &AtmosphereTextures,
+    horizon: BufferBinding,
 ) -> Option<BindGroup> {
     let probe = cloud.probe.as_ref()?;
     let (a, b, composed) = (
@@ -576,6 +590,7 @@ fn probe_bind_group(
             (12, &read.texture_view),
             (13, &write.texture_view),
             (14, &composed_layers),
+            (15, horizon),
         )),
     ))
 }
@@ -787,6 +802,11 @@ fn cloud_sky_probe(
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, bind, &[]);
     pass.dispatch_workgroups(groups(probe.size, WG2), groups(probe.size, WG2), 6);
+    // The horizon's colour for the distance fog, from the cube this frame's probe was lit by.
+    if let Some(ring) = ready(&cache, &pipelines.horizon) {
+        pass.set_pipeline(ring);
+        pass.dispatch_workgroups(1, 1, 1);
+    }
     span.end(&mut pass);
     cloud.probe_frames.fetch_add(1, Ordering::Relaxed);
 }

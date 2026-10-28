@@ -37,6 +37,10 @@ struct CameraAt(Transform);
 #[derive(Resource)]
 struct PresetAt(WeatherPreset);
 
+/// The hour the clock is held at, when a test wants other than noon.
+#[derive(Resource)]
+struct HourAt(f64);
+
 #[derive(Resource)]
 struct Target(Handle<Image>);
 
@@ -86,7 +90,12 @@ fn build_viewed(units: f32, camera: Option<Transform>) -> App {
 }
 
 fn build_weathered(units: f32, camera: Option<Transform>, preset: WeatherPreset) -> App {
+    build_at(units, camera, preset, 12.0)
+}
+
+fn build_at(units: f32, camera: Option<Transform>, preset: WeatherPreset, hour: f64) -> App {
     let mut app = App::new();
+    app.insert_resource(HourAt(hour));
     app.insert_resource(PresetAt(preset));
     if let Some(camera) = camera {
         app.insert_resource(CameraAt(camera));
@@ -105,7 +114,7 @@ fn build_weathered(units: f32, camera: Option<Transform>, preset: WeatherPreset)
         })
         .insert_resource(WorldClock {
             paused: true,
-            ..WorldClock::new(CivilDate::new(2026, 6, 21)).at_hour(12.0)
+            ..WorldClock::new(CivilDate::new(2026, 6, 21)).at_hour(hour)
         })
         .add_systems(Startup, setup)
         .add_systems(
@@ -444,4 +453,70 @@ fn gpu_the_skirt_in_a_foot_world_draws_as_in_metres() {
         .fold(0.0, f32::max);
     println!("largest difference between the metre and foot columns {worst:.4}");
     assert!(worst < 0.03, "the foot world's column differs by {worst}");
+}
+
+/// The edge scene at `hour`, the centre column as gamma-encoded 8-bit levels (the dump's own
+/// encoding), after the horizon ring has been read back.
+fn column_at(hour: f64, preset: WeatherPreset) -> Vec<Vec3> {
+    let pitch = -8.0f32.to_radians();
+    let eye = Transform::from_xyz(0.0, 30.0, 42.0)
+        .looking_to(Vec3::new(0.0, pitch.sin(), -pitch.cos()), Vec3::Y);
+    let mut app = build_at(1.0, Some(eye), preset, hour);
+    app.world_mut().insert_resource(StillWater { level: 0.0 });
+    run_until(&mut app, "the terrain", |app| {
+        app.world()
+            .get_resource::<TerrainState>()
+            .is_some_and(|s| s.is_live())
+    });
+    // The ring arrives on the 4 Hz readback; the fog follows it the next frame.
+    for _ in 0..240 {
+        app.update();
+    }
+    dump_target(&mut app, &format!("-h{hour}-{preset:?}"));
+    let column = column_rgb(&mut app, TARGET as usize / 2);
+    app.world_mut().write_message(AppExit::Success);
+    column
+        .into_iter()
+        .map(|c| c.clamp(Vec3::ZERO, Vec3::ONE).powf(1.0 / 2.2) * 255.0)
+        .collect()
+}
+
+/// The largest one-row line in a column from the horizon's neighbourhood: a row that differs
+/// from both its neighbours in the same direction, by the smaller of the two steps, in levels,
+/// on the worst channel. A gradient, however steep, has none.
+fn worst_line(column: &[Vec3]) -> f32 {
+    (82..96)
+        .map(|y| {
+            let (up, down) = (column[y] - column[y - 1], column[y] - column[y + 1]);
+            let spike = |a: f32, b: f32| {
+                if a * b > 0.0 {
+                    a.abs().min(b.abs())
+                } else {
+                    0.0
+                }
+            };
+            spike(up.x, down.x)
+                .max(spike(up.y, down.y))
+                .max(spike(up.z, down.z))
+        })
+        .fold(0.0, f32::max)
+}
+
+/// The fog's colour is the sky's horizon (`docs/research/fog-colour.md`): where the far sea meets
+/// the sky no row stands out from both its neighbours by more than 4 levels, at noon, at dusk,
+/// at the end of twilight and at midnight. The same fixture on `main` drew a line of 9, 18, 9
+/// levels at the first three (`docs/loop-log.md`, iteration 86).
+#[test]
+#[ignore = "needs a GPU"]
+fn gpu_the_far_sea_meets_the_sky_without_a_line() {
+    let _lock = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    for hour in [12.0, 19.5, 21.0, 0.0] {
+        let column = column_at(hour, WeatherPreset::Clear);
+        let line = worst_line(&column);
+        println!(
+            "ROW hour {hour}: worst line {line:.1} levels, rows 82-90 {:?}",
+            &column[82..90]
+        );
+        assert!(line < 4.0, "hour {hour}: a horizon line of {line} levels");
+    }
 }
