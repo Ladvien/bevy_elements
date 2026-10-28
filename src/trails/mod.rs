@@ -139,6 +139,14 @@ pub struct TrailSettings {
     /// farther at the same cost: 8 cm covers 82 m at High, enough for an isometric camera.
     /// Default `None`.
     pub texel_m: Option<f32>,
+    /// The shallowest print, m, that is pressed at all. An imprint whose sinkage on its own
+    /// ground (the kernel's Bekker–Wong depth under its load) is shallower leaves no trench and
+    /// no rim, so a host that wants prints only on soaked soil, sand and snow sets 0.01 and
+    /// never reads the wetness itself: a 77 kg step presses 0.5 cm into dry soil, about 4 cm at
+    /// wetness 0.5 and 3.4 cm into dry sand. Snow deeper than 1 cm always presses. The test is
+    /// per texel on the ground the kernel resolves, and a moving imprint is judged by its depth
+    /// there, not by whether it moved. Default `0.0`: everything presses, as before.
+    pub min_depth_m: f32,
 }
 
 impl Default for TrailSettings {
@@ -146,6 +154,7 @@ impl Default for TrailSettings {
         Self {
             enabled: true,
             texel_m: None,
+            min_depth_m: 0.0,
         }
     }
 }
@@ -202,6 +211,8 @@ pub(crate) struct TrailParams {
     ground: Vec4,
     /// x: 1 on a game's own ground. y: texels a side of a readback cell.
     mode: UVec4,
+    /// x: the shallowest print pressed outside snow, m.
+    press: Vec4,
 }
 
 /// This frame's work; extracted to the render world every frame.
@@ -457,6 +468,7 @@ fn run_trails(
     tick: Res<ReadbackTick>,
     dust: Option<Res<DustSettings>>,
     (game, weathering, terrain, terrain_gpu): GroundSources<'_>,
+    settings: Res<TrailSettings>,
     gpu: Option<ResMut<TrailGpu>>,
     state: Option<ResMut<TrailState>>,
     mut runtime: ResMut<TrailRuntime>,
@@ -572,6 +584,7 @@ fn run_trails(
         sim: Vec4::new(texel_m, dt, snow_d, sand_d),
         ground,
         mode: UVec4::new(u32::from(game.is_some()), readback_cell(size), 0, 0),
+        press: Vec4::new(settings.min_depth_m.max(0.0), 0.0, 0.0, 0.0),
     };
     gpu.imprints = if keyed.is_empty() {
         vec![ImprintGpu::default()]

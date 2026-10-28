@@ -36,6 +36,8 @@ struct TrailParams {
     ground: vec4<f32>,
     // x: 1 on a game's own ground. y: texels a side of a readback cell.
     mode: vec4<u32>,
+    // x: the shallowest target depth (m) an imprint presses on ground that is not snow.
+    press: vec4<f32>,
 }
 
 struct ImprintGpu {
@@ -269,6 +271,11 @@ fn trail_stamp(@builtin(global_invocation_id) id: vec3<u32>) {
     let g = ground_at(xz);
     let i = index(w);
     let want = sinkage(g, im.load.y, im.load.z);
+    // Ground that would take a dent shallower than the host asked for is not pressed at all, and
+    // snow always is (`TrailSettings::min_depth_m`).
+    if want < params.press.x && !is_snow(g) {
+        return;
+    }
     if r <= 1.0 {
         // A flat floor inside a wall two and a half texels wide (narrower, the bilinear field
         // steps along a curved edge), at most half the ellipse's smaller half extent so a narrow
