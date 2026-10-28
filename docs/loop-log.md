@@ -5218,3 +5218,23 @@ Host: the Mac (Apple M1 Max, Metal; no `big`, no benchmark). Issues read through
 3. Shoreline foam that survives the edge fade (needs big).
 4. #41 remainder: GPU fixture comparing `ground_look_at` to a rendered pixel; `FootprintPressure`.
 5. #39 `paths_resist_prints`.
+
+## Iteration 85 — 2026-10-28 — Fogged water is the fog's colour, not the water's
+
+Host: the Mac (Apple M1 Max, Metal; no `big`, no benchmark). Issues read through the API: #46 (duplicates `sinkage_at`, shipped iteration 78), #45 (release request, seen and skipped), #44, #43 (waits on Sanctuary), #38 (fixed); no new bug, no parked branch. Window captures on this Mac are byte-black (no GUI session; `terrain_tour` frames mean 0.0), so the evidence is the test harness's own render-target dumps (`ELEMENTS_TEST_DUMP`), swept over hour and weather with a throwaway knob in `gpu_still_water` (reverted). Ranked: iteration 84's "capture the skirt at dusk, night and in fog" over foam work (needs big) and #41/#39 remainders.
+
+- **Found** (`/tmp/i85/sheet.png`): in `Fog` the in-grid sea was a saturated teal wall (chroma 0.833, linear, row 200) under a grey sky, with a hard edge at the grid's border against the fogged skirt. Cause: the bed is fogged in the opaque pass, then the absorb pass (`Multiply`) tinted the whole pixel, fog included. Clear, dusk, night and overcast showed no such fault (dusk and night: only the known 1-px horizon line).
+- **Change** (`src/hydrology/water.wesl`): the surface pass fogs its own film and adds back the fog share the absorb pass removed, `Lf·(1 − x)`, `x` the absorb factor (shared with the multiply branch). Skirt tiles unchanged. The old border `with_fog` mix is subsumed (`x` carries `bed_seen`). Research: `docs/research/still-water.md` Deviation 8 (compositing identity, no source).
+- **Evidence**: `gpu_still_water::gpu_a_fogged_sea_is_the_fogs_colour_not_the_waters`: chroma 0.833 before (fails on the old shader), 0.145 after (< 0.2). Before/after `/tmp/i85/cmp.png`: fog row 200 (77,152,174) → (174,183,187); clear (57,124,125) → (67,126,126); overcast (122,137,121) → (128,140,123).
+- **Critique / verdict**: NOT YET for a showcase on a sea: one fixture and angle per weather, 256 px, no Mac frame sequence; fog now reads as fog and the border join is gone in fog, but the sea keeps a faint cool grey against the sky and the horizon line persists. Clear/overcast changed by <= 10 levels (thin fog), no regression seen.
+- **Performance**: not benchmarked (no `big`). The in-grid surface pass gains one `main_pass_post_lighting_processing` call (the old border mix made two on border pixels only).
+- **Gates** (Mac): `cargo test --release`, clippy `-D warnings`, rustdoc `-D warnings`, wasm32 lib, `tools/wesl-check`, `gpu_still_water` (5), `gpu_water` (2), `gpu_waves` (4), `gpu_units` (1). `gpu_hydrology` did not finish within the 50-minute gate budget (interrupted, not failed); not re-run.
+- **Cleanup**: removed nothing outside `/tmp/i85` (scratch, left for the next pass to read; no worktree made, no baseline build).
+
+### Next five items, ranked
+
+1. Capture the still sea and skirt on `big` (multi-angle, dusk, night, fog, a frame sequence) and benchmark the surface pass.
+2. The 1-px bright/dark line at the horizon over the sea.
+3. Shoreline foam that survives the edge fade (needs big).
+4. #41 remainder: GPU fixture comparing `ground_look_at` to a rendered pixel; `FootprintPressure`.
+5. Re-run `gpu_hydrology` in isolation and record its duration.
