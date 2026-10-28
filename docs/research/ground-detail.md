@@ -218,3 +218,37 @@ the cost is bounded by the near field).
 
 - Andersson 2007 and Lagae et al. 2010 were read from the corpus copies already in the repository;
   no new ingestion this iteration.
+
+## Addendum — host controls over the detail (issue #42, iteration 71)
+
+No new literature: the band limit is Lagae et al. 2010 §5.2.1 (frequency clamping) already adopted in Model 2, and the issue asks only that a host steer its two inputs.
+
+### Model adopted (addendum)
+
+1. **`TerrainLook::finest_m` is a footprint floor.** `detail_keep(feature, footprint)` weights an octave by `1 − smoothstep(0.5, 1, footprint / feature)`. The shader's footprint is `max(|dpdx p|, |dpdy p|)`, a property of the pixel; a game whose zoom is fixed knows it and may know that the art wants the grain gone at a coarser size. The ground detail and the route grain use `max(footprint, finest_m)`; rock, scree and the ground textures keep the derived footprint (they are not the grain the issue is about). A `finest_m` above `DETAIL_COARSE_M` gives `ratio ≥ 1` for every coarse octave, so the coarse band is dropped by the same formula and needs no special case.
+2. **`TerrainLook::detail` scales amplitude, not weights.** `ground_detail` takes an `amplitude` that multiplies the albedo modulation (`DETAIL_*_AMP · value`) and the bump gradient (`DETAIL_*_HEIGHT_M · grad`) of both bands, and the route grain's `amplitude`. At 0 the albedo is exactly 1 and the gradient exactly 0. `GroundDetail::coarse`/`fine` stay raw: they are the turf palette's clump field, i.e. colour, not grain, so `detail: 0` leaves the palette. At 1 every multiply is by exactly 1.0, so the default is bit-identical (no `mix`, whose rounding would not be).
+3. **A uniform lane, not a pipeline def.** `TerrainMaterialParams::detail` (x amplitude, y floor, m): a write like `look`, no re-specialisation, so a game may animate it. The terrain's fragment is register-bound (AGENTS.md); one `vec4` read before the octave loop adds no live range across `rock_material`.
+4. **Not covered:** the game's own `GroundMaterial` mesh (`TerrainRender::External`) keeps amplitude 1 like its grade. The band-by-band debug view of the issue (its criterion 5) is not part of this change.
+
+### Parameters (addendum)
+
+`detail` default 1.0, `finest_m` default `None` (floor 0). Nothing else changes.
+
+### GPU mapping (addendum)
+
+`TerrainMaterialParams::detail` ↔ `TerrainMaterialParams.detail` in `render.wesl`, after `look`. `ground.wesl` passes amplitude 1.0.
+
+### Validation targets (addendum)
+
+- Default: a fixture capture hashes equal to `main`'s (criterion 1).
+- `detail: 0`: the ground's red-channel stddev over a flat grass patch falls to the palette's own; silhouette and shadows unchanged.
+- `finest_m` raised: the stddev falls monotonically; above `DETAIL_COARSE_M` the coarse band is gone (`coarse.present = 0`).
+- Wetness and snow look unchanged under `detail: 0` (separate fields).
+
+### Deviations (addendum)
+
+None from the plan's defaults.
+
+### Pending index (addendum)
+
+None.
