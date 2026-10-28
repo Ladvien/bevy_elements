@@ -112,7 +112,10 @@ pub use paths::{Path, PathHit, PathKind, PathNetwork, PathState, PathSurface, Pa
 pub use waves::{WaterContact, WaveSettings, WaveState, WavesPlugin};
 
 // Rocks scattered on the ground: boulders and stones as meshes.
-pub use rocks::{RockSettings, RockStats, RocksPlugin, ScatteredRock};
+pub use rocks::{
+    RockSettings, RockStats, RocksPlugin, STONE_SHAPES, ScatteredRock, StoneDetail, stone_facet_tones,
+    stone_mesh, stone_palette,
+};
 
 // `bevy_flora` integration.
 #[cfg(feature = "flora")]

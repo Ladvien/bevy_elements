@@ -344,6 +344,8 @@ fn on_rock(add: On<Add<ScatteredRock>>, rocks: Query<&ScatteredRock>) {
 
 `RockSettings::allowed` keeps the scatter to a region of the host's own: `Some(vec![Rect::new(0.0, 0.0, 120.0, 120.0)])` (world X and Z in metres) keeps the rocks inside it and none outside, in the places the unrestricted scatter put them, and `Some(vec![])` keeps none. A town's streets and plazas are left out by giving the field and the forest as rectangles.
 
+A host that keeps its own scatter dresses its stones with the crate's, without `RocksPlugin`: `stone_mesh(shape, StoneDetail::Near)` is the mesh the plugin draws (12 shapes, `STONE_SHAPES`; the index wraps) with the palette tone of each joint facet in its vertex colours, which multiply a `StandardMaterial`'s `base_color`; `stone_facet_tones(shape)` and `stone_palette()` give the tones themselves. Scale the mesh by the stone's length (its long axis is one unit).
+
 ![Before and after: the talus below a cliff, and a rocky patch on the hills](docs/rocks.png)
 
 ### Dust storms

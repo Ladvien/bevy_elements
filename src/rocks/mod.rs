@@ -19,7 +19,9 @@ use crate::plugin::{ElementsQuality, ElementsSystems, ElementsUnits, ElementsVie
 use crate::query::EnvironmentSnapshot;
 use crate::terrain::{TerrainLook, TerrainRuntime, TerrainSnapshot, TerrainState};
 use crate::weathered::{WeatheredExtension, WeatheredMaterial, WeatheredPlugin};
-use mesh::{FAR_SUBDIVISIONS, NEAR_SUBDIVISIONS, SHAPES, ShapeInfo, rock_geometry, rock_mesh};
+use mesh::{
+    FAR_SUBDIVISIONS, NEAR_SUBDIVISIONS, SHAPES, ShapeInfo, TONES, rock_geometry, rock_mesh,
+};
 use model::{
     CLASSES, ClassLattice, CoverParams, Lattices, PatchLevels, Placed, TILT_TO_SLOPE, tile_rocks,
 };
@@ -297,6 +299,47 @@ struct RockAssets {
 /// palette's tone.
 const ROCK_ALBEDO: [f32; 3] = [0.076, 0.071, 0.066];
 /// The stone grain's feature size, m (Parameters).
+/// How many stone shapes there are: six angular talus blocks, then six rounded meadow rocks.
+pub const STONE_SHAPES: usize = SHAPES;
+
+/// Which of a stone shape's two meshes to build: the scatter draws [`Near`](Self::Near) inside
+/// `22 · D` metres and [`Far`](Self::Far) beyond. Both wear the same facet colours.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum StoneDetail {
+    /// 1280 triangles.
+    Near,
+    /// 320 triangles, the same silhouette.
+    Far,
+}
+
+/// The rock palette: basalt, sandstone, limestone and desert varnish, each a linear multiplier
+/// on a rock's albedo with a mean of exactly 1 (`docs/research/rock-palette.md`). It needs no
+/// plugin.
+pub fn stone_palette() -> [Vec3; 4] {
+    TONES
+}
+
+/// The palette tone each facet (joint plane) of stone shape `shape` wears, indexed by facet id,
+/// the table the scatter's near and far meshes both read. `shape` wraps at [`STONE_SHAPES`]. It
+/// needs no plugin.
+pub fn stone_facet_tones(shape: usize) -> Vec<Vec3> {
+    rock_geometry(shape % SHAPES, FAR_SUBDIVISIONS).tones
+}
+
+/// The mesh of stone shape `shape` as [`RocksPlugin`] draws it, for a host's own scatter: centred
+/// on its bounding box, the long axis along X and one unit long, the short axis up (so scale it
+/// by the stone's length), and vertex colours that carry each joint facet's palette tone, the
+/// mottle and the base's darkening. Vertex colours multiply a `StandardMaterial`'s `base_color`,
+/// so a host's own material shows the colour change at each joint. `shape` wraps at
+/// [`STONE_SHAPES`]. It needs no plugin.
+pub fn stone_mesh(shape: usize, detail: StoneDetail) -> Mesh {
+    let subdivisions = match detail {
+        StoneDetail::Near => NEAR_SUBDIVISIONS,
+        StoneDetail::Far => FAR_SUBDIVISIONS,
+    };
+    rock_mesh(rock_geometry(shape % SHAPES, subdivisions))
+}
+
 const GRAIN_M: f32 = 0.30;
 
 fn create_assets(
@@ -762,6 +805,46 @@ fn seat_rocks(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hosts_stone_wears_a_tone_per_joint_facet_without_the_plugin() {
+        use bevy::mesh::VertexAttributeValues;
+        for shape in [0, 5, 6, 11] {
+            let tones = stone_facet_tones(shape);
+            let mut distinct: Vec<Vec3> = Vec::new();
+            for t in &tones {
+                if !distinct.iter().any(|d| d.distance(*t) < 1e-4) {
+                    distinct.push(*t);
+                }
+            }
+            assert!(
+                distinct.len() >= 3,
+                "shape {shape}: {} tones",
+                distinct.len()
+            );
+            // The near and the far mesh wear the table: every vertex hue is a blend of it, and
+            // the near mesh's colours span more than one hue.
+            for detail in [StoneDetail::Near, StoneDetail::Far] {
+                let mesh = stone_mesh(shape, detail);
+                let Some(VertexAttributeValues::Float32x4(colours)) =
+                    mesh.attribute(Mesh::ATTRIBUTE_COLOR)
+                else {
+                    panic!("shape {shape}: no vertex colours");
+                };
+                let hue = |c: &[f32; 4]| (c[0] - c[2]) / (c[0] + c[1] + c[2]).max(1e-6);
+                let (lo, hi) = colours.iter().fold((f32::MAX, f32::MIN), |(lo, hi), c| {
+                    (lo.min(hue(c)), hi.max(hue(c)))
+                });
+                assert!(
+                    hi - lo > 0.2,
+                    "shape {shape} {detail:?}: one tone ({lo}..{hi})"
+                );
+            }
+        }
+        assert_eq!(stone_facet_tones(STONE_SHAPES + 3), stone_facet_tones(3));
+        let mean = stone_palette().iter().sum::<Vec3>() / 4.0;
+        assert!((mean - Vec3::ONE).abs().max_element() < 2e-3);
+    }
 
     const U: ElementsUnits = ElementsUnits {
         units_per_metre: 1.0,
