@@ -231,33 +231,33 @@ recording of the GIF above it when it shows different objects. Before you push a
 
 Worktrees and build directories outside the clone are not free: a `target/` for this crate is tens of GB, big's
 `/tmp` is RAM, and on 2026-10-27 earlier passes had left 37 GB of baseline builds and 5 GB of scratch behind.
-**After you ship and before you write the pass's last log line, whether or not you shipped,** remove what you
-made, and what earlier passes of this loop left that is safe to remove.
+**After you ship and before you write the pass's last log line, whether or not you shipped,** remove what *you*
+made this pass, and list what earlier passes left.
 
 1. **A baseline is a pair that can be found.** Make it with `git worktree add --detach <path> <sha>` (never a
    branch name: a worktree with a branch checked out stops anything else checking that branch out) and build it
    into `<path>-target`. Then `git worktree list`, plus the `*-target` directory beside each worktree, is the
    whole inventory.
 2. **Remove yours.** `git worktree remove <path>` (plain, never `--force`) and `rm -rf <path>-target`, then your
-   scratch under `/tmp` (captures, frames, venvs, gate logs, `rustdoctest*`). If git refuses because the
-   worktree has a change in it, name the file in the log and leave it.
-3. **Remove earlier passes' pairs too, when all four of these hold** (a killed pass cannot clean up after
-   itself, so the next one does it):
+   scratch under `/tmp` (captures, frames, venvs, gate logs, `rustdoctest*`). Remove only what you created this
+   pass, and name each path in the log. If git refuses because the worktree has a change in it, name the file
+   in the log and leave it.
+3. **Leftovers from earlier passes are listed, never deleted.** A killed pass cannot clean up after itself, but
+   an agent does not delete what it did not create, so list them once and let a person approve the removal:
 
    ```sh
    git worktree list --porcelain | awk '/^worktree /{sub(/^worktree /,""); print}' | tail -n +2   # all but the clone
-   # for each <wt>:  clean, already on origin/main, and idle for two hours (a live build writes constantly)
-   [ -z "$(git -C <wt> status --short)" ] \
-     && git merge-base --is-ancestor "$(git -C <wt> rev-parse HEAD)" origin/main \
-     && [ -z "$(find <wt> <wt>-target -mmin -120 -print -quit 2>/dev/null)" ]
+   du -sh <wt> <wt>-target                       # the size of each one that is not yours
+   git -C <wt> status --short                    # empty: nothing is lost by removing it
+   find <wt> <wt>-target -mmin -120 -print -quit # empty: untouched for two hours, so no live build is using it
    ```
 
-   then remove the pair as in step 2. Also remove `/tmp` scratch this loop created that is more than two hours
-   old. A worktree whose HEAD is on a pushed branch but not on `origin/main` is kept.
-4. **Never remove** the clone itself, its own `target/` (the build cache the next pass starts from), a worktree
-   with a change in it or whose HEAD is not on `origin/main`, anything modified in the last two hours, `/tmp`
-   entries that are not this loop's, or anything you cannot trace to a pass of this loop.
-5. Write one log line: what you removed and the space it freed (`df -h .` before and after).
+   Log each with its path, size, and whether it is clean, already on `origin/main` and idle (the likeliest to be
+   stale). Say so, and still leave it.
+4. **Never remove** the clone itself, its own `target/` (the build cache the next pass starts from), anything you
+   did not create this pass, or anything a process is using.
+5. Write one log line: what you removed and the space it freed (`df -h .` before and after), and the leftovers
+   you listed.
 
 ## Rules
 
