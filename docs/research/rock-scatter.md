@@ -314,6 +314,16 @@ shape's vertex colour darkens its buried base (the contact) and mottles its face
    (`/tmp/i42/r7/patch_eye.png`), and on a hillslope the rocks gather round its patchy bedrock
    exposures (Verdian).
 
+## Addendum: a host's allowed region (#43)
+
+A host with its own built-up ground (a walled town: streets, plazas, houses) cannot take a scatter that ignores it. `RockSettings::allowed` is `Option<Vec<Rect>>`: `None` is no restriction, `Some(rects)` keeps a rock only where its plan position (metre frame, `Rect` x = world X, y = world Z) is inside at least one rectangle, so `Some(vec![])` keeps none.
+
+- **Where it applies.** After `tile_rocks`, on each placed rock's `xz`. The candidate positions, hashes and draws are the same with and without a region, so the rocks that remain are exactly the unrestricted scatter's rocks inside the region: no rock moves when a region changes, and a saved game's rocks keep their places (the issue's determinism edge). A rectangle is the whole of the shape; a mask image or predicate is not offered (a closure is not `Reflect`/`Clone`/`PartialEq`/serde, which every setting here is).
+- **Order against the orthographic rule.** The region filters first and the view's diameter threshold (`ViewScale::draws`) second, both on the same loop, so a rock inside the region but too small for the view is still not spawned (acceptance 5), and `RockStats` counts only what is on the ground.
+- **Rebuild.** The region is part of the scatter's key: a change rebuilds the tiles.
+- **Not in this slice.** Exporting the per-facet palette for a host's own rocks (acceptance 4) is a separate API; it is left to a later pass and #43 stays open.
+- **Sources.** None new; this is a placement filter over Golombek's scatter above.
+
 ## Pending index
 
 - `golombek2021` (DOI `10.1029/2021EA001959`): the PDF is in `/tmp/i42`, not ingested into
