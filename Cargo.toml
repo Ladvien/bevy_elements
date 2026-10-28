@@ -64,6 +64,7 @@ isomesh = { version = "0.0.11", optional = true }
 # `jpeg`: the examples' ground texture maps (`assets/ground/`); the crate itself loads no images.
 bevy = { version = "0.20.0", features = ["jpeg"] }
 serde_json = "1"
+log = "0.4"
 
 # Compute shaders are not in WebGL2, so wasm means WebGPU. `web` makes `bevy::platform::time::Instant`
 # use `web_time` rather than a `std::time::Instant` whose `now()` panics on wasm.
