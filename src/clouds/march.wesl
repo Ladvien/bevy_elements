@@ -34,6 +34,9 @@ import bevy_elements::clouds::common::{
 @group(0) @binding(12) var probe_prev: texture_2d_array<f32>;
 @group(0) @binding(13) var probe_next: texture_storage_2d_array<rgba16float, write>;
 @group(0) @binding(14) var probe_out: texture_storage_2d_array<rgba16float, write>;
+// The horizon ring `cloud_horizon_ring` writes: the sky's radiance at the horizon in 32
+// azimuths, `w` 1 once written (a buffer nothing has written reads 0).
+@group(0) @binding(15) var<storage, read_write> horizon_ring: array<vec4<f32>, 32>;
 
 /// Directions over the upper hemisphere the sky's light is averaged from.
 const SKY_SAMPLES: u32 = 16u;
@@ -279,6 +282,16 @@ fn horizon_sky(dir: vec3<f32>) -> vec3<f32> {
     )
     .rgb;
     return max(lower * 2.0 - upper, vec3<f32>(0.0)) * params.sky.x;
+}
+
+/// The horizon's radiance in each of the ring's 32 azimuths, for the main world to average into
+/// the distance fog's colour (`docs/research/fog-colour.md`): the same `horizon_sky` the slab
+/// past a finite terrain reads, so the mesh fog and the slab are one colour. Azimuth `i` is
+/// `(i + 0.5)/32` of a turn from -Z toward +X, the way `atan2(x, -z)` runs.
+@compute @workgroup_size(32, 1, 1)
+fn cloud_horizon_ring(@builtin(local_invocation_id) id: vec3<u32>) {
+    let a = (f32(id.x) + 0.5) / 32.0 * 6.2831853;
+    horizon_ring[id.x] = vec4<f32>(horizon_sky(vec3<f32>(sin(a), 0.0, -cos(a))), 1.0);
 }
 
 /// Elevation of the band a below-horizon ray reads the sky from, rad: 0.5°. The cube's texel at
