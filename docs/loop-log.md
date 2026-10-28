@@ -5238,3 +5238,22 @@ Host: the Mac (Apple M1 Max, Metal; no `big`, no benchmark). Issues read through
 3. Shoreline foam that survives the edge fade (needs big).
 4. #41 remainder: GPU fixture comparing `ground_look_at` to a rendered pixel; `FootprintPressure`.
 5. Re-run `gpu_hydrology` in isolation and record its duration.
+
+## Iteration 86 — 2026-10-28 — The horizon line over the sea: cause found, no fix shipped
+
+Host: the Mac (Apple M1 Max, Metal; no `big`, no window captures, no benchmark). Issues read through the API: #46 (duplicates the shipped `sinkage_at`), #45 (release request, seen and skipped), #44, #43 (waits on Sanctuary), #38 (fixed); no new bug, no parked branch for this item. Picked iteration 85's item 2 (the 1-px line at the horizon over the sea, a visible artifact) over #41 `ground_look_at` pixel fixture (a wiring test) and #39 `paths_resist_prints` (needs big). **Nothing was committed to `src/` or `tests/`**: every experiment was reverted; the tree matches `main`.
+
+- **Measured** (test-harness dumps of `gpu_a_still_sea_runs_past_the_terrain_grids_edge`, a throwaway `SWEEP_HOUR` knob, `/tmp/i86/h*-metres-with.ppm`, sheet `/tmp/i86/sheet.png`; 256 px, eye 30 m up, 8° down, centre column, 8-bit sRGB): the horizon row (85) differs from the sky row above it at every hour, and its sign flips with the hour. Noon: sky (200,212,218), row 85 (213,220,224), +13. 19:30: (230,196,169) against (191,170,143), −39 (a dark line). 21:00: (152,73,57) against (116,99,93), grey over the red band. Midnight: sky (7,5,5), sea (43,49,55)…(61,69,79) below it, a grey slab under a black sky (the sea is lit by the night fill like the ground; the sky near the horizon is dark by `ZENITH_TRANSMITTANCE`'s path).
+- **Cause**, by elimination: (1) without the skirt row 85 is the sky (200,212,217), so the line is skirt pixels; (2) with the skirt's fog removed, rows 85-91 are a flat (179,198,209): the film alone is 10 % darker than the sky at grazing; (3) the fog lifts row 85 to 213 because `update_distance_fog` colours the fog `FOG_COLOUR` hue × scene luminance × exposure, a constant hue, not the sky's horizon radiance, and at 13-18 km the 40 km clear visibility has already put 70-80 % of the pixel into that colour. `docs/research/fog.md` Validation 12 names exactly this ("needs the atmosphere's horizon colour"). Row 85 is the sea at roughly 13 km, not the 100 km skirt edge.
+- **Tried and reverted**: fading the skirt's alpha to 0 between 4 and 40 km (`a_edge`, both passes): row 85 moved 213→213, 191→196, 116→119, so it does not touch the cause (the pixel sits at ~13 km, inside the fade's start); a fade that started earlier would show the haze/ground disc behind a high camera's mid-distance sea. Dropping the clear-air extinction from the mesh fog (Bevy's aerial perspective already supplies it) would leave the sea with no fog at all, because a transparent surface with no depth gets no aerial perspective: row 85 would sit 21 levels *under* the sky.
+- **What would fix it**: the fog colour has to be the sky's horizon radiance in the camera's heading (a readback of the clear-sky cube's horizon ring, or a CPU sky model), and the sea's film at grazing has to reach the sky (it is 10 % under it at noon). Both touch `fog`, `clouds` (`haze` uses the fog colour) and `water.wesl`; each needs a capture sweep over hour, heading and preset on `big`.
+- **Verdict**: no feature touched, nothing to grade. Not run: gates (no change), benchmark.
+- **Cleanup**: no worktree or baseline build made. Scratch `/tmp/i86` (dumps, sheets, scripts) left for the next pass to read; leftovers from earlier passes not listed (none inspected).
+
+### Next five items, ranked
+
+1. Fog colour = the sky's horizon radiance (readback of the atmosphere cube's horizon ring toward the camera's heading, with the cloud `haze` unchanged), then re-measure the horizon row at 12, 19.5, 21 and 0 h with the `/tmp/i86` method; also a grazing-reflection fix so the sea film reaches the sky.
+2. Capture the still sea and skirt on `big` (multi-angle, dusk, night, fog, a frame sequence) and benchmark the surface pass.
+3. Shoreline foam that survives the edge fade (needs big).
+4. #41 remainder: GPU fixture comparing `ground_look_at` to a rendered pixel; `FootprintPressure`.
+5. #39 `paths_resist_prints`.
