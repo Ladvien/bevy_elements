@@ -87,6 +87,11 @@ const PHASE_NOISE_M: f32 = 37.0;
 /// read as glass, with no surface at all.
 const STILL_RIPPLE: f32 = 0.06;
 const MAX_THICKNESS: f32 = 1000.0;
+// Under a still sea the terrain's border is a hard edge in the bed seen through the water. A bed
+// point within this many metres of it is blended into the deep colour the skirt shows past it: its
+// transmittance is scaled by a smoothstep of the distance and the body's alpha rises to 1
+// (`docs/research/still-water.md`, Deviation 7).
+const EDGE_BAND_M: f32 = 32.0;
 
 struct WaterVertex {
     @builtin(instance_index) instance_index: u32,
@@ -195,6 +200,19 @@ fn foam_from_thickness(t_ray: f32) -> f32 {
 
 fn edge_alpha(depth: f32) -> f32 {
     return smoothstep(DISCARD_DEPTH, FADE_DEPTH, depth);
+}
+
+// How much of the bed point `scene` (metre frame) is seen, near the border of the terrain grid:
+// 1 away from it, 0 at it. 1 without a still level.
+fn edge_share(scene: vec2<f32>) -> f32 {
+    if water.still.x < -1.0e8 {
+        return 1.0;
+    }
+    let grid = water.terrain.grid;
+    let lo = grid.origin + 0.5 * grid.cell;
+    let hi = last_sample(grid);
+    let d = min(min(scene.x - lo.x, hi.x - scene.x), min(scene.y - lo.y, hi.y - scene.y));
+    return smoothstep(0.0, EDGE_BAND_M, d);
 }
 
 // Cloud shadow scale ρ = (0.25 + 0.75 T_px) / (0.25 + 0.75 T̄) at a world position, as the
@@ -358,7 +376,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let ray = normalize(view_pos);
     let z_scene = depth_ndc_to_view_z(max(prepass_depth(in.position, 0u), 1e-9));
     let t_ray = clamp((view_pos.z - z_scene) / max(-ray.z, 1e-3) / water.units, 0.0, MAX_THICKNESS);
+    // The bed point this pixel shows: the same view ray, scaled to the scene's depth.
+    let eye = view.world_position / water.units;
+    let scene_xz = (eye + (p - eye) * (z_scene / view_pos.z)).xz;
     let t_eff = refracted_thickness(t_ray, cos_v, water.absorption.w);
+    let bed_seen = edge_share(scene_xz);
 
     // Foam: fast flow, the contact with anything the water meets (shoreline, rocks, posts), and
     // the waves that break.
@@ -378,7 +400,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let foam = max(max(f_speed, f_contact), f_breaking);
 
 @if(BLEND_MULTIPLY) {
-    let x = (1.0 - f) * beer_lambert(water.absorption.xyz, t_eff) * (1.0 - foam);
+    let x = (1.0 - f) * beer_lambert(water.absorption.xyz, t_eff) * bed_seen * (1.0 - foam);
     var out: FragmentOutput;
     // Premultiplied by the edge alpha, written directly: a transmittance is not fogged or tonemapped.
     out.color = vec4<f32>(x * a_edge, a_edge);
@@ -386,7 +408,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 } @else {
     var pbr_input = pbr_input_from_standard_material(in, is_front);
     let sigma_s = water.deep.w + water.silt.w * column.turbidity;
-    let alpha_body = 1.0 - exp(-sigma_s * t_eff);
+    let alpha_body = mix(1.0, 1.0 - exp(-sigma_s * t_eff), bed_seen);
     let body = silt_body(column.turbidity) * alpha_body;
     let foam_albedo = vec3<f32>(water.foam.z);
     pbr_input.material.base_color = vec4<f32>(mix(body, foam_albedo, foam), 1.0);
@@ -401,13 +423,20 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 @if(VERTEX_OUTPUT_INSTANCE_INDEX) {
     bed_fogged = mesh_functions::get_tag(in.instance_index) < SKIRT_TAG;
 }
+    // Where the still sea's bed fades out at the grid's border (`bed_seen` < 1) the bed no longer
+    // carries the fog, so that share is fogged here, and the join with the skirt shows no step.
+    var with_fog = pbr_input;
     if bed_fogged {
         pbr_input.material.flags = pbr_input.material.flags & ~pbr_types::STANDARD_MATERIAL_FLAGS_FOG_ENABLED_BIT;
     }
     var out: FragmentOutput;
     let lit = apply_pbr_lighting(pbr_input);
     out.color = vec4<f32>(lit.rgb * cloud_shadow_ratio(p), a_edge);
-    out.color = main_pass_post_lighting_processing(pbr_input, out.color);
+    let unfogged = main_pass_post_lighting_processing(pbr_input, out.color);
+    out.color = unfogged;
+    if bed_fogged && bed_seen < 1.0 {
+        out.color = mix(main_pass_post_lighting_processing(with_fog, vec4<f32>(lit.rgb * cloud_shadow_ratio(p), a_edge)), unfogged, bed_seen);
+    }
     return out;
 }
 }

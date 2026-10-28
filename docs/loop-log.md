@@ -5200,3 +5200,21 @@ Host: the Mac (Apple M1 Max, Metal; no captures beyond the test's own frame dump
 3. Shoreline foam that survives the edge fade (all water), needs big.
 4. #41 remainder: GPU fixture comparing `ground_look_at` to a rendered pixel; `FootprintPressure`.
 5. #39 `paths_resist_prints`.
+
+## Iteration 84 — 2026-10-28 — The terrain's border is no longer a line through a still sea (#44)
+
+Host: the Mac (Apple M1 Max, Metal; no `big`, no benchmark). Issues read through the API: #46 (duplicates the shipped `sinkage_at`), #45 (release request, seen and skipped), #44, #43 (waits on Sanctuary), #38 (fixed, awaits the owner's close); no new bug. No parked branch for this item. Ranked: iteration 83's "hard step across the in-grid sea" (a visible artifact) over foam work (needs big) and #41/#39 remainders.
+
+- **Cause** (found by despawning passes in the test frame): not the water. The bed lies 8 m under the sea, so the grid's border row of the bed shows 14 rows below the water's own border row; past it the prepass holds depth 0 and the sea goes deep blue in one pixel. The join of the in-grid film with the skirt also stepped (fog: the bed carries it in-grid, the skirt takes it itself).
+- **Change** (`src/hydrology/water.wesl`, `edge_share`): under a `StillWater`, a bed point (the prepass depth along the same ray) within 32 m of the grid's samples is blended into the deep colour: absorb transmittance × `bed_seen`, surface body alpha `mix(1, …, bed_seen)`, and the missing share of camera fog applied in the film. First try (300 m of extra thickness) moved the step instead of removing it. Research: `docs/research/still-water.md` Deviation 7 (no source; art direction).
+- **Evidence**: `tests/gpu_still_water.rs` asserts the centre column's largest row step < 0.04; measured 0.0227 (0.0847 before). Frames `/tmp/i84/b-metres-with.ppm` (before), `f-metres-with.ppm` (after): G column 112→122→135 across rows 158-162 before, 117→133 over rows 154-166 after.
+- **Critique / verdict**: NOT YET for a showcase on evidence: one fixture (flat bed, noon, clear, one angle) on one GPU; the fix removes the named step and the join step. Still present: the 1-px bright horizon line (+13 levels, cosmetic). Not judged: dusk, night, fog, a sloped shore at the border. The 32 m band is a capture-chosen number.
+- **Gates** (Mac): `cargo test --release`, clippy `-D warnings`, rustdoc `-D warnings`, wasm32 lib, `gpu_water`, `gpu_waves`, `gpu_still_water`, `gpu_hydrology`, `gpu_units`, `clouds::gpu_tests` (11 + `the_horizon_sky`). No benchmark: two extra fog evaluations only on pixels within 32 m of the border.
+
+### Next five items, ranked
+
+1. Multi-angle, multi-hour, fog and night capture of the skirt, the border fade and the ring on big (still the gate #44 lacks).
+2. The 1-px bright line at the horizon over the sea.
+3. Shoreline foam that survives the edge fade (needs big).
+4. #41 remainder: GPU fixture comparing `ground_look_at` to a rendered pixel; `FootprintPressure`.
+5. #39 `paths_resist_prints`.
