@@ -135,6 +135,8 @@ completely and the moonlit night not at all.
    are as they were.
 6. **Cost**: no change to the opaque pass (the fix is on the CPU, in the ambient).
 
+7. **A sea at a grazing view reflects the sky, not the fill (iteration 88)**: at midnight, clear, the sea's brightest row below the horizon (8° below, eye 30 m up) is within 4x of the sky's row just above the horizon in linear luminance (it was ~100x, `docs/loop-log.md` iteration 88), and the moonless town at 22 h still has a mean luminance above 2 DN with the ground above 1 DN (target 1 holds).
+
 ## Deviations from this plan
 
 1. **The night sky's light reaches the ground by two paths, and both were needed.** The plan
@@ -157,6 +159,8 @@ completely and the moonlit night not at all.
    night sky's term is *added* to the bodies' light and never multiplied by it, and the full
    moon is 8700 times the moonless sources (Jensen's Figure 2), so a moonlit night is
    untouched to within a part in 10⁵.
+5. **The lift is for light that falls on surfaces; at the horizon the cube is the sky the screen draws (iteration 88).** The cube is read by Bevy as *radiance*, and Bevy multiplies it by the camera's exposure `e`. Deviation 2 put `L · e` into it, so a surface lit by it is lifted `e`-fold (about 22 at the night's exposure ceiling) above its physical level. That lift is deliberate (it is what makes the ground readable), but a *specular* reflection of the same cube is lifted as well: a sea at a grazing view reflects the cube near the horizon at Fresnel ~1, and drew `F · L · c · e²`, 0.03–0.07 linear (42–80 DN) under a sky drawn at `L · c · e · T/T0` (7.8 DN, 4.8×10⁻⁴). Measured by elimination on `tests/gpu_still_water.rs` at midnight: the bare terrain 4.5 DN, the sea 62–80 DN; despawning the directional lights, the fog volume and the distance fog changed nothing; a perceptual roughness of 1 brought the sea to 10–22 DN and 0.15/0.3/0.6 to 62/48/26; the specular map's mip 0 read back equal to the composed cube (the cube is not stale), and the cube's maximum was 4.5×10⁻³ (it holds no hot texel), so the extra factor is Bevy's second `e` (22.4 at this scene: the observed sea over the cube is 13–20, Fresnel included). The same lift reaches the horizon band of the irradiance for no gain: below 10° elevation the band carries 3 % of a horizontal surface's irradiance. The night term is therefore weighted by elevation: `L · c · (r (1 − w) + k e w)` with `w = smoothstep(sin 8°, sin 40°, y)`, `r = 0.15` (the drawn low sky over the zenith, measured: 3.2×10⁻⁴ over 3.3×10⁻³ linear luminance at midnight) and `k = 1.198` the constant that keeps the horizontal surface's irradiance unchanged (`2 ∫ w s ds = 0.835`, numerically). Near the horizon the cube is the physical radiance, so Bevy's `e` makes it the sky the screen draws; above 40° it is the old lift times `k`. A vertical surface's share falls to 0.62 of what it was (numerically, `∫ w k cos² / ∫ cos²`), so a wall reads darker than a roof at night; the old uniform cube shaded both alike (see `AGENTS.md`, ambient). Citation: the iteration's own measurements; Jensen et al. 2001 §7 for the sky it must match ("the sky is never completely black", and a surface seen against it).
+
 
 ## Pending index
 
