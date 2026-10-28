@@ -60,7 +60,12 @@ fn setup(
     commands.spawn((
         Camera3d::default(),
         RenderTarget::Image(image.into()),
-        ElementsCamera::default(),
+        ElementsCamera {
+            distance_fog: std::env::var("X_NOFOG").is_err(),
+            volumetric_fog: std::env::var("X_NOVOL").is_err(),
+            atmosphere: std::env::var("X_NOATM").is_err(),
+            ..default()
+        },
         at,
     ));
     commands.spawn(
@@ -551,4 +556,12 @@ fn gpu_the_far_sea_takes_the_tint_of_the_sky_it_faces() {
         warm > 1.05 * cool,
         "the sea is one tint all round: {warmth:?}"
     );
+}
+
+#[test]
+#[ignore = "needs a GPU"]
+fn scratch_midnight() {
+    let _lock = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let column = column_at(0.0, WeatherPreset::Clear);
+    println!("ROW {:?}", [&column[70], &column[84], &column[86], &column[100], &column[140], &column[240]]);
 }
