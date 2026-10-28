@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Fixed
+
+- **The terrain's border is no longer a line through a shallow `StillWater` sea (#44).** A bed that ends at the grid's border showed through clear water as a hard teal-to-deep-blue step, and the in-grid water joined the skirt with a 8-10 level step. While a `StillWater` is set, a bed point within 32 m of the grid's outermost samples now fades into the deep colour (the absorb transmittance and the surface body alpha, with the share of camera fog the bed no longer carries applied in the film). Measured on the Apple M1 Max (`tests/gpu_still_water.rs`): the largest adjacent-row step of the edge scene's centre column fell from 0.085 to 0.023 in linear radiance. Hydrology water is untouched.
+
 ### Added
 
 - **A `StillWater` sea runs past the terrain grid's edge to the horizon (#44, fifth slice).** Four extra water tiles (`WaterSkirt`, two passes each, drawn only while a `StillWater` is set) carry the sea 100 km beyond the grid's last samples at the depth the clamped edge ground gives (`level − edge ground`), through the same absorb and surface passes, and take the camera's distance fog (they have no bed behind them to carry it). The cloud composite leaves the pixels whose ray meets the still plane inside that region to the water: before, a pixel with no mesh below the horizon was painted with the fogged-ground slab, which a water pass could not cover. `CloudParams` gains `sea` and `sea_box` (a uniform tail; no API change). Measured on the Apple M1 Max (`tests/gpu_still_water.rs`): from 170 m inside the edge, the largest step between adjacent rows under the horizon is 0.085 with the skirt and 0.40 without it (the ground disc shows past the edge), and a foot world draws the same column as the metre world. Past 100 km the composite's ground slab shows as before.

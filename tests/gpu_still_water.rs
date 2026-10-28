@@ -377,6 +377,10 @@ fn gpu_a_still_sea_runs_past_the_terrain_grids_edge() {
         j_without > 4.0 * j_with.max(1e-4),
         "the frame without the skirt steps {j_without} at the edge, with it {j_with}"
     );
+    // The bed's own edge is not a line through the water either: a bed 8 m down ends at the grid's
+    // border, and the rows where it ends (and where the grid meets the skirt) used to step by
+    // 0.085 in linear radiance.
+    assert!(j_with < 0.04, "the column steps {j_with} with the skirt");
     // The sea past the edge is not the sky: the row under the horizon is darker and bluer than
     // the sky's horizon row.
     assert!(
