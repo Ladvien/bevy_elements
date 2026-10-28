@@ -54,6 +54,27 @@ impl EnvironmentSnapshot {
     }
 }
 
+/// What the terrain's ground cover reads as at a point, in the shader's own terms
+/// ([`Environment::ground_look_at`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Reflect)]
+pub struct GroundLook {
+    /// The wetness map at the point, 0 dry to 1 a full film: the value the terrain fragment
+    /// shader reads as `wet`.
+    pub wet: f32,
+    /// The puddle mask of the simulated water depth, 0 to 1: `smoothstep(puddle_min_m,
+    /// puddle_full_m, depth)` of [`WetnessSettings`](crate::WetnessSettings), the shader's own
+    /// curve. 0 without a hydrology layer.
+    pub puddle: f32,
+    /// How much snow covers the ground, 0 bare to 1 buried: `smoothstep(0, 5 cm, depth)`.
+    pub snow: f32,
+    /// The wetness the surface model wears on **bare ground** (no grass canopy over it):
+    /// `min(max(wet, puddle), 1.4)`, the `wet` that darkens and glosses the albedo. A decal a
+    /// host fades with this fades with the ground. Grass is read from the albedo on the GPU and
+    /// is not in it, and neither is the rut-floor puddle of a trodden trail (it needs the field's
+    /// gradient).
+    pub drawn_wet: f32,
+}
+
 /// Ask about the environment from gameplay systems. Order such systems
 /// `.after(ElementsSystems::Readback)`.
 ///
@@ -83,6 +104,8 @@ pub struct Environment<'w> {
     paths: Option<Res<'w, crate::PathNetwork>>,
     /// The still water level a host declared; absent without one.
     still: Option<Res<'w, crate::StillWater>>,
+    /// The wetness settings the ground's puddle mask follows; absent without ground cover.
+    wetness_settings: Option<Res<'w, crate::WetnessSettings>>,
 }
 
 impl Environment<'_> {
@@ -238,6 +261,36 @@ impl Environment<'_> {
             .cover
             .as_ref()
             .and_then(|c| c.wetness_at(self.xz_to_metres(position)))
+    }
+
+    /// What the terrain's ground cover looks like at `position` (world XZ), in the terms the
+    /// terrain shader uses ([`GroundLook`]): the wetness, the puddle mask, the snow cover and the
+    /// wetness the surface model wears on bare ground. `None` outside the cover maps, without a
+    /// ground-cover layer, and before the first readback.
+    ///
+    /// A game that draws a footprint decal only on wet ground compares `drawn_wet` and not its
+    /// own copy of the weather, so the decal and the ground agree. Like
+    /// [`wetness`](Self::wetness) it is a bilinear sample of the last readback, up to one
+    /// readback interval old.
+    pub fn ground_look_at(&self, position: Vec2) -> Option<GroundLook> {
+        let p = self.xz_to_metres(position);
+        let cover = self.snapshot.cover.as_ref()?;
+        let wet = cover.wetness_at(p)?;
+        let snow_depth = cover.depth_at(p)?;
+        let defaults = crate::WetnessSettings::default();
+        let settings = self.wetness_settings.as_deref().unwrap_or(&defaults);
+        let puddle = self
+            .snapshot
+            .water_depth
+            .as_ref()
+            .and_then(|w| w.depth_at(p))
+            .map_or(0.0, |d| crate::cover::model::puddle_mask(d, settings));
+        Some(GroundLook {
+            wet,
+            puddle,
+            snow: crate::cover::model::snow_coverage(snow_depth),
+            drawn_wet: wet.max(puddle).min(crate::cover::model::DRENCHED_MAX),
+        })
     }
 
     /// How far the ground at `position` (world XZ) is pressed below its undisturbed surface by
@@ -411,6 +464,8 @@ mod tests {
     use super::*;
     use crate::celestial::CelestialFrame;
     use crate::clouds::CloudShadowSnapshot;
+    use crate::cover::CoverSnapshot;
+    use crate::hydrology::WaterDepthSnapshot;
 
     /// A world with the sun at 40° toward +X and a shadow grid whose cell (10, 20) is
     /// shadowed (T = 0) and every other cell open (T = 1).
@@ -557,5 +612,82 @@ mod tests {
             ask(&mut w, |e| e.terrain_height(Vec2::splat(10.0))),
             Some(2.0)
         );
+    }
+
+    /// A 32 × 32 m cover map, 1 m cells from the origin: wetness 0.6 and no snow on the left
+    /// half, wetness 0 and 3 cm of snow on the right; 1 cm of water over the whole of it.
+    fn cover_world() -> World {
+        let grid = crate::terrain::TerrainGrid {
+            origin: Vec2::ZERO,
+            cell_m: 1.0,
+            size: UVec2::splat(32),
+            y0: 0.0,
+        };
+        let left = |i: usize| i % 32 < 16;
+        let wetness: Vec<f32> = (0..32 * 32)
+            .map(|i| if left(i) { 0.6 } else { 0.0 })
+            .collect();
+        let depth: Vec<f32> = (0..32 * 32)
+            .map(|i| if left(i) { 0.0 } else { 0.03 })
+            .collect();
+        let mut w = world(None);
+        let mut snapshot = w.resource_mut::<EnvironmentSnapshot>();
+        snapshot.cover = Some(CoverSnapshot {
+            grid,
+            depth: Arc::from(depth),
+            wetness: Arc::from(wetness),
+        });
+        snapshot.water_depth = Some(WaterDepthSnapshot {
+            grid,
+            depth: Arc::from(vec![0.01; 32 * 32]),
+            volume_m3: 0.0,
+            wet_cells: 0,
+            request: 0,
+            input_m3: 0.0,
+        });
+        w
+    }
+
+    #[test]
+    fn the_ground_look_is_the_shaders_curves_over_the_readback() {
+        let mut w = cover_world();
+        let wet = ask(&mut w, |e| e.ground_look_at(Vec2::new(4.5, 4.5)));
+        let snowy = ask(&mut w, |e| e.ground_look_at(Vec2::new(28.5, 4.5)));
+        let (wet, snowy) = (wet.expect("on the map"), snowy.expect("on the map"));
+        // A puddle of 1 cm between 2 mm and 2 cm: smoothstep(0.002, 0.02, 0.01).
+        let t = (0.01f32 - 0.002) / 0.018;
+        let puddle = t * t * (3.0 - 2.0 * t);
+        assert!((wet.wet - 0.6).abs() < 1e-6 && wet.snow == 0.0, "{wet:?}");
+        assert!((wet.puddle - puddle).abs() < 1e-6, "{wet:?}");
+        // The surface model wears the wetter of the film and the puddle.
+        assert!((wet.drawn_wet - 0.6f32.max(puddle)).abs() < 1e-6, "{wet:?}");
+        // Dry ground under 3 cm of snow: smoothstep(0, 0.05, 0.03) = 0.648.
+        assert!(
+            (snowy.snow - 0.648).abs() < 1e-6 && snowy.wet == 0.0,
+            "{snowy:?}"
+        );
+        assert!((snowy.drawn_wet - puddle).abs() < 1e-6, "{snowy:?}");
+    }
+
+    #[test]
+    fn the_ground_look_is_unknown_off_the_map_and_reads_world_units() {
+        let mut w = cover_world();
+        assert_eq!(
+            ask(&mut w, |e| e.ground_look_at(Vec2::new(-5.0, 4.5))),
+            None
+        );
+        assert_eq!(
+            ask(&mut w, |e| e.ground_look_at(Vec2::new(40.0, 4.5))),
+            None
+        );
+        // In feet, 40 is 12.2 m: inside, on the wet side.
+        w.insert_resource(ElementsUnits {
+            units_per_metre: 3.2808,
+        });
+        let look = ask(&mut w, |e| e.ground_look_at(Vec2::new(40.0, 14.0)));
+        assert!(look.is_some_and(|l| (l.wet - 0.6).abs() < 1e-6), "{look:?}");
+        // No cover layer at all: unknown, not dry.
+        let mut bare = world(None);
+        assert_eq!(ask(&mut bare, |e| e.ground_look_at(Vec2::ZERO)), None);
     }
 }
