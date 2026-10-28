@@ -5161,3 +5161,22 @@ Host: the Mac (Apple M1 Max, Metal; no captures, no benchmark). Issues read thro
 3. #41 remainder: GPU fixture comparing `ground_look_at` to a rendered pixel; `FootprintPressure`.
 4. #39 `paths_resist_prints`.
 5. #42 remainder: a band debug view and a route-grain capture.
+
+## Iteration 82 — 2026-10-28 — Foot-world check for `StillWater` (#44, fourth slice)
+
+Host: the Mac (Apple M1 Max, Metal; no captures, no benchmark; `big` does not resolve). Issues read through the API: #46, #45, #44, #43, #38 open; no new bug. #45 is a release request, seen and skipped; #46 duplicates `sinkage_at` (shipped, iteration 78). Ranked: #44 acceptance 6 (a foot world draws and answers as the metre world; a consumer-visible promise with no test) over the sea past the grid's edge (a shader and capture job that needs big) and the foam work (needs big).
+
+- **Change**: test only, no `src/` change. `gpu_still_water::gpu_a_still_level_in_a_foot_world_draws_and_answers_as_in_metres` builds the same scene at `units_per_metre` 1.0 and 3.2808 (terrain built in metres, camera at 40 m in world units, `StillWater { level: 0.0 }`, an 8 m deep sea) and compares the mean radiance of the target's middle and `Environment::water_depth`.
+- **Sources**: none (`docs/research/still-water.md`).
+- **Evidence**: metres (0.0146348, 0.192725, 0.117415) vs feet (0.0146347, 0.192724, 0.117415), worst channel difference 0.000 %; both answer a depth of 8 m. A control with no `StillWater` also matches (0.174, 0.272, 0.0998 vs 0.184, 0.271, 0.100). The first version of the test built the terrain with `BED * units` (`Terrain::flat` and `with_extent` take metres) and drew a 26 m sea, near black: a test error, not a crate fault.
+- **Visual and performance gates**: not applicable, nothing drawn changes.
+- **Gates** (Mac): `gpu_still_water` (2 tests).
+- **Not done (#44 stays open)**: the sea past the terrain grid's edge (acceptance 5); a capture of the rings.
+
+### Next five items, ranked
+
+1. #44 remainder: sea past the terrain grid's edge (acceptance 5), needs big for a capture.
+2. Shoreline foam that survives the edge fade (all water), needs big.
+3. #41 remainder: GPU fixture comparing `ground_look_at` to a rendered pixel; `FootprintPressure`.
+4. #39 `paths_resist_prints`.
+5. #42 remainder: a band debug view and a route-grain capture.
