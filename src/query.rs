@@ -147,6 +147,22 @@ impl Environment<'_> {
             .map(|h| self.units.world(h))
     }
 
+    /// [`terrain_height`](Self::terrain_height) on the surface the level-0 patches draw: the
+    /// same taps, interpolated over the mesh's triangles (split along `(1, 0)–(0, 1)`) instead of
+    /// bilinearly. The two agree at every cell centre and differ inside a quad by at most a
+    /// quarter of its twist, which is what a figure on a crease (a pad's edge, a ramp) would
+    /// float or sink by. `terrain_height` is the bilinear; this is the picture. Coarser LOD
+    /// levels draw coarser surfaces, so it answers level 0 (the focus under an orthographic
+    /// camera, the ground near the eye under a perspective one).
+    pub fn terrain_drawn_height(&self, position: Vec2) -> Option<f32> {
+        let p = self.xz_to_metres(position);
+        self.snapshot
+            .terrain
+            .as_ref()
+            .and_then(|t| t.drawn_height(p))
+            .map(|h| self.units.world(h))
+    }
+
     /// [`terrain_height`](Self::terrain_height) in the metre frame: at a metre-frame XZ, in m.
     pub(crate) fn terrain_height_metres(&self, position: Vec2) -> Option<f32> {
         self.snapshot

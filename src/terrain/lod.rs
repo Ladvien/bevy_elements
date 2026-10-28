@@ -844,6 +844,69 @@ mod tests {
         assert!(quads > 1000, "only {quads} quads within 30 m");
     }
 
+    /// Issue #40: `TerrainGrid::drawn_height` is the level-0 patch mesh's own interpolated
+    /// height (to 1e-4 m), equals the bilinear at every sample, stays within a quarter of the
+    /// quad's twist of it, and is continuous across quad and patch edges.
+    #[test]
+    fn the_drawn_height_is_the_patch_meshs_triangles() {
+        use crate::terrain::ProceduralTerrain;
+        let (config, _tree, grid, surface) = generated(&ProceduralTerrain::hills(42), 4.0);
+        let height = |p: Vec2| grid.sample(&surface, p);
+        let mut rng = Rng(40);
+        let mut worst_gap = 0.0f32;
+        for _ in 0..400 {
+            // A random level-0 patch and quad inside it (its vertices are the samples).
+            let patch = Patch {
+                level: 0,
+                ix: 1 + (rng.next() * 12.0) as u32,
+                iz: 1 + (rng.next() * 12.0) as u32,
+            };
+            let (gx, gz) = ((rng.next() * 32.0) as u32, (rng.next() * 32.0) as u32);
+            // Morphed about the patch itself, so it is drawn unmorphed at level 0.
+            let corner = Vec2::new(patch.ix as f32, patch.iz as f32) * config.node_m(0);
+            let centre = Vec3::new(corner.x, height(corner), corner.y);
+            let v = |dx: u32, dz: u32| {
+                vertex_position(&config, patch, UVec2::new(gx + dx, gz + dz), centre, height)
+            };
+            let (v00, v10, v01, v11) = (v(0, 0), v(1, 0), v(0, 1), v(1, 1));
+            let twist = (v00.y + v11.y - v10.y - v01.y).abs() * 0.25;
+            for _ in 0..8 {
+                let (u, w) = (rng.next(), rng.next());
+                let mesh = if u + w <= 1.0 {
+                    v00.y + u * (v10.y - v00.y) + w * (v01.y - v00.y)
+                } else {
+                    v11.y + (1.0 - u) * (v01.y - v11.y) + (1.0 - w) * (v10.y - v11.y)
+                };
+                let p = v00.xz() + Vec2::new(u, w) * grid.cell_m;
+                let drawn = grid.drawn_height(&surface, p);
+                assert!((drawn - mesh).abs() < 1e-4, "at {p}: {drawn} vs mesh {mesh}");
+                let gap = (drawn - height(p)).abs();
+                assert!(gap <= twist + 1e-4, "at {p}: gap {gap}, twist/4 {twist}");
+                worst_gap = worst_gap.max(gap);
+                // The mesh and the bilinear meet at the samples and on the quad's edges.
+            }
+            assert!((grid.drawn_height(&surface, v00.xz()) - height(v00.xz())).abs() < 1e-4);
+            let edge = v00.xz() + Vec2::new(rng.next(), 0.0) * grid.cell_m;
+            assert!((grid.drawn_height(&surface, edge) - height(edge)).abs() < 1e-4);
+            // Continuity: a hair either side of the diagonal and of the quad's edge.
+            let diagonal = v00.xz() + Vec2::new(0.3, 0.7) * grid.cell_m;
+            let eps = Vec2::splat(1e-3);
+            assert!(
+                (grid.drawn_height(&surface, diagonal + eps)
+                    - grid.drawn_height(&surface, diagonal - eps))
+                .abs()
+                    < 0.02
+            );
+        }
+        assert!(worst_gap > 1e-3, "the hills never twisted: {worst_gap}");
+        // At the clamped edge it is the sample.
+        let corner = Vec2::new(-5.0, -5.0);
+        assert_eq!(
+            grid.drawn_height(&surface, corner),
+            grid.sample(&surface, corner)
+        );
+    }
+
     /// Issue #36, acceptance 3 (`orthographic-lod.md` Validation 3): walking an orthographic
     /// camera's focus 100 m over the hills in 1 m steps, the patches it swaps barely move, and
     /// no edge between patches cracks.

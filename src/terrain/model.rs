@@ -70,6 +70,27 @@ impl TerrainGrid {
         let row1 = at(0, 1) * (1.0 - w.x) + at(1, 1) * w.x;
         row0 * (1.0 - w.y) + row1 * w.y
     }
+
+    /// Height of the surface the level-0 patches *draw* at `p`, from a row-major layer: the
+    /// same taps as [`sample`](Self::sample), but interpolated over the patch mesh's two
+    /// triangles per quad (split along `(1, 0)–(0, 1)`) instead of bilinearly. It equals
+    /// `sample` at every cell centre and on every quad edge, and inside a quad departs from it
+    /// by at most `|h00 + h11 − h10 − h01| / 4` (`docs/research/orthographic-lod.md`, addendum).
+    /// Seat a figure on this where creases matter; coarser levels draw coarser surfaces.
+    pub fn drawn_height(&self, layer: &[f32], p: Vec2) -> f32 {
+        let g = (p - self.origin) / self.cell_m - 0.5;
+        let base = g.floor();
+        let w = g - base;
+        let b = base.as_ivec2();
+        let at = |dx: i32, dz: i32| layer[self.index(b + bevy::math::IVec2::new(dx, dz))];
+        if w.x + w.y <= 1.0 {
+            let h00 = at(0, 0);
+            h00 + w.x * (at(1, 0) - h00) + w.y * (at(0, 1) - h00)
+        } else {
+            let h11 = at(1, 1);
+            h11 + (1.0 - w.x) * (at(0, 1) - h11) + (1.0 - w.y) * (at(1, 0) - h11)
+        }
+    }
 }
 
 /// The grid the quality level and the requested extent and resolution give, and whether the
@@ -133,6 +154,14 @@ impl TerrainSnapshot {
     /// defined everywhere, for callers (such as `bevy_flora`'s ground) that cannot take `None`.
     pub fn height_clamped(&self, p: Vec2) -> f32 {
         self.grid.y0 + self.grid.sample(&self.surface, p)
+    }
+
+    /// [`height`](Self::height) on the drawn triangles rather than the bilinear
+    /// ([`TerrainGrid::drawn_height`]); `None` outside the grid.
+    pub fn drawn_height(&self, p: Vec2) -> Option<f32> {
+        self.grid
+            .contains(p)
+            .then(|| self.grid.y0 + self.grid.drawn_height(&self.surface, p))
     }
 
     /// Sediment thickness at `p` (metre-frame XZ), m; `None` outside the grid.
