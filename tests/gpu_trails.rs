@@ -141,6 +141,41 @@ impl Sim {
         self.frames(90);
     }
 
+    /// Every cell of an `array<f32>` buffer to `value`, then frames for the cover and terrain
+    /// packs to carry it to the kernel.
+    fn fill(&mut self, handle: Handle<ShaderBuffer>, value: f32) {
+        let data = vec![value; (CELLS * CELLS) as usize];
+        {
+            let mut buffers = self.app.world_mut().resource_mut::<Assets<ShaderBuffer>>();
+            let Some(mut buffer) = buffers.get_mut(&handle) else {
+                panic!("the layer exists");
+            };
+            buffer.clear();
+            buffer.extend_from_slice(&data);
+        }
+        self.frames(30);
+    }
+
+    fn lay_wetness(&mut self, wetness: f32) {
+        let handle = self.app.world().resource::<CoverState>().wetness.clone();
+        self.fill(handle, wetness);
+    }
+
+    fn lay_sediment(&mut self, depth_m: f32) {
+        let handle = self.app.world().resource::<TerrainState>().sediment.clone();
+        self.fill(handle, depth_m);
+        // The terrain packs a layer write only after a hydrology step bumps its change counter
+        // (`TerrainGpu` is crate-private), so run the hydrology for a few frames and hold it again.
+        let held = self.app.world().resource::<HydrologySettings>().clone();
+        self.app.world_mut().insert_resource(HydrologySettings {
+            time_scale: 1.0,
+            ..held.clone()
+        });
+        self.frames(30);
+        self.app.world_mut().insert_resource(held);
+        self.frames(10);
+    }
+
     fn spawn_imprint(&mut self, at: Vec3) -> Entity {
         self.app
             .world_mut()
@@ -332,4 +367,36 @@ fn the_window_keeps_a_trail_in_place() {
     );
     assert!(back.abs() < 1e-4, "still there: {back}");
     sim.finish();
+}
+
+/// #39: `min_depth_m` 0.01 on bare ground (no snow) of the given wetness and sediment depth:
+/// the deepest `|h|` one still foot leaves.
+fn gated_step_on(wetness: f32, sediment_m: f32) -> f32 {
+    let mut sim = Sim::with(TrailSettings {
+        min_depth_m: 0.01,
+        ..default()
+    });
+    sim.lay_snow(0.0, 0.0);
+    sim.lay_wetness(wetness);
+    sim.lay_sediment(sediment_m);
+    sim.spawn_imprint(Vec3::new(0.0, -0.05, 4.0));
+    sim.frames(20);
+    let (h, _, _) = sim.field();
+    sim.finish();
+    -h.iter().copied().fold(0.0f32, f32::min)
+}
+
+/// #39 acceptance 1 and 2: at `min_depth_m` 0.01 a foot leaves nothing on dry soil, presses at
+/// least 1 cm on soil at wetness 0.5, and presses on dry sand (3.4 cm by the model).
+#[test]
+#[ignore = "needs a GPU"]
+fn a_press_threshold_passes_wet_soil_and_sand() {
+    let _lock = serial();
+    let dry = gated_step_on(0.0, 0.0);
+    let damp = gated_step_on(0.5, 0.0);
+    let sand = gated_step_on(0.0, 1.0);
+    println!("dry {dry:.4} m, wetness 0.5 {damp:.4} m, dry sand {sand:.4} m");
+    assert_eq!(dry, 0.0, "dry soil under a 1 cm threshold");
+    assert!(damp >= 0.01, "wet soil presses: {damp}");
+    assert!(sand >= 0.01, "dry sand presses: {sand}");
 }
