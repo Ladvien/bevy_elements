@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Headless driver for the bevy-elements-build-loop skill.
+# Headless driver for the `/build-loop` command (`.omp/commands/build-loop.md`).
 #
-# The skill does one iteration per `omp -p` call and exits, so the loop is this script calling omp
+# The command does one iteration per `omp -p` call and exits, so the loop is this script calling omp
 # again. Each pass is a fresh, ephemeral session that reads the loop log for its starting point.
 #
 # The driver stops when:
@@ -26,7 +26,7 @@ MAX="${LOOP_MAX:-3}"
 PASS_TIMEOUT="${LOOP_TIMEOUT:-6h}"
 NO_PROGRESS="${LOOP_NO_PROGRESS:-1}"
 OMP="${OMP_BIN:-omp}"
-PROMPT="Run one iteration of the bevy-elements-build-loop skill."
+PROMPT="/build-loop"
 LOG="$REPO/docs/loop-log.md"
 
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
