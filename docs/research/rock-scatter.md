@@ -324,6 +324,15 @@ A host with its own built-up ground (a walled town: streets, plazas, houses) can
 - **Not in this slice.** Exporting the per-facet palette for a host's own rocks (acceptance 4) is a separate API; it is left to a later pass and #43 stays open.
 - **Sources.** None new; this is a placement filter over Golombek's scatter above.
 
+### Addendum: the stone shapes for a host's own scatter (#43, acceptance 4)
+
+A host that keeps its own scatter (a town on a hill, an authored layout) cannot run `RocksPlugin`, so the facet-dressed stone has to be reachable without it. The crate already builds, per shape, a mesh whose vertex colours carry the palette tone of each joint-plane facet (`rocks::mesh::rock_geometry`, tones from `shape_tones`, derived once per shape at the canonical tessellation). The export is that same builder, not a copy:
+
+- `STONE_SHAPES` (12: six angular, six rounded), `stone_palette()` (the four tones, mean 1), `stone_facet_tones(shape)` (the tone each facet of the shape wears, the table both meshes read) and `stone_mesh(shape, StoneDetail::{Near, Far})` (the 1280- or 320-triangle mesh: positions centred, long axis X one unit long, vertex colours = facet tone x mottle x base darkening; vertex colours multiply `StandardMaterial::base_color`, so a host's own material shows the per-facet colour).
+- A shape index wraps (`shape % STONE_SHAPES`), so a host can hash an id into it.
+- No new maths; no default changes; the scatter's own meshes are unchanged (same builder, same table).
+- **Sources.** None new: Model 5 above and `docs/research/stone-material.md`, `rock-palette.md`.
+
 ## Pending index
 
 - `golombek2021` (DOI `10.1029/2021EA001959`): the PDF is in `/tmp/i42`, not ingested into
