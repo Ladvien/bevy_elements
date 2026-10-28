@@ -105,7 +105,7 @@ fn build_weathered(units: f32, camera: Option<Transform>, preset: WeatherPreset)
         })
         .insert_resource(WorldClock {
             paused: true,
-            ..WorldClock::new(CivilDate::new(2026, 6, 21)).at_hour(12.0)
+            ..WorldClock::new(CivilDate::new(2026, 6, 21)).at_hour(std::env::var("SWEEP_HOUR").ok().and_then(|v| v.parse().ok()).unwrap_or(12.0))
         })
         .add_systems(Startup, setup)
         .add_systems(

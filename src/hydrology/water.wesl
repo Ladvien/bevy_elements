@@ -127,6 +127,8 @@ fn morph_k(distance: f32, lod: u32) -> f32 {
 // 33 × 33 mesh is placed by the transform's scale, the grid's taps clamp to the edge sample, and
 // nothing morphs.
 const SKIRT_TAG: u32 = 1000u;
+const SKIRT_FADE_NEAR_M: f32 = 4000.0;
+const SKIRT_FADE_FAR_M: f32 = 40000.0;
 
 // The terrain's CDLOD vertex with the morph measured against the terrain surface (so the water
 // morphs with the ground under it), lifted by the water depth. In the metre frame: the instance
@@ -350,7 +352,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     if column.depth < DISCARD_DEPTH {
         discard;
     }
-    let a_edge = edge_alpha(column.depth);
+    var a_edge = edge_alpha(column.depth);
+@if(VERTEX_OUTPUT_INSTANCE_INDEX) {
+    if mesh_functions::get_tag(in.instance_index) >= SKIRT_TAG {
+        a_edge *= 1.0 - smoothstep(SKIRT_FADE_NEAR_M, SKIRT_FADE_FAR_M, length(p - view.world_position / water.units));
+    }
+}
 
     let flow = flow_normal(p.xz, column.velocity, gx, gy);
     // The flow-mapped ripples' slope plus the wave field's: both small-slope height fields.
