@@ -4991,3 +4991,20 @@ Host: the Mac for the CPU gates, `big` (RTX 3090) for the GPU tests. Issues read
 3. #42 remainder: a band debug view and a route-grain capture.
 4. Gravel/packed-snow legibility from eye level.
 5. #41 wetness as drawn.
+
+## Iteration 73 — 2026-10-28 — #39 press threshold: wet soil and sand verified
+
+Host: the Mac for the CPU checks, `big` (RTX 3090) for the GPU test. Issues read through the API: #38, #39, #41, #42, #43, #44, #45 open; no new bug; #45 is a release request, seen and skipped. Ranked: #39 remainder (a stated acceptance gap on shipped code, test-only) over #44 (new water mode, needs a design) and #43 (an exclusion shape to design).
+
+- **Change**: test only. `a_press_threshold_passes_wet_soil_and_sand` (`tests/gpu_trails.rs`) with `Sim::lay_wetness` and `lay_sediment`. Layer writes to sediment reach the kernel only after a hydrology step bumps `TerrainGpu::changes` (crate-private), so `lay_sediment` releases `HydrologySettings::time_scale` for 30 frames and holds it again.
+- **Evidence** (big, `gpu_trails`, 6/6): at `min_depth_m` 0.01 dry soil presses 0 m, wetness 0.5 presses 0.0373 m, dry sand (1 m sediment) presses 0.0327 m; the existing five are unchanged (snow 0.2365 m, rim share 0.099).
+- **Visual, performance and wider gates**: not applicable, no `src/` or shader change. Clippy `-D warnings` on the test passes.
+- **#39 stays open**: acceptance 1, 2 and 4 now hold for the shipped shape (`min_depth_m`); 3 belongs to the unchosen `Environment::sinkage_at`; `paths_resist_prints` is not built.
+
+### Next five items, ranked
+
+1. #39 remainder: `paths_resist_prints` (route coverage and kind in the trail kernel; mind the fragment/compute storage-buffer budget).
+2. #44 still sea / #43 rock exclusion.
+3. #42 remainder: a band debug view and a route-grain capture.
+4. Gravel/packed-snow legibility from eye level.
+5. #41 wetness as drawn.
