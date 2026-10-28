@@ -110,6 +110,20 @@ No source's number is changed: Wong's constants, CRREL's 500 kg/m³, Alvarado's 
 
 **Not done (deliberate).** `Environment::sinkage_at` (the issue's second shape) and `paths_resist_prints`: the issue asks for either shape and lists the route rule as related; the threshold alone removes the duplicated physics for the reported case. The route rule is left on the backlog.
 
+## Addendum: the depth a step would press (#39, acceptance 3)
+
+**Sources.** None new: `Ground::sinkage` (the CPU mirror of `trails.wesl`'s `sinkage`) and the Bekker–Wong constants above.
+
+**Model.** `Environment::sinkage_at(position, half, load_n) -> Option<f32>` is the kernel's `sinkage(g, p, b)` evaluated on the readback's ground, with the imprint's own pressure `load_n / (π · half.x · half.y)` and plate width `2 · min(half)` (`ImprintGpu::new`). The issue's signature `(position, load_n)` has no contact area, and the pressure cannot be derived without one, so the query takes the same half extents an `Imprint` does. The ground is the kernel's: snow depth and density from the cover readback (density is the bilinear water equivalent over the bilinear depth, clamped 50–917, as in `trails.wesl`; the readback now carries water equivalent beside depth and wetness), wetness from the same, sediment from the terrain readback, and slope from central differences of the terrain readback's surface (the kernel's `terrain_pack` stencil, bilinearly interpolated, `atan` of the gradient's length). `None` outside the grid, before a readback, and without ground cover (the kernel's cover input).
+
+**Parameters.** None. It answers for the terrain's ground; a game that supplies its own `TrailGround` presses what that ground says and this query does not see it.
+
+**GPU mapping.** The cover readback buffer grows from `vec2` to `vec4` per cell (depth, wetness, water equivalent, spare) so the density reaches the CPU: 16 B per readback cell instead of 8, no new pass or binding.
+
+**Validation targets.** CPU: soil at wetness 0 / 0.5 / 1, dry sand, 2 cm of snow and a cliff each answer the walker's number from the table above (0.0047 m, about 0.04 m, 0.30 m cap, 0.034 m, the CRREL-capped snow depth, 0); slope derived from a ramp surface equals the ramp's angle; `None` off the grid. GPU (acceptance 3, to run on `big`): the answer matches the deepest point of the trail field after the same imprint to 1 mm.
+
+**Not done.** The GPU comparison has not been run (no GPU gate on this host); `paths_resist_prints` stays on the backlog.
+
 ## Pending index
 
 Converted with `hs scribe convert` from local PDFs (S3 upload into the store failed earlier this session; not yet indexed): CRREL 90-9, Svensson 2019, Goswami 2024, Barré-Brisebois 2014, NASA TM-20250006958, Hanák 2021. Ingested and in the store: `10.48550_arxiv.2302.08683` (Sumner), `10.48550_arxiv.2209.10215` (Alvarado), `10.1145_3610548.3618159` (Su et al.). `distill_index` skipped: the MCP bridge returns HTTP 404.
