@@ -5142,3 +5142,22 @@ Host: the Mac (Apple M1 Max, Metal; CPU gates and the waves GPU file; no capture
 3. #41 remainder: GPU fixture comparing `ground_look_at` to a rendered pixel; `FootprintPressure`.
 4. #39 `paths_resist_prints`.
 5. #42 remainder: a band debug view and a route-grain capture.
+
+## Iteration 81 — 2026-10-28 — Hydrology idles under a `StillWater` (#44, third slice)
+
+Host: the Mac (Apple M1 Max, Metal; no captures, no benchmark). Issues read through the API: #43, #44, #45, #46, #38 open; no new bug. #45 is a release request, seen and skipped; #46 duplicates `sinkage_at` (shipped, iteration 78). Ranked: #44 acceptance 3 (a still sea that costs the simulation nothing; a consumer's own list) over #43 (awaiting the owner's adoption decision) and the foam work (needs big, unreachable: `big` does not resolve).
+
+- **Change**: `hydrology::model::still_idle` and a branch in `run_hydrology`: with `StillWater` set, no bake, rain ≤ 0, no positive source rate, and a depth readback showing mean depth under `QUANTUM_M`, zero substeps are scheduled and the scheduler's backlog is cleared. Rain, a source, a bake or water on the ground resumes it. Thermal slumping pauses with the substeps (recorded in the note's Deviations).
+- **Sources**: none new (`docs/research/still-water.md`).
+- **Evidence**: `gpu_hydrology::a_still_sea_with_nothing_wet_runs_no_substeps`: 0 substeps over 60 frames at `time_scale` 1 after 200 frames; rain at 30 mm/h gives more than 0 within 60 frames. Unit test `a_still_sea_idles_the_simulation_only_while_nothing_can_make_water`. No before-run of the GPU test was made; the old scheduler ran about one substep per frame at that scale.
+- **Visual and performance gates**: not applicable to a scheduling change (no pixels change); no benchmark, as no GPU timing host was available.
+- **Gates** (Mac): lib 346 + `leaf` pass, clippy `-D warnings`, rustdoc `-D warnings`, wasm32 lib build, the new GPU test. Not re-run this pass: the other integration and GPU files, doctests.
+- **Not done (#44 stays open)**: the sea past the grid's edge; a foot-world GPU check; a capture of the rings.
+
+### Next five items, ranked
+
+1. #44 remainder: sea past the terrain grid's edge (acceptance 5), foot-world GPU check (acceptance 6).
+2. Shoreline foam that survives the edge fade (all water), needs big.
+3. #41 remainder: GPU fixture comparing `ground_look_at` to a rendered pixel; `FootprintPressure`.
+4. #39 `paths_resist_prints`.
+5. #42 remainder: a band debug view and a route-grain capture.
