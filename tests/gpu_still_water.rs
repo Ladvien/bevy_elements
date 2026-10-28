@@ -453,9 +453,20 @@ fn gpu_the_skirt_in_a_foot_world_draws_as_in_metres() {
 /// The edge scene at `hour`, the centre column as gamma-encoded 8-bit levels (the dump's own
 /// encoding), after the horizon ring has been read back.
 fn column_at(hour: f64, preset: WeatherPreset) -> Vec<Vec3> {
-    let pitch = -8.0f32.to_radians();
-    let eye = Transform::from_xyz(0.0, 30.0, 42.0)
-        .looking_to(Vec3::new(0.0, pitch.sin(), -pitch.cos()), Vec3::Y);
+    column_facing(hour, preset, 0.0)
+}
+
+/// [`column_at`] with the eye turned `yaw_deg` from -Z toward +X.
+fn column_facing(hour: f64, preset: WeatherPreset, yaw_deg: f32) -> Vec<Vec3> {
+    let (pitch, yaw) = (-8.0f32.to_radians(), yaw_deg.to_radians());
+    let eye = Transform::from_xyz(0.0, 30.0, 0.0).looking_to(
+        Vec3::new(
+            yaw.sin() * pitch.cos(),
+            pitch.sin(),
+            -yaw.cos() * pitch.cos(),
+        ),
+        Vec3::Y,
+    );
     let mut app = build_at(1.0, Some(eye), preset, hour);
     app.world_mut().insert_resource(StillWater { level: 0.0 });
     run_until(&mut app, "the terrain", |app| {
@@ -467,7 +478,7 @@ fn column_at(hour: f64, preset: WeatherPreset) -> Vec<Vec3> {
     for _ in 0..240 {
         app.update();
     }
-    dump_target(&mut app, &format!("-h{hour}-{preset:?}"));
+    dump_target(&mut app, &format!("-h{hour}-{preset:?}-y{yaw_deg}"));
     let column = column_rgb(&mut app, TARGET as usize / 2);
     app.world_mut().write_message(AppExit::Success);
     column
@@ -514,4 +525,30 @@ fn gpu_the_far_sea_meets_the_sky_without_a_line() {
         );
         assert!(line < 4.0, "hour {hour}: a horizon line of {line} levels");
     }
+}
+
+/// Turning the camera turns the fog's tint with the sky behind it: at dusk the far sea toward the
+/// sun's side is warmer (higher red over blue) than the one away from it, and there is no line
+/// at the horizon at any of the four headings.
+#[test]
+#[ignore = "needs a GPU"]
+fn gpu_the_far_sea_takes_the_tint_of_the_sky_it_faces() {
+    let _lock = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let mut warmth = Vec::new();
+    for yaw in [0.0, 90.0, 180.0, 270.0] {
+        let column = column_facing(19.5, WeatherPreset::Clear, yaw);
+        let line = worst_line(&column);
+        let sea = column[100];
+        println!("ROW yaw {yaw}: line {line:.1}, sea {sea:?}");
+        assert!(line < 4.0, "yaw {yaw}: a horizon line of {line} levels");
+        warmth.push(sea.x / sea.z);
+    }
+    let (warm, cool) = warmth
+        .iter()
+        .fold((0.0f32, f32::MAX), |(w, c), &x| (w.max(x), c.min(x)));
+    println!("sea red over blue: {warmth:?}");
+    assert!(
+        warm > 1.05 * cool,
+        "the sea is one tint all round: {warmth:?}"
+    );
 }
