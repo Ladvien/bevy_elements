@@ -283,9 +283,11 @@ fn textured_hills(mut commands: Commands, assets: Res<AssetServer>) {
 # use bevy::prelude::*;
 # use bevy_elements::TerrainLook;
 fn night_palette(mut look: ResMut<TerrainLook>) {
-    *look = TerrainLook { tint: Vec3::new(0.55, 0.62, 0.85), saturation: 0.6 };
+    *look = TerrainLook { tint: Vec3::new(0.55, 0.62, 0.85), saturation: 0.6, ..default() };
 }
 ```
+
+`TerrainLook::detail` scales the ground's grain and bump (1 is the crate's own, 0 none; the route grain follows) and `TerrainLook::finest_m` tells the band limit how wide one screen pixel is on the ground, so a fixed orthographic zoom whose pixels are wider than the crate's derived footprint can drop the octaves it cannot resolve instead of drawing them as speckle. Both are uniform writes, like the tint.
 
 ### Ground cover
 
