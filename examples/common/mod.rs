@@ -62,16 +62,20 @@ pub fn vec3_env(name: &str) -> Option<Vec3> {
     (v.len() == 3).then(|| Vec3::new(v[0], v[1], v[2]))
 }
 
-/// `ELEMENTS_TINT=r,g,b` and `ELEMENTS_SATURATION=s`: a grade of the terrain's bare ground
-/// ([`TerrainLook`]), `None` when neither is set.
+/// `ELEMENTS_TINT=r,g,b`, `ELEMENTS_SATURATION=s`, `ELEMENTS_DETAIL=k` and `ELEMENTS_FINEST_M=m`: a
+/// grade of the terrain's bare ground and its micro-detail ([`TerrainLook`]), `None` when none is
+/// set.
 pub fn terrain_look_env() -> Option<TerrainLook> {
     let tint = vec3_env("ELEMENTS_TINT");
-    let saturation: Option<f32> = std::env::var("ELEMENTS_SATURATION")
-        .ok()
-        .and_then(|s| s.parse().ok());
-    (tint.is_some() || saturation.is_some()).then(|| TerrainLook {
+    let number = |name: &str| -> Option<f32> { std::env::var(name).ok().and_then(|s| s.parse().ok()) };
+    let saturation = number("ELEMENTS_SATURATION");
+    let detail = number("ELEMENTS_DETAIL");
+    let finest_m = number("ELEMENTS_FINEST_M");
+    (tint.is_some() || saturation.is_some() || detail.is_some() || finest_m.is_some()).then(|| TerrainLook {
         tint: tint.unwrap_or(Vec3::ONE),
         saturation: saturation.unwrap_or(1.0),
+        detail: detail.unwrap_or(1.0),
+        finest_m,
     })
 }
 

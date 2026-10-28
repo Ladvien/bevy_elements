@@ -178,7 +178,10 @@ const PATH_STONE_M: f32 = 0.30;
 
 // The route's own grain: the ground's detail belongs to turf and soil, and a lane needs a surface
 // of its own. Band-limited by the pixel's footprint, as every detail in this crate is.
-fn path_grain(p: vec2<f32>, kind: f32, footprint_m: f32, mask_grain: f32) -> PathGrain {
+fn path_grain(p: vec2<f32>, kind: f32, footprint_in_m: f32, mask_grain: f32, control: vec2<f32>) -> PathGrain {
+    // The host's ground detail (`TerrainLook`): x the amplitude multiplier, y the finest feature
+    // its camera resolves, which floors the footprint, as `ground_detail`'s.
+    let footprint_m = max(footprint_in_m, control.y);
     var out: PathGrain;
     out.albedo = 1.0;
     out.grad = vec3<f32>(0.0);
@@ -232,11 +235,14 @@ fn path_grain(p: vec2<f32>, kind: f32, footprint_m: f32, mask_grain: f32) -> Pat
     // The mask's own grain is the surface's speckle at 0.175 m — the chips of a gravel road, the
     // trodden clods of a lane — and it survives to 40 m where the noise octaves above are gone.
     let speckle = (mask_grain - 0.5) * 2.0;
-    sum += 0.55 * speckle;
+    // A host that set a finest feature drops the speckle with the rest once the footprint passes
+    // its 0.175 m texel; unset, it survives to 40 m as before.
+    let speckle_keep = select(1.0, 1.0 - smoothstep(0.5, 1.0, footprint_m / 0.175), control.y > 0.0);
+    sum += 0.55 * speckle_keep * speckle;
     // A gentle sharpening keeps the chips *specks* rather than a smooth swell, without the dark
     // rims of a hard cube.
-    let sharp = sum * (1.0 + 1.1 * sum * sum) * amplitude;
+    let sharp = sum * (1.0 + 1.1 * sum * sum) * amplitude * control.x;
     out.albedo = 1.0 + sharp;
-    out.grad = vec3<f32>(grad.x, 0.0, grad.y) * amplitude;
+    out.grad = vec3<f32>(grad.x, 0.0, grad.y) * amplitude * control.x;
     return out;
 }
