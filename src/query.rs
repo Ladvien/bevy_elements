@@ -293,6 +293,35 @@ impl Environment<'_> {
         })
     }
 
+    /// How deep, m, a foot-sized contact of half extents `half` (m) loaded with `load_n` newtons
+    /// would press into the ground at `position` (world XZ) now: the trail kernel's own sinkage
+    /// (`Imprint`'s pressure and plate width, Bekker–Wong on the terrain's snow, sand, soil and
+    /// rock) evaluated on the last readback, so a game gates its footprints on the depth the
+    /// ground will take and not on a copy of the physics. 0 on rock, and in snow the CRREL-capped
+    /// depth (snow of 1 cm or more always presses). `None` outside the terrain, without ground
+    /// cover, for a degenerate contact, and before the first readback.
+    ///
+    /// It answers for the terrain's ground: a [`TrailGround`](crate::TrailGround) a game
+    /// supplies is not read. Up to one readback interval old, like [`wetness`](Self::wetness).
+    pub fn sinkage_at(&self, position: Vec2, half: Vec2, load_n: f32) -> Option<f32> {
+        use crate::trails::model::mirror::Ground;
+        if !(half.x > 0.0 && half.y > 0.0 && load_n > 0.0) {
+            return None;
+        }
+        let p = self.xz_to_metres(position);
+        let cover = self.snapshot.cover.as_ref()?;
+        let terrain = self.snapshot.terrain.as_ref()?;
+        let ground = Ground {
+            snow_m: cover.depth_at(p)?,
+            snow_density: cover.snow_density_at(p)?,
+            sediment_m: terrain.sediment(p)?,
+            slope_deg: terrain.slope_deg(p)?,
+            wetness: cover.wetness_at(p)?,
+        };
+        let pressure_kpa = load_n / (std::f32::consts::PI * half.x * half.y) / 1000.0;
+        Some(ground.sinkage(pressure_kpa, 2.0 * half.min_element()))
+    }
+
     /// How far the ground at `position` (world XZ) is pressed below its undisturbed surface by
     /// [`Imprint`](crate::Imprint)s, m: the deepest point within a readback cell around it (two
     /// texels, 10 cm at High), `Some(0.0)` on untouched ground or a rim, `None` outside the
@@ -636,6 +665,7 @@ mod tests {
             grid,
             depth: Arc::from(depth),
             wetness: Arc::from(wetness),
+            swe: Arc::from(vec![0.0; 32 * 32]),
         });
         snapshot.water_depth = Some(WaterDepthSnapshot {
             grid,
@@ -689,5 +719,46 @@ mod tests {
         // No cover layer at all: unknown, not dry.
         let mut bare = world(None);
         assert_eq!(ask(&mut bare, |e| e.ground_look_at(Vec2::ZERO)), None);
+    }
+
+    /// A walker on one foot: half extents 0.13 × 0.05 m under 760 N (37.2 kPa).
+    fn step(e: &Environment, at: Vec2) -> Option<f32> {
+        e.sinkage_at(at, Vec2::new(0.13, 0.05), 760.0)
+    }
+
+    #[test]
+    fn a_step_presses_what_the_ground_under_it_takes() {
+        // Soil on the first 16 rows, sand (2 m of sediment) on the rest, over the cover map's
+        // wet left half and its 3 cm snow on the right.
+        let mut w = cover_world();
+        let mut terrain = flat_terrain();
+        terrain.sediment = (0..32 * 32).map(|i| if i / 32 < 16 { 0.0 } else { 2.0 }).collect();
+        w.resource_mut::<EnvironmentSnapshot>().terrain = Some(terrain);
+        let soil = ask(&mut w, |e| step(e, Vec2::new(4.5, 4.5))).expect("on the map");
+        let sand = ask(&mut w, |e| step(e, Vec2::new(4.5, 24.5))).expect("on the map");
+        let snow = ask(&mut w, |e| step(e, Vec2::new(28.5, 4.5))).expect("on the map");
+        // Wetness 0.6: 0.0048 m · 62.5^0.6, between dry soil and the 30 cm cap.
+        assert!((soil - 0.0574).abs() < 0.002, "soil {soil}");
+        // Dry sand 3.4 cm, wet or not.
+        assert!((sand - 0.0339).abs() < 0.0005, "sand {sand}");
+        // 3 cm of snow of 50 kg/m³ (no water equivalent: the lightest): the compaction cap,
+        // 3 cm · (1 − 50/500), below Bekker's 31 cm.
+        assert!((snow - 0.027).abs() < 1e-5, "snow {snow}");
+    }
+
+    #[test]
+    fn a_step_has_no_answer_without_ground_or_contact() {
+        let mut w = cover_world();
+        // No terrain readback: the sediment and slope are unknown.
+        assert_eq!(ask(&mut w, |e| step(e, Vec2::new(4.5, 4.5))), None);
+        w.resource_mut::<EnvironmentSnapshot>().terrain = Some(flat_terrain());
+        assert_eq!(ask(&mut w, |e| step(e, Vec2::new(-5.0, 4.5))), None);
+        let degenerate = ask(&mut w, |e| {
+            (
+                e.sinkage_at(Vec2::new(4.5, 4.5), Vec2::new(0.0, 0.05), 760.0),
+                e.sinkage_at(Vec2::new(4.5, 4.5), Vec2::new(0.13, 0.05), 0.0),
+            )
+        });
+        assert_eq!(degenerate, (None, None));
     }
 }

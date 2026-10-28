@@ -171,6 +171,34 @@ impl TerrainSnapshot {
             .then(|| self.grid.sample(&self.sediment, p))
     }
 
+    /// Surface slope at `p` (metre-frame XZ), degrees: `atan` of the gradient's length, the
+    /// gradient taken by central differences over ±1 cell (one-sided at the edge) at the four
+    /// surrounding cells and interpolated bilinearly, as `terrain_pack` and the trail kernel
+    /// do. `None` outside the grid.
+    pub(crate) fn slope_deg(&self, p: Vec2) -> Option<f32> {
+        if !self.grid.contains(p) {
+            return None;
+        }
+        let g = (p - self.grid.origin) / self.grid.cell_m - 0.5;
+        let base = g.floor();
+        let w = g - base;
+        let b = base.as_ivec2();
+        let last = self.grid.size.as_ivec2() - 1;
+        let gradient = |dx: i32, dz: i32| {
+            let c = (b + bevy::math::IVec2::new(dx, dz)).clamp(bevy::math::IVec2::ZERO, last);
+            let lo = (c - 1).max(bevy::math::IVec2::ZERO);
+            let hi = (c + 1).min(last);
+            let at = |x: i32, z: i32| self.surface[self.grid.index(bevy::math::IVec2::new(x, z))];
+            Vec2::new(
+                (at(hi.x, c.y) - at(lo.x, c.y)) / ((hi.x - lo.x) as f32 * self.grid.cell_m),
+                (at(c.x, hi.y) - at(c.x, lo.y)) / ((hi.y - lo.y) as f32 * self.grid.cell_m),
+            )
+        };
+        let row0 = gradient(0, 0).lerp(gradient(1, 0), w.x);
+        let row1 = gradient(0, 1).lerp(gradient(1, 1), w.x);
+        Some(row0.lerp(row1, w.y).length().atan().to_degrees())
+    }
+
     /// Where the ray from `origin` along the unit `dir` (metre frame) first meets the ground,
     /// searched between the heights `low` and `high` (m, the ground's lowest and highest
     /// surface) every half cell and refined by bisection. `None` for a ray that does not
@@ -227,6 +255,34 @@ pub(crate) mod mirror;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A 16 × 16 surface of 1 m cells rising 0.5 m per metre of x.
+    fn ramp() -> TerrainSnapshot {
+        TerrainSnapshot {
+            grid: TerrainGrid {
+                origin: Vec2::ZERO,
+                cell_m: 1.0,
+                size: UVec2::splat(16),
+                y0: 0.0,
+            },
+            surface: (0..16 * 16).map(|i| 0.5 * (i % 16) as f32).collect(),
+            sediment: Arc::from(vec![0.0; 16 * 16]),
+            version: 1,
+        }
+    }
+
+    #[test]
+    fn the_slope_is_the_gradients_angle_everywhere_on_a_ramp() {
+        let ramp = ramp();
+        let angle = 0.5_f32.atan().to_degrees();
+        // Inside, on a cell centre, and on the edge cells (one-sided differences).
+        for at in [Vec2::new(8.3, 4.1), Vec2::new(5.5, 5.5), Vec2::new(0.2, 9.0), Vec2::new(15.9, 1.0)] {
+            let slope = ramp.slope_deg(at).expect("inside the grid");
+            assert!((slope - angle).abs() < 1e-3, "{at}: {slope}");
+        }
+        assert_eq!(ramp.slope_deg(Vec2::new(-0.1, 4.0)), None);
+        assert_eq!(ramp.slope_deg(Vec2::new(4.0, 16.1)), None);
+    }
 
     #[test]
     fn the_resolution_is_clamped_and_rounded_to_a_power_of_two() {
