@@ -92,6 +92,10 @@ In the frames this reads as a choppy grey lake where the meadow was (`hills_rain
 5. **The rock's cavities occlude its sheen** (Model adopted 6). Not in any earlier note: the rock had no specular occlusion, which the dry rock at roughness 0.9 barely shows and the wet rock at 0.54 shows as a joint network washed out by the sky's reflection. The change to the dry rock is measured, not hidden (Validation 5).
 6. **The canopy share is the albedo's excess green, not the grass layer's weight** (Model adopted 3, first written with `w.w · (1 − trench) · (1 − scree)`). Reason: cost — carrying the three across the rock's material cost 5-20 % of the opaque pass on every frame, rain or not (GPU mapping, Cost) — and fidelity: within a textured grass layer the bare soil between the blades now darkens as soil.
 
+## Addendum: `Environment::ground_look_at` (#41)
+
+A host that draws a decal on wet ground must read the number the terrain shader reads. Model: no new physics; the CPU answer is the shader's own inputs and curves over the readback the crate already takes. The fragment shader reads `wet = cover.y` (bilinear of the wetness map), `puddle = smoothstep(puddle_min_m, puddle_full_m, water)` and `snow = smoothstep(0, 0.05, snow depth)`, and `weather_surface` shades `min(max(wet, puddle), DRENCHED_MAX)` with `DRENCHED_MAX = 1.4` (`surface_cover.wesl`, Model adopted 2 above). `GroundLook { wet, puddle, snow, drawn_wet }` returns exactly those from `CoverSnapshot` and `WaterDepthSnapshot`, with `WetnessSettings` for the puddle thresholds. Validation: a unit test builds the snapshots and checks each field against the curve; the readback is the same buffer the shader binds (`cover_cells`), so agreement with a drawn pixel reduces to the existing map readback tests. Not in the answer: the grass canopy's share (read from the albedo on the GPU), the trail-rut puddle (needs the field's gradient), and the snow trench. Deviations: none (no default changes). Pending index: none (no new sources).
+
 ## Pending index
 
 - Lagarde 3b is a web page (no DOI); read from the URL, not ingested.
