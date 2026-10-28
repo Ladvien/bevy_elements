@@ -5105,3 +5105,21 @@ Host: the Mac (Apple M1 Max, Metal). Issues read through the API: #38, #39, #41,
 3. #44 remainder: wave rings on still water, grid-edge continuation, foot-world GPU check.
 4. Shoreline foam that survives the edge fade (all water).
 5. #42 remainder: a band debug view and a route-grain capture.
+
+## Iteration 79 — 2026-10-28 — Terrain pool clear no longer warns per slot (#47)
+
+Host: the Mac (CPU gates only; no GPU test, capture or benchmark). Issues read through the API: #38, #39, #41, #43, #44, #45, #46, #47 open. #47 is new and a bug (256 WARNs per terrain despawn), so it outranked every enhancement (#41, #39, #44 remainders). #45 is a release request, seen and skipped; #46 duplicates #39's `sinkage_at`, shipped in iteration 78 (not closed by this pass).
+
+- **Change**: `clear_pool` uses `try_despawn()`. The slots are children of the terrain entity, so a host's despawn already took them. Other `despawn()` sites checked: rock tiles are root entities (not children of anything a host despawns), lightning and readback entities are the crate's own.
+- **Sources**: none (a bug fix; the Bevy 0.20 `Commands::despawn`/`try_despawn` source).
+- **Evidence**: `terrain::pool_tests::clearing_the_pool_warns_of_nothing_and_leaves_no_slot` counts `bevy_ecs` WARNs through a `log` logger (new `log` dev-dependency): 8 warnings for 8 slots before the fix, 0 after, for the despawned-terrain case; the live-terrain rebuild case removes all old slots with 0 warnings. A first version using a panicking `FallbackErrorHandler` passed unfixed: `Commands::despawn` is hard-wired to `warn`, so the issue's panic-handler claim does not hold on this Bevy (the WARN line is real).
+- **Visual and performance gates**: not applicable, nothing drawn changes.
+- **Gates** (Mac): `cargo test --release` (345 lib, integration, doctests), clippy `-D warnings`, rustdoc `-D warnings`, wasm32 lib build pass. GPU suites not run. Acceptance 3 (a host leaving and re-entering 3 times) is Sanctuary's to confirm; **#47 stays open** for that.
+
+### Next five items, ranked
+
+1. #41 remainder: GPU fixture comparing `ground_look_at` to a rendered pixel; `FootprintPressure` ramp.
+2. #39 remainder: `paths_resist_prints` (#46 asks for what `sinkage_at` already shipped: ask the owner to close it).
+3. #44 remainder: wave rings on still water, grid-edge continuation, foot-world GPU check.
+4. Shoreline foam that survives the edge fade (all water).
+5. #42 remainder: a band debug view and a route-grain capture.
