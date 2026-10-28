@@ -4951,3 +4951,24 @@ Host: the Mac (no Xvfb/GPU run this pass; `ssh big` answered but nothing needed 
 3. #41/#39 wetness as drawn and a footprint press threshold.
 4. #43 rocks: keep the scatter out of a host's town; per-facet palette for host rocks.
 5. Items 1-5 of iteration 63.
+
+## Iteration 71 — 2026-10-28 — `TerrainLook::detail` and `finest_m`: a host steers the ground's grain (#42)
+
+Host: the Mac for the CPU gates, `big` (RTX 3090, Xvfb; P8 clocks, 315-360 MHz in the log) for captures and the benchmark. Issues read through the API: #38, #39, #41, #42, #43 open. #38 is the only bug and is verified, left open for the owner; no other bug issue. Picked #42 over #43 (rock scatter exclusion, needs a design for the exclusion shape) and the gravel-legibility backlog item: it is a consumer's measured artifact (stddev 26.8 on flat grass) with a small, testable surface.
+
+- **Change**: `TerrainLook { detail: f32 = 1, finest_m: Option<f32> = None }` (`src/terrain/material.rs`), carried in a new `TerrainMaterialParams::detail` uniform lane (x amplitude, y footprint floor). `render.wesl` calls `ground_detail(pv, max(footprint, detail.y), detail.x)` and `path_grain(..., max(footprint, detail.y), .., detail.x)`; `ground.wesl` passes amplitude 1. `ground_detail` multiplies both bands' albedo and bump by the amplitude and leaves the raw `coarse`/`fine` values (the turf palette's clumps) alone. Migration: `TerrainLook` literals need `..default()`; README doctest fixed that way.
+- **Sources**: none new; Lagae et al. 2010 §5.2.1 (Model 2 of `docs/research/ground-detail.md`, addendum committed first as `2add685`).
+- **Evidence** (`/tmp/i71/`): default before/after differ <= 1 DN in 6 captures (3 angles x 2 seeds). Patch red stddev, eye_s2: 7.2 default, 5.9 at `finest_m` 0.04, 2.0 at 0.1, 1.3 at `detail` 0. ortho_s1: 4.9, 4.7, 2.0, 1.8; `finest_m` 1.0 matches `detail` 0 (coarse band gone). Aerial unchanged by any knob.
+- **Critique and verdict**: `critique.md`. Knobs GREAT as controls. Not done: the issue's band debug view (criterion 5); route grain not seen on screen (two trails captures never framed the speckle). **#42 is not closed.** Acceptance 3 as written (`finest_m` 0.04 -> <= 8) is not what a footprint floor does: the 9 cm band survives until `finest_m` reaches ~0.07-0.09, stated in the field's rustdoc; the owner should say whether a feature-size meaning is wanted instead.
+- **Benchmark** (`bench_elements`, 3840x2160, ortho 14, hills, two interleaved reps, last sample of each run; P8 clocks so absolute numbers are 5-10x slow): opaque pass mean 13.03 / 12.09 ms base, 12.92 / 12.43 after, 13.14 / 13.74 with `detail` 0, 12.12 / 12.26 with `finest_m` 0.1; early prepass 0.187-0.193 in all, so the clocks matched. Opaque/prepass ratio: base 69.7 / 65.0, after 67.6 / 66.1. No regression outside the +-5 % noise.
+- **Gates**: `cargo test --release` lib 336 passed, integration suites passed, doctest fixed and rerun; clippy `-D warnings`, rustdoc `-D warnings`, wasm32 lib clean; `wesl-check` 44 modules ok. GPU test suites not run (no change to GPU buffers or passes beyond a uniform lane).
+- **Not done**: README images unchanged (nothing drawn by default changed).
+
+### Next five items, ranked
+
+1. #42 remainder: a band debug view (`keep` per band) and a route-grain capture.
+2. Gravel/packed-snow legibility from eye level.
+3. #41/#39 wetness as drawn and a footprint press threshold.
+4. #43 rocks: keep the scatter out of a host's town; per-facet palette for host rocks.
+5. Items 1-5 of iteration 63.
+
