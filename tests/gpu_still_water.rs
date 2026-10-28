@@ -29,6 +29,10 @@ fn pin_weather(mut weather: ResMut<Weather>) {
     weather.temperature_c = 15.0;
 }
 
+/// Where the camera stands when a test wants other than the default view from above.
+#[derive(Resource)]
+struct CameraAt(Transform);
+
 #[derive(Resource)]
 struct Target(Handle<Image>);
 
@@ -37,8 +41,13 @@ fn setup(
     mut images: ResMut<Assets<Image>>,
     mut director: ResMut<WeatherDirector>,
     units: Res<ElementsUnits>,
+    camera: Option<Res<CameraAt>>,
 ) {
     let u = units.units_per_metre;
+    let at = camera.map_or(
+        Transform::from_xyz(0.0, 40.0 * u, 0.0).looking_at(Vec3::ZERO, Vec3::NEG_Z),
+        |c| c.0,
+    );
     let mut target = Image::new_target_texture(TARGET, TARGET, TextureFormat::Rgba16Float, None);
     target.texture_descriptor.usage |= TextureUsages::COPY_SRC;
     let image = images.add(target);
@@ -47,7 +56,7 @@ fn setup(
         Camera3d::default(),
         RenderTarget::Image(image.into()),
         ElementsCamera::default(),
-        Transform::from_xyz(0.0, 40.0 * u, 0.0).looking_at(Vec3::ZERO, Vec3::NEG_Z),
+        at,
     ));
     commands.spawn(
         Terrain::flat(BED)
@@ -64,7 +73,14 @@ fn build() -> App {
 /// The same scene in a world of `units` units to the metre: the terrain is built in metres, so
 /// only the camera's placement changes.
 fn build_in(units: f32) -> App {
+    build_viewed(units, None)
+}
+
+fn build_viewed(units: f32, camera: Option<Transform>) -> App {
     let mut app = App::new();
+    if let Some(camera) = camera {
+        app.insert_resource(CameraAt(camera));
+    }
     app.add_plugins((support::headless_plugins(), ElementsPlugins))
         .insert_resource(ElementsUnits {
             units_per_metre: units,
@@ -259,4 +275,123 @@ fn gpu_a_still_level_in_a_foot_world_draws_and_answers_as_in_metres() {
         worst < 0.02,
         "the foot world draws {feet:?}, the metre world {metres:?}"
     );
+}
+
+/// Write the target as a binary PPM to `$ELEMENTS_TEST_DUMP` plus `suffix`, when that is set.
+fn dump_target(app: &mut App, suffix: &str) {
+    let Ok(base) = std::env::var("ELEMENTS_TEST_DUMP") else {
+        return;
+    };
+    let image = app.world().resource::<Target>().0.clone();
+    let bytes = support::read_texture(app, image, TARGET as usize * 8, TARGET as usize);
+    let mut out = format!("P6 {TARGET} {TARGET} 255\n").into_bytes();
+    for px in bytes.chunks_exact(8).take((TARGET * TARGET) as usize) {
+        for c in 0..3 {
+            let v = support::half(u16::from_le_bytes([px[2 * c], px[2 * c + 1]]));
+            out.push((v.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8);
+        }
+    }
+    let _ = std::fs::write(format!("{base}{suffix}.ppm"), out);
+}
+
+/// One column of the target as linear RGB, top to bottom.
+fn column_rgb(app: &mut App, x: usize) -> Vec<Vec3> {
+    let image = app.world().resource::<Target>().0.clone();
+    let bytes = support::read_texture(app, image, TARGET as usize * 8, TARGET as usize);
+    (0..TARGET as usize)
+        .map(|y| {
+            let i = (y * TARGET as usize + x) * 8;
+            let h = |o: usize| support::half(u16::from_le_bytes([bytes[i + o], bytes[i + o + 1]]));
+            Vec3::new(h(0), h(2), h(4))
+        })
+        .collect()
+}
+
+/// The centre column of the edge scene with the skirt and without it, in a world of `units` units
+/// to the metre. The grid's edge is at z = -128 m. The eye is 30 m up at z = 42 m and looks toward
+/// -Z, 8 degrees down: the horizon is near row 85 and the edge, 10 degrees below the horizon,
+/// near row 139.
+fn edge_columns(units: f32, dump: &str) -> (Vec<Vec3>, Vec<Vec3>) {
+    let pitch = -8.0f32.to_radians();
+    let eye = Transform::from_xyz(0.0, 30.0 * units, 42.0 * units)
+        .looking_to(Vec3::new(0.0, pitch.sin(), -pitch.cos()), Vec3::Y);
+    let mut app = build_viewed(units, Some(eye));
+    app.world_mut().insert_resource(StillWater { level: 0.0 });
+    run_until(&mut app, "the terrain", |app| {
+        app.world()
+            .get_resource::<TerrainState>()
+            .is_some_and(|s| s.is_live())
+    });
+    for _ in 0..90 {
+        app.update();
+    }
+    dump_target(&mut app, &format!("-{dump}-with"));
+    let with = column_rgb(&mut app, TARGET as usize / 2);
+
+    let skirt: Vec<Entity> = {
+        let world = app.world_mut();
+        let mut query = world.query::<(Entity, &Name)>();
+        query
+            .iter(world)
+            .filter(|(_, n)| n.as_str().starts_with("Water skirt"))
+            .map(|(e, _)| e)
+            .collect()
+    };
+    assert_eq!(skirt.len(), 8, "four tiles, two passes each");
+    for entity in skirt {
+        app.world_mut().despawn(entity);
+    }
+    for _ in 0..30 {
+        app.update();
+    }
+    dump_target(&mut app, &format!("-{dump}-without"));
+    let without = column_rgb(&mut app, TARGET as usize / 2);
+    app.world_mut().write_message(AppExit::Success);
+    (with, without)
+}
+
+/// The largest step between adjacent rows of a column, from a little under the horizon down.
+fn largest_row_step(column: &[Vec3]) -> f32 {
+    (100..TARGET as usize - 1)
+        .map(|y| (column[y + 1] - column[y]).abs().max_element())
+        .fold(0.0, f32::max)
+}
+
+/// #44 acceptance 5: looking along a sea from 170 m inside the terrain grid's edge, the water
+/// runs on past the edge to the horizon. With the skirt removed the same frame jumps where the
+/// water stops (the ground disc shows past it); with it the column falls smoothly from the sky's
+/// horizon to the sea.
+#[test]
+#[ignore = "needs a GPU"]
+fn gpu_a_still_sea_runs_past_the_terrain_grids_edge() {
+    let _lock = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let (with, without) = edge_columns(1.0, "metres");
+    let (j_with, j_without) = (largest_row_step(&with), largest_row_step(&without));
+    println!("largest row step with the skirt {j_with:.4}, without {j_without:.4}");
+    assert!(
+        j_without > 4.0 * j_with.max(1e-4),
+        "the frame without the skirt steps {j_without} at the edge, with it {j_with}"
+    );
+    // The sea past the edge is not the sky: the row under the horizon is darker and bluer than
+    // the sky's horizon row.
+    assert!(
+        with[120].x < 0.6 * with[90].x,
+        "{:?} {:?}",
+        with[120],
+        with[90]
+    );
+}
+
+/// #44 acceptance 6 for the skirt: the same scene in feet draws the same column.
+#[test]
+#[ignore = "needs a GPU"]
+fn gpu_the_skirt_in_a_foot_world_draws_as_in_metres() {
+    let _lock = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let (metres, _) = edge_columns(1.0, "metres");
+    let (feet, _) = edge_columns(3.2808, "feet");
+    let worst = (100..TARGET as usize)
+        .map(|y| (metres[y] - feet[y]).abs().max_element())
+        .fold(0.0, f32::max);
+    println!("largest difference between the metre and foot columns {worst:.4}");
+    assert!(worst < 0.03, "the foot world's column differs by {worst}");
 }
