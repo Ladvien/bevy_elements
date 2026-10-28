@@ -28,6 +28,19 @@ Recover a killed pass's tree with `git -C <repo> log --all --oneline --grep='WIP
    killed pass cannot lose.
 2. **A snapshot ref is not a commit on your branch.** `git log` will not show it. Do not look for
    one; if an earlier pass was killed, its tree is in `refs/wiggum/` and nobody's gate ran on it.
+3. **Parked work is a branch, and you look for it before you pick an item.** When a pass is stopped or
+   killed with its tree uncommitted, the driver's next start commits that tree to a branch
+   (`wiggum/parked-pass-N-<time>`, or on the pass's own `loop/iter-N`) in a commit titled
+   `WIP(pass N, parked)` and puts the clone back on `main`: you start clean and nobody tells you. So run
+   `git branch --list 'wiggum/parked-*'` and `git log --all --oneline -n 5 --grep='parked'` once, after
+   you have triaged the filed issues and before you commit to an item. If the newest parked tree is for
+   the item you would pick, or for an issue or bug that outranks your pick, **adopt it**: it is a first
+   draft that was never built, tested or gated and was cut off mid-work, so read it, bring its files into
+   your own `loop/iter-N` branch (`git checkout <parked-branch> -- <paths>` or `git cherry-pick`),
+   finish it, and run the real gates on the result before it ships under your name. Never merge the
+   parked branch itself and never delete it. If it is stale (its files conflict with `main`, or the item
+   was fixed meanwhile), say so in one line in the log and ignore it. A parked branch that exists only on
+   this clone holds a lot of data: the driver keeps anything over 10 MB of new data off origin.
 
 ## 1. Orient
 
