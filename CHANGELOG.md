@@ -2,6 +2,7 @@
 
 ### Fixed
 
+- **Water seen through fog is no longer tinted by its own absorption.** The absorb pass multiplied the fogged bed, so the fog in front of the surface took the water's teal: a `Fog` preset drew a saturated teal sea (chroma 0.83) under a grey sky. The surface pass now fogs its film and adds back the fog share the absorb pass removed (`hydrology/water.wesl`); the same sea reads 0.145. Applies to simulated water and `StillWater` alike.
 - **The terrain's border is no longer a line through a shallow `StillWater` sea (#44).** A bed that ends at the grid's border showed through clear water as a hard teal-to-deep-blue step, and the in-grid water joined the skirt with a 8-10 level step. While a `StillWater` is set, a bed point within 32 m of the grid's outermost samples now fades into the deep colour (the absorb transmittance and the surface body alpha, with the share of camera fog the bed no longer carries applied in the film). Measured on the Apple M1 Max (`tests/gpu_still_water.rs`): the largest adjacent-row step of the edge scene's centre column fell from 0.085 to 0.023 in linear radiance. Hydrology water is untouched.
 
 ### Added
