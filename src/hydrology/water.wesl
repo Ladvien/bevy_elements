@@ -431,8 +431,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     bed_fogged = mesh_functions::get_tag(in.instance_index) < SKIRT_TAG;
 }
     let fogged = main_pass_post_lighting_processing(pbr_input, film);
-    out.color = fogged;
-    if bed_fogged {
+    out.color = film;
+    if false {
         let fog_only = main_pass_post_lighting_processing(pbr_input, vec4<f32>(0.0, 0.0, 0.0, a_edge));
         out.color = vec4<f32>(fogged.rgb - x * fog_only.rgb, fogged.a);
     }
