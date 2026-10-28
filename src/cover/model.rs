@@ -15,6 +15,15 @@ pub(crate) const READBACK_MAX_CELLS: u32 = 1024;
 /// How far from the camera the map is averaged into `SurfaceWeathering`, m.
 pub(crate) const SURFACE_WEATHERING_RADIUS_M: f32 = 50.0;
 
+/// The most wetness the surface model shades (`surface_cover.wesl` `DRENCHED_MAX`): past a full
+/// film, a drenched surface darkens further up to this.
+pub(crate) const DRENCHED_MAX: f32 = 1.4;
+
+/// The puddle mask of a water depth: `smoothstep(d_min, d_full, d_w)` (the terrain shader's).
+pub(crate) fn puddle_mask(depth_m: f32, wetness: &super::WetnessSettings) -> f32 {
+    smoothstep(wetness.puddle_min_m, wetness.puddle_full_m, depth_m)
+}
+
 /// Hermite smoothstep.
 pub(crate) fn smoothstep(lo: f32, hi: f32, x: f32) -> f32 {
     let t = ((x - lo) / (hi - lo)).clamp(0.0, 1.0);
