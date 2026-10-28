@@ -612,6 +612,8 @@ fn seek_shelter(env: Environment) {
 
 `snow_depth(Vec2)` is the snow on the ground in metres and `wetness(Vec2)` how wet it is (0 dry, 1 a full 2 mm film); like the water queries they are `None` before the first readback or off the terrain.
 
+`ground_look_at(Vec2)` answers what the terrain's ground cover is at a point in the shader's own terms (`GroundLook`): `wet` (the wetness map), `puddle` (the mask of the simulated water depth), `snow` (its cover) and `drawn_wet`, `min(max(wet, puddle), 1.4)`, the wetness the surface model wears on bare ground. A decal faded with `drawn_wet` agrees with the ground; grass and the rut-floor puddle of a trodden trail are not in it. `None` off the cover maps, without ground cover and before the first readback.
+
 `trail_depth(Vec2)` is how far the ground is pressed below its undisturbed surface by `Imprint`s, m: the deepest point within 10 cm at High, `Some(0.0)` on untouched ground or a rim, `None` outside the trail window or before the first readback. It works on the crate's terrain and on a game's own ground (`TrailGround`).
 
 `cloud_shadow_at(Vec3)` is the direct transmittance of the clouds toward the sun (the moon at night) at a world position, 0 in a thick cloud's shadow to 1 in the open, from the cloud shadow map sampled every 31.25 m over 8 km around the camera (1 outside it); `illuminance_at(Vec3)` is the horizontal illuminance there in lux, the clear-sky sun and moon light times `0.25 + 0.75 · T`. Only the clouds shadow them, not terrain or meshes. `cloud_shadow_at` is `None` before the first readback; `illuminance_at` then uses the cover-only estimate.
