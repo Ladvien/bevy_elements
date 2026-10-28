@@ -19,6 +19,7 @@ pub(crate) mod model;
 mod water;
 mod water_gpu;
 
+pub(crate) use water::NO_STILL_LEVEL;
 pub use water::{
     StillWater, WaterExtension, WaterMaterial, WaterParams, WaterPatch, WaterPlugin, WaterSettings,
     WaterState,
