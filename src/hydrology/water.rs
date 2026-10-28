@@ -88,6 +88,10 @@ const EMBEDDED_SHADER: &str = "embedded://bevy_elements/hydrology/water.wesl";
 /// the two). [`Environment::water_depth`](crate::Environment::water_depth) answers the same depth.
 /// Changing the level costs nothing but a uniform write: no terrain, no buffer is rebuilt.
 ///
+/// While a `StillWater` is set and nothing can make simulated water (no rain, no
+/// [`WaterSource`](crate::WaterSource), no bake, a dry terrain at the last readback) the
+/// hydrology runs no substeps; thermal slumping pauses with them.
+///
 /// The level is a height in world units ([`ElementsUnits`](crate::ElementsUnits)) in the frame of
 /// [`Environment::terrain_height`](crate::Environment::terrain_height).
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Reflect)]
