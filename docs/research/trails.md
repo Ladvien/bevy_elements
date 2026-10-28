@@ -96,6 +96,20 @@ Each found in the visual review (`/tmp/trails/r*/`, crops at 2–3×) or a GPU t
 
 No source's number is changed: Wong's constants, CRREL's 500 kg/m³, Alvarado's `L0` and Poisson ratios, Sumner's slump angles and the crate's 34° are used as published.
 
+## Addendum: a press threshold (#39)
+
+**Sources.** None new. The Bekker–Wong sinkage and CRREL snow cap above are unchanged; the addendum only adds a floor on the depth the kernel will press.
+
+**Model.** `TrailSettings::min_depth_m` (m, default 0). In `trail_stamp`, an imprint whose target depth `want = sinkage(g, load, width)` on the texel's own ground is below the threshold writes neither carve nor rim for that texel. Snow ground (`is_snow`, depth above `SNOW_GROUND_M`, 1 cm) is exempt, so fresh snow always presses (the issue's edge case: the crate's own line). The test is per texel on the ground the kernel already resolves, so a footprint straddling a wet patch and dry soil is cut at the ground's own boundary, not by a lookup the game made earlier. `0` is exactly the old behaviour (`want < 0` is never true).
+
+**Parameters.** `min_depth_m` 0 (off). The dry-soil step presses 0.48 cm, 0.5 wetness about 4 cm, dry sand 3.4 cm, so 0.01 m stops dry soil and keeps sand, wet soil and snow (Validation 1 above).
+
+**GPU mapping.** One new `vec4<f32>` (`press`, x: the threshold) at the end of `TrailParams`; one early `return` in `trail_stamp` after `want`. No new buffer, binding or pass.
+
+**Validation targets.** CPU: the gate `presses(ground, min_depth, load, width)` is false for dry soil at 0.01 m and true for wet soil, sand and any snow, and true for every ground at 0. GPU: on game ground at wetness 0 with `min_depth_m` 0.01, the trail field's largest |h| after a 760 N foot is 0; at wetness 0.5 at least 0.01 m; at 0 the field is unchanged.
+
+**Not done (deliberate).** `Environment::sinkage_at` (the issue's second shape) and `paths_resist_prints`: the issue asks for either shape and lists the route rule as related; the threshold alone removes the duplicated physics for the reported case. The route rule is left on the backlog.
+
 ## Pending index
 
 Converted with `hs scribe convert` from local PDFs (S3 upload into the store failed earlier this session; not yet indexed): CRREL 90-9, Svensson 2019, Goswami 2024, Barré-Brisebois 2014, NASA TM-20250006958, Hanák 2021. Ingested and in the store: `10.48550_arxiv.2302.08683` (Sumner), `10.48550_arxiv.2209.10215` (Alvarado), `10.1145_3610548.3618159` (Su et al.). `distill_index` skipped: the MCP bridge returns HTTP 404.
