@@ -49,6 +49,8 @@ struct WaterParams {
     foam: vec4<f32>,
     // x: the finest wave cascade's texel (m). y: texels a side. z: 1 when a field is bound.
     waves: vec4<f32>,
+    // x: the still water level (metre frame, above the terrain's origin; -1e9 for none).
+    still: vec4<f32>,
     // World units to the metre (`ElementsUnits`): the shader divides the positions Bevy gives it
     // by this and multiplies the ones it hands back.
     units: f32,
@@ -98,11 +100,14 @@ fn terrain_height(xz: vec2<f32>) -> f32 {
     return mix(a, b, t.w.y);
 }
 
+// The water depth at world XZ: the simulated depth, or the still level over the ground where that
+// is deeper (the surface is the higher of the two).
 fn water_depth_at(xz: vec2<f32>) -> f32 {
     let t = grid_taps(water.terrain.grid, xz);
     let a = mix(terrain_cells[t.i00].z, terrain_cells[t.i10].z, t.w.x);
     let b = mix(terrain_cells[t.i01].z, terrain_cells[t.i11].z, t.w.x);
-    return mix(a, b, t.w.y);
+    let sim = mix(a, b, t.w.y);
+    return max(sim, water.still.x - terrain_height(xz));
 }
 
 fn morph_k(distance: f32, lod: u32) -> f32 {
@@ -247,10 +252,18 @@ struct Column {
 fn column_at(xz: vec2<f32>) -> Column {
     let t = grid_taps(water.terrain.grid, xz);
     var c: Column;
-    c.depth = mix(
-        mix(terrain_cells[t.i00].z, terrain_cells[t.i10].z, t.w.x),
-        mix(terrain_cells[t.i01].z, terrain_cells[t.i11].z, t.w.x),
+    let bed = mix(
+        mix(terrain_cells[t.i00].x, terrain_cells[t.i10].x, t.w.x),
+        mix(terrain_cells[t.i01].x, terrain_cells[t.i11].x, t.w.x),
         t.w.y,
+    );
+    c.depth = max(
+        mix(
+            mix(terrain_cells[t.i00].z, terrain_cells[t.i10].z, t.w.x),
+            mix(terrain_cells[t.i01].z, terrain_cells[t.i11].z, t.w.x),
+            t.w.y,
+        ),
+        water.still.x - bed,
     );
     let f00 = flow_cells[t.i00];
     let f10 = flow_cells[t.i10];
