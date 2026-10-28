@@ -15,6 +15,7 @@ use crate::hydrology::water_gpu::octaves_kept;
 const F0: f32 = 0.02;
 const FOAM_SPEED_RAMP: f32 = 0.1;
 const FOAM_THICKNESS_RAMP: f32 = 0.03;
+const FOAM_PIXELS: f32 = 1.5;
 const DISCARD_DEPTH: f32 = 0.003;
 const FADE_DEPTH: f32 = 0.03;
 
@@ -83,12 +84,11 @@ fn foam_from_speed(speed: f32, threshold: f32) -> f32 {
     )
 }
 
-fn foam_from_thickness(t: f32, threshold: f32) -> f32 {
-    1.0 - smoothstep(
-        threshold - FOAM_THICKNESS_RAMP,
-        threshold + FOAM_THICKNESS_RAMP,
-        t,
-    )
+/// `foam_from_thickness` of `water.wesl`: `grad` is the thickness change per pixel, m.
+fn foam_from_thickness(t: f32, threshold: f32, grad: f32) -> f32 {
+    let threshold = threshold.max(FOAM_PIXELS * grad);
+    let ramp = FOAM_THICKNESS_RAMP.max(0.5 * threshold);
+    1.0 - smoothstep(threshold - ramp, threshold + ramp, t)
 }
 
 fn edge_alpha(depth: f32) -> f32 {
@@ -455,13 +455,18 @@ fn foam_follows_the_plan_thresholds() {
     assert_eq!(foam_from_speed(0.5, s.foam_speed_ms), 0.0);
     assert!(close(foam_from_speed(1.5, s.foam_speed_ms), 0.5, 1e-6));
     assert_eq!(foam_from_speed(1.8, s.foam_speed_ms), 1.0);
-    assert_eq!(foam_from_thickness(0.02, s.foam_thickness_m), 1.0);
+    assert_eq!(foam_from_thickness(0.02, s.foam_thickness_m, 0.0), 1.0);
     assert!(close(
-        foam_from_thickness(0.05, s.foam_thickness_m),
+        foam_from_thickness(0.05, s.foam_thickness_m, 0.0),
         0.5,
         1e-6
     ));
-    assert_eq!(foam_from_thickness(0.08, s.foam_thickness_m), 0.0);
+    assert_eq!(foam_from_thickness(0.08, s.foam_thickness_m, 0.0), 0.0);
+    // A shore that gains 10 cm of thickness a pixel keeps a foam line about 1.5 px wide: the 5 cm
+    // band alone would end before the first pixel.
+    assert_eq!(foam_from_thickness(0.1, s.foam_thickness_m, 0.0), 0.0);
+    assert!(foam_from_thickness(0.1, s.foam_thickness_m, 0.1) > 0.5);
+    assert_eq!(foam_from_thickness(0.5, s.foam_thickness_m, 0.1), 0.0);
     // Froude 1 at 1.5 m/s: v²/g.
     assert!(close(1.5f32 * 1.5 / 9.81, 0.229, 5e-4));
 }
@@ -549,7 +554,7 @@ fn only_patches_with_water_are_drawn() {
     let tree = BoundsTree::from_leaves(&lod, bevy::math::UVec2::splat(dims), leaves);
     let flat = BoundsTree::uniform(&lod, 0.0, 0.0);
     let selected = select_patches(&lod, &flat, Vec3::new(160.0, 5.0, 224.0));
-    let wet = super::wet_patches(&selected, &tree);
+    let wet = super::wet_patches(&selected, &tree, &flat, None);
     assert!(!wet.is_empty() && wet.len() < selected.len());
     let leaf = |p: &Patch| p.level == 0 && p.ix == 2 && p.iz == 3;
     assert!(wet.iter().any(leaf), "the lake's leaf is drawn");
@@ -565,4 +570,39 @@ fn only_patches_with_water_are_drawn() {
     // The ripple slope follows Cox & Munk.
     assert!(close(ripple_slope(4.0), 0.153, 1e-3));
     assert!(close(ripple_slope(10.0), 0.233, 1e-3));
+}
+
+/// A still level draws the patches whose lowest ground is under it by 3 mm or more, and only
+/// those; with no level the answer is the simulated water's alone.
+#[test]
+fn a_still_level_draws_the_patches_with_ground_under_it() {
+    use crate::terrain::lod::{BoundsTree, LodConfig, select_patches};
+    let lod = LodConfig::new(Vec2::splat(1024.0), 4.0);
+    let dims = (1024.0 / (32.0 * 4.0)) as u32;
+    // Ground at 5 m, except a basin floor at -2 m in the leaf (2, 3) and a 2 mm dip below the
+    // level in (5, 5).
+    let floor = |x: u32, z: u32| match (x, z) {
+        (2, 3) => -2.0,
+        (5, 5) => -0.002,
+        _ => 5.0,
+    };
+    let leaves = (0..dims * dims).map(|i| {
+        let h = floor(i % dims, i / dims);
+        (h, 5.0)
+    });
+    let boxes = BoundsTree::from_leaves(&lod, bevy::math::UVec2::splat(dims), leaves);
+    let dry = BoundsTree::uniform(&lod, 0.0, 0.0);
+    let flat = BoundsTree::uniform(&lod, 0.0, 0.0);
+    let selected = select_patches(&lod, &flat, Vec3::new(160.0, 5.0, 224.0));
+    assert!(super::wet_patches(&selected, &dry, &boxes, None).is_empty());
+    let wet = super::wet_patches(&selected, &dry, &boxes, Some(0.0));
+    assert!(!wet.is_empty() && wet.len() < selected.len());
+    assert!(
+        wet.iter().all(|p| {
+            let size = 1u32 << p.level;
+            (p.ix * size..(p.ix + 1) * size).contains(&2)
+                && (p.iz * size..(p.iz + 1) * size).contains(&3)
+        }),
+        "only the basin's patches are drawn; a 2 mm dip is not"
+    );
 }
