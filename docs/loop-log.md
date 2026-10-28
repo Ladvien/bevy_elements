@@ -4972,3 +4972,22 @@ Host: the Mac for the CPU gates, `big` (RTX 3090, Xvfb; P8 clocks, 315-360 MHz i
 4. #43 rocks: keep the scatter out of a host's town; per-facet palette for host rocks.
 5. Items 1-5 of iteration 63.
 
+
+## Iteration 72 — 2026-10-28 — `TrailSettings::min_depth_m`: a host sets the shallowest print (#39)
+
+Host: the Mac for the CPU gates, `big` (RTX 3090) for the GPU tests. Issues read through the API: #38, #39, #41, #42, #43, #44, #45 open. No new bug (#38 verified in iteration 69, left open for the owner); #45 is a release request, seen and skipped (the owner's call). Ranked: #39 (a duplicated-physics wart a game already hacks around, small, GPU-testable) over #44 (a still sea: a new water mode needing a design) and #43 (an exclusion shape to design).
+
+- **Change**: `TrailSettings::min_depth_m` (default 0) rides a new `TrailParams::press` lane; `trail_stamp` returns early where the texel's target depth is below it and the ground is not snow (> 1 cm). Research addendum committed first.
+- **Sources**: none new (Bekker–Wong and CRREL as in `docs/research/trails.md`).
+- **Evidence** (`a_press_threshold_skips_dry_soil_and_keeps_snow`, on big): flat dry soil presses 0.0047 m by default and 0 at 0.01; 30 cm of snow presses 0.2365 m through the threshold. The four existing trail GPU tests are unchanged (0.2365 m, rim share 0.099, refill 0.2365 → 0.1864 m).
+- **Visual and performance gates**: not applicable. Nothing drawn changes at the default (the threshold is a uniform compare before an existing return path; default 0 never fires) and no capture was taken. No benchmark was run: the cost is one compare per stamped texel.
+- **Gates**: `cargo test --release` (336 lib, integration, doctests) pass; clippy `-D warnings`, rustdoc `-D warnings`, wasm32 lib build, `wesl-check` pass; `gpu_trails` 5/5 on big. Other GPU suites not run (one uniform lane, no pass changes).
+- **Not done**: `Environment::sinkage_at` and `paths_resist_prints` (the issue's other asks); no test of wet soil at 0.5 or sand through the threshold. **#39 is not closed**: criteria 1 (wetness 0.5) and 2 (sand) are unverified.
+
+### Next five items, ranked
+
+1. #39 remainder: wet-soil and sand tests through the threshold; `paths_resist_prints`.
+2. #44 still sea / #43 rock exclusion.
+3. #42 remainder: a band debug view and a route-grain capture.
+4. Gravel/packed-snow legibility from eye level.
+5. #41 wetness as drawn.
