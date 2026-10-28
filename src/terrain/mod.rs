@@ -741,7 +741,85 @@ fn ensure_terrain(
 /// Despawn the patch pool (the terrain's children), if any.
 fn clear_pool(commands: &mut Commands, runtime: &mut TerrainRuntime) {
     for slot in runtime.pool.drain(..) {
-        commands.entity(slot.entity).despawn();
+        // `try_`: the slots are the terrain's children, so a host that despawned the terrain
+        // entity already took them.
+        commands.entity(slot.entity).try_despawn();
+    }
+}
+
+#[cfg(test)]
+mod pool_tests {
+    use super::*;
+    use bevy::ecs::world::CommandQueue;
+
+    /// Bevy's command error handlers log through the `log` crate, so the test installs a logger
+    /// that counts the warnings the ECS reports. Only this test installs one in the process.
+    static ECS_WARNINGS: AtomicU32 = AtomicU32::new(0);
+    struct Counter;
+    impl log::Log for Counter {
+        fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+            true
+        }
+        fn log(&self, record: &log::Record<'_>) {
+            if record.level() == log::Level::Warn && record.target().starts_with("bevy_ecs") {
+                ECS_WARNINGS.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        fn flush(&self) {}
+    }
+
+    fn world_with_pool(slots: usize) -> (World, Entity, Vec<Entity>) {
+        let mut world = World::new();
+        let terrain = world.spawn_empty().id();
+        let children: Vec<Entity> = (0..slots)
+            .map(|_| world.spawn(ChildOf(terrain)).id())
+            .collect();
+        let runtime = TerrainRuntime {
+            pool: children
+                .iter()
+                .map(|&entity| PoolSlot {
+                    entity,
+                    patch: None,
+                })
+                .collect(),
+            ..Default::default()
+        };
+        world.insert_resource(runtime);
+        (world, terrain, children)
+    }
+
+    /// Clears the pool once and returns how many ECS warnings that logged.
+    fn clear_counting_warnings(world: &mut World) -> u32 {
+        let before = ECS_WARNINGS.load(Ordering::Relaxed);
+        let mut queue = CommandQueue::default();
+        let mut runtime = world
+            .remove_resource::<TerrainRuntime>()
+            .expect("the pool's runtime");
+        clear_pool(&mut Commands::new(&mut queue, world), &mut runtime);
+        world.insert_resource(runtime);
+        queue.apply(world);
+        ECS_WARNINGS.load(Ordering::Relaxed) - before
+    }
+
+    /// A host that despawns the terrain takes the pool with it, and clearing the pool afterwards
+    /// must not warn once per slot (#47); a pool rebuilt under a live terrain still despawns the
+    /// old slots, silently too.
+    #[test]
+    fn clearing_the_pool_warns_of_nothing_and_leaves_no_slot() {
+        log::set_logger(&Counter).expect("no other logger in the lib tests");
+        log::set_max_level(log::LevelFilter::Warn);
+
+        let (mut world, terrain, children) = world_with_pool(8);
+        world.despawn(terrain);
+        assert!(children.iter().all(|&c| world.get_entity(c).is_err()));
+        assert_eq!(clear_counting_warnings(&mut world), 0);
+        assert!(world.resource::<TerrainRuntime>().pool.is_empty());
+
+        let (mut world, terrain, children) = world_with_pool(8);
+        assert_eq!(clear_counting_warnings(&mut world), 0);
+        assert!(world.resource::<TerrainRuntime>().pool.is_empty());
+        assert!(children.iter().all(|&c| world.get_entity(c).is_err()));
+        assert!(world.get_entity(terrain).is_ok());
     }
 }
 
