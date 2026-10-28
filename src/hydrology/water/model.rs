@@ -601,3 +601,30 @@ fn a_still_level_draws_the_patches_with_ground_under_it() {
         "only the basin's patches are drawn; a 2 mm dip is not"
     );
 }
+
+/// #44 acceptance 5: the skirt's four tiles cover every point from the grid's edge out to the
+/// reach exactly once, corners included, and none covers the grid itself.
+#[test]
+fn the_skirt_tiles_the_ring_around_the_grid_without_gap_or_overlap() {
+    let (lo, hi, reach) = (Vec2::new(-130.0, -90.0), Vec2::new(125.0, 95.0), 1000.0);
+    let rects = super::skirt_rects(lo, hi, reach);
+    let area: f32 = rects.iter().map(|(_, s)| s.x * s.y).sum();
+    let span = hi - lo;
+    let ring = (span.x + 2.0 * reach) * (span.y + 2.0 * reach) - span.x * span.y;
+    assert!((area - ring).abs() < 1.0, "{area} vs {ring}");
+    let covers = |p: Vec2| {
+        rects
+            .iter()
+            .filter(|(c, s)| p.cmpge(*c).all() && p.cmplt(*c + *s).all())
+            .count()
+    };
+    for i in -13..=13 {
+        for j in -13..=13 {
+            let p = Vec2::new(i as f32 * 100.0 + 0.5, j as f32 * 100.0 + 0.5);
+            let inside_grid = p.cmpge(lo).all() && p.cmplt(hi).all();
+            let in_reach = p.cmpge(lo - reach).all() && p.cmplt(hi + reach).all();
+            let want = usize::from(in_reach && !inside_grid);
+            assert_eq!(covers(p), want, "{p:?}");
+        }
+    }
+}

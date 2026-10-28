@@ -77,6 +77,12 @@ const WATER_ROUGHNESS: f32 = 0.089;
 /// The uniform's level when no [`StillWater`] is set: so far below any ground that `level − bed`
 /// never exceeds the simulated depth.
 pub(crate) const NO_STILL_LEVEL: f32 = -1.0e9;
+/// How far past the terrain grid's last samples the still sea continues, m. A camera 130 m up
+/// sees a horizon 40 km out, one at eye height 5 km; the sea is deep and dark by 20 km.
+pub(crate) const WATER_SKIRT_REACH_M: f32 = 20_000.0;
+/// The `MeshTag` of a skirt tile; the shader (`SKIRT_TAG`) places such a tile by its transform's
+/// scale instead of by a CDLOD level.
+const SKIRT_TAG: u32 = 1000;
 const EMBEDDED_SHADER: &str = "embedded://bevy_elements/hydrology/water.wesl";
 
 /// A body of water that stands at a fixed level and is not simulated: a sea, a lake or a moat a
@@ -278,6 +284,14 @@ pub struct WaterPatch {
     pub surface: bool,
 }
 
+/// Marks the entities of the still sea's skirt: four tiles that carry the sea past the terrain
+/// grid's edge, each drawn by an absorb entity and a surface entity.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WaterSkirt {
+    /// The tile, 0..4 (`skirt_rects`' order).
+    tile: usize,
+}
+
 /// The water's GPU assets.
 #[derive(Resource, Clone, Debug)]
 pub struct WaterState {
@@ -303,6 +317,8 @@ struct WaterRuntime {
     slots: Vec<WaterSlot>,
     mesh: Option<Handle<Mesh>>,
     warned_capacity: bool,
+    /// The skirt's entities: absorb then surface of each of the four tiles.
+    skirt: Vec<Entity>,
 }
 
 /// Water rendering. Needs the [`TerrainPlugin`](crate::TerrainPlugin) (it reads its selection and
@@ -327,7 +343,7 @@ impl Plugin for WaterPlugin {
             )
             .add_systems(
                 PostUpdate,
-                update_water_patches
+                (update_water_patches, update_water_skirt)
                     .after(crate::terrain::update_patches)
                     .before(TransformSystems::Propagate),
             );
@@ -417,6 +433,7 @@ fn ensure_water_pool(
     let (Some(state), Some(water)) = (state, water) else {
         if runtime.terrain.take().is_some() {
             runtime.slots.clear();
+            runtime.skirt.clear();
         }
         return;
     };
@@ -433,6 +450,7 @@ fn ensure_water_pool(
     // Hidden until the first selection puts a patch in a slot.
     let hidden = Aabb::from_min_max(Vec3::ZERO, Vec3::ONE);
     let mut slots = Vec::with_capacity(WATER_POOL_CAPACITY);
+    let mut skirt = Vec::with_capacity(8);
     commands.entity(state.entity).with_children(|parent| {
         for _ in 0..WATER_POOL_CAPACITY {
             let mut spawn = |surface_pass: bool| {
@@ -468,9 +486,110 @@ fn ensure_water_pool(
                 patch: None,
             });
         }
+        // The still sea's skirt: hidden until a `StillWater` is set.
+        for tile in 0..4 {
+            for (surface_pass, material) in [(false, &absorb), (true, &surface)] {
+                let id = parent
+                    .spawn((
+                        Name::new(if surface_pass {
+                            "Water skirt surface"
+                        } else {
+                            "Water skirt absorb"
+                        }),
+                        WaterSkirt { tile },
+                        Mesh3d(mesh.clone()),
+                        MeshMaterial3d(material.clone()),
+                        Transform::default(),
+                        MeshTag::new(SKIRT_TAG),
+                        hidden,
+                        NoAutoAabb,
+                        Visibility::Hidden,
+                    ))
+                    .id();
+                skirt.push(id);
+            }
+        }
     });
     runtime.slots = slots;
+    runtime.skirt = skirt;
     runtime.terrain = Some(state.entity);
+}
+
+/// The four tiles of the sea past the grid, metre frame, as `(corner, size)`: a pinwheel around
+/// the rectangle `lo..hi` (the first and last height samples) that reaches `reach` beyond it on
+/// every side. West and east tiles lie along the grid's edge, north and south take the rest, so
+/// the four neither overlap nor leave a gap, corners included.
+pub(crate) fn skirt_rects(lo: Vec2, hi: Vec2, reach: f32) -> [(Vec2, Vec2); 4] {
+    let r = Vec2::splat(reach);
+    let span = hi - lo;
+    [
+        // West: x below the grid, z from the north reach to the grid's south edge.
+        (lo - r, Vec2::new(reach, span.y + reach)),
+        // North: x from the grid's west edge to the east reach, z above the grid.
+        (
+            Vec2::new(lo.x, lo.y - reach),
+            Vec2::new(span.x + reach, reach),
+        ),
+        // East: x beyond the grid, z from the grid's north edge to the south reach.
+        (Vec2::new(hi.x, lo.y), Vec2::new(reach, span.y + reach)),
+        // South: x from the west reach to the grid's east edge, z below the grid.
+        (
+            Vec2::new(lo.x - reach, hi.y),
+            Vec2::new(span.x + reach, reach),
+        ),
+    ]
+}
+
+/// Show the skirt while a [`StillWater`] is set, and keep it at the grid's edge and the level.
+fn update_water_skirt(
+    terrain: Res<TerrainRuntime>,
+    state: Option<Res<TerrainState>>,
+    runtime: Res<WaterRuntime>,
+    units: Res<ElementsUnits>,
+    still: Option<Res<StillWater>>,
+    mut tiles: Query<(&WaterSkirt, &mut Transform, &mut Visibility, &mut Aabb)>,
+) {
+    let (Some(state), Some(lod)) = (state, terrain.lod) else {
+        return;
+    };
+    if runtime.skirt.is_empty() {
+        return;
+    }
+    let half = state.grid.extent() * 0.5;
+    let rects = skirt_rects(
+        lod.sample_offset() - half,
+        lod.last_sample() - half,
+        WATER_SKIRT_REACH_M,
+    );
+    let level_m = still.map(|s| s.level / units.per_metre());
+    for entity in &runtime.skirt {
+        let Ok((tile, mut transform, mut visibility, mut aabb)) = tiles.get_mut(*entity) else {
+            continue;
+        };
+        let Some(level_m) = level_m else {
+            if *visibility != Visibility::Hidden {
+                *visibility = Visibility::Hidden;
+            }
+            continue;
+        };
+        let (corner, size) = rects[tile.tile];
+        let translation = units.point_to_world(Vec3::new(corner.x, 0.0, corner.y));
+        let scale = Vec3::new(units.world(size.x), 1.0, units.world(size.y));
+        if transform.translation != translation || transform.scale != scale {
+            transform.translation = translation;
+            transform.scale = scale;
+        }
+        let bounds = Aabb::from_min_max(
+            Vec3::new(0.0, units.world(level_m - WATER_AABB_PAD_M), 0.0),
+            Vec3::new(1.0, units.world(level_m + WATER_AABB_PAD_M), 1.0),
+        );
+        if *aabb != bounds {
+            *aabb = bounds;
+        }
+        if *visibility != Visibility::Inherited {
+            *visibility = Visibility::Inherited;
+        }
+    }
 }
 
 /// The selected patches that hold water: the leaf bounds' deepest cell of the patch is at least
