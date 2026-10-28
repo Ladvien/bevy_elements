@@ -741,7 +741,93 @@ fn ensure_terrain(
 /// Despawn the patch pool (the terrain's children), if any.
 fn clear_pool(commands: &mut Commands, runtime: &mut TerrainRuntime) {
     for slot in runtime.pool.drain(..) {
+        // `try_`: the slots are the terrain's children, so a host that despawned the terrain
+        // entity already took them.
         commands.entity(slot.entity).despawn();
+    }
+}
+
+#[cfg(test)]
+mod pool_tests {
+    use super::*;
+    use bevy::log::tracing::{
+        Event, Level, Metadata, Subscriber,
+        span::{Attributes, Id, Record},
+        subscriber::with_default,
+    };
+    use std::sync::atomic::AtomicUsize;
+
+    /// Counts the WARN events logged while it is the thread's subscriber.
+    struct WarnCount(Arc<AtomicUsize>);
+
+    impl Subscriber for WarnCount {
+        fn enabled(&self, _: &Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+        fn record(&self, _: &Id, _: &Record<'_>) {}
+        fn record_follows_from(&self, _: &Id, _: &Id) {}
+        fn event(&self, event: &Event<'_>) {
+            eprintln!("EV {:?} {}", event.metadata().level(), event.metadata().target()); if *event.metadata().level() == Level::WARN {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        fn enter(&self, _: &Id) {}
+        fn exit(&self, _: &Id) {}
+    }
+
+    fn world_with_pool(slots: usize) -> (World, Entity, Vec<Entity>) {
+        let mut world = World::new();
+        let terrain = world.spawn_empty().id();
+        let children: Vec<Entity> = (0..slots)
+            .map(|_| world.spawn(ChildOf(terrain)).id())
+            .collect();
+        let mut runtime = TerrainRuntime::default();
+        runtime.pool = children
+            .iter()
+            .map(|&entity| PoolSlot {
+                entity,
+                patch: None,
+            })
+            .collect();
+        world.insert_resource(runtime);
+        (world, terrain, children)
+    }
+
+    /// Clears the pool once and returns how many warnings that logged.
+    fn clear_counting_warnings(world: &mut World) -> usize {
+        let warnings = Arc::new(AtomicUsize::new(0));
+        with_default(WarnCount(warnings.clone()), || {
+            let mut queue = bevy::ecs::world::CommandQueue::default();
+            let mut runtime = world.remove_resource::<TerrainRuntime>().unwrap();
+            clear_pool(&mut Commands::new(&mut queue, world), &mut runtime);
+            world.insert_resource(runtime);
+            queue.apply(world);
+        });
+        warnings.load(Ordering::Relaxed)
+    }
+
+    /// A host that despawns the terrain takes the pool with it; clearing the pool afterwards
+    /// must not warn once per slot (#47).
+    #[test]
+    fn clearing_the_pool_after_the_terrain_despawned_warns_of_nothing() {
+        let (mut world, terrain, children) = world_with_pool(8);
+        world.despawn(terrain);
+        assert!(children.iter().all(|&c| world.get_entity(c).is_err()));
+        assert_eq!(clear_counting_warnings(&mut world), 0);
+        assert!(world.resource::<TerrainRuntime>().pool.is_empty());
+    }
+
+    /// A pool rebuilt under a live terrain still despawns the old slots, silently.
+    #[test]
+    fn clearing_the_pool_under_a_live_terrain_despawns_the_slots() {
+        let (mut world, terrain, children) = world_with_pool(8);
+        assert_eq!(clear_counting_warnings(&mut world), 0);
+        assert!(world.resource::<TerrainRuntime>().pool.is_empty());
+        assert!(children.iter().all(|&c| world.get_entity(c).is_err()));
+        assert!(world.get_entity(terrain).is_ok());
     }
 }
 
