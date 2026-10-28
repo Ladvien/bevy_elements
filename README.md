@@ -342,6 +342,8 @@ fn on_rock(add: On<Add<ScatteredRock>>, rocks: Query<&ScatteredRock>) {
 
 `ElementsPlugins` includes it; `ElementsPlugins.build().disable::<RocksPlugin>()` leaves it out, and `RockSettings { range_scale: 0.0, .. }` draws none.
 
+`RockSettings::allowed` keeps the scatter to a region of the host's own: `Some(vec![Rect::new(0.0, 0.0, 120.0, 120.0)])` (world X and Z in metres) keeps the rocks inside it and none outside, in the places the unrestricted scatter put them, and `Some(vec![])` keeps none. A town's streets and plazas are left out by giving the field and the forest as rectangles.
+
 ![Before and after: the talus below a cliff, and a rocky patch on the hills](docs/rocks.png)
 
 ### Dust storms
