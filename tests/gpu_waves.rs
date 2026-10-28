@@ -42,6 +42,12 @@ impl Sim {
     /// water on the low ground, the hydrology running in a closed tank (so the water stays level
     /// and the terrain's packed cells follow it).
     fn new(damping: f32, wet: fn(f32, f32) -> bool) -> Self {
+        Self::build(damping, wet, DEPTH_M, None)
+    }
+
+    /// As [`Sim::new`], with `depth` m of simulated water on the low ground and, if `still` is
+    /// set, a [`StillWater`] at that height.
+    fn build(damping: f32, wet: fn(f32, f32) -> bool, depth: f32, still: Option<f32>) -> Self {
         let half = CELLS as f32 * CELL_M * 0.5;
         let cell_xz = move |i: u32| {
             (
@@ -84,8 +90,11 @@ impl Sim {
         .insert_resource(WaveSettings {
             enabled: true,
             damping_per_s: damping,
-        })
-        .add_systems(
+        });
+        if let Some(level) = still {
+            app.insert_resource(StillWater { level });
+        }
+        app.add_systems(
             Startup,
             move |mut commands: Commands,
                   mut images: ResMut<Assets<Image>>,
@@ -130,7 +139,7 @@ impl Sim {
         let data: Vec<f32> = (0..CELLS * CELLS)
             .map(|i| {
                 let (x, z) = cell_xz(i);
-                if wet(x, z) { DEPTH_M } else { 0.0 }
+                if wet(x, z) { depth } else { 0.0 }
             })
             .collect();
         {
@@ -394,5 +403,40 @@ fn waves_do_not_cross_onto_dry_ground() {
     println!("shore: largest |h| on the water {wet:.4} m, on the dry ground {dry:.6} m");
     assert!(wet > 0.002, "no waves on the water ({wet})");
     assert!(dry < 1e-4, "waves on the dry ground ({dry})");
+    sim.finish();
+}
+
+/// #44 acceptance 2: a body released over a *still* sea (no simulated water, no source) sends rings
+/// out. Over a flat bed at 0 m with `StillWater` at 1 m, a 0.25 m sphere dropped from 0.1 m above
+/// the level holds an amplitude of at least 1 mm one metre from the impact within a second.
+#[test]
+#[ignore = "needs a GPU"]
+fn a_body_dropped_on_a_still_sea_sends_out_rings() {
+    let _lock = serial();
+    let mut sim = Sim::build(0.2, |_, _| true, 0.0, Some(DEPTH_M));
+    let start = Vec3::new(1.0, DEPTH_M + 0.35, 4.0);
+    let body = sim.spawn(WaterContact::sphere(0.25), start);
+    sim.frames(2);
+    // Fall at 3 m/s to the surface and below it: an impact, then rings.
+    let mut peak: f32 = 0.0;
+    let mut y = start.y;
+    for _ in 0..60 {
+        y = (y - 3.0 / 60.0).max(DEPTH_M - 0.1);
+        sim.place(body, Vec3::new(start.x, y, start.z));
+        sim.frames(1);
+        let field = sim.field();
+        let ring = [
+            Vec2::new(1.0, 0.0),
+            Vec2::new(-1.0, 0.0),
+            Vec2::new(0.0, 1.0),
+            Vec2::new(0.0, -1.0),
+        ]
+        .iter()
+        .map(|d| field.at(start.xz() + *d).abs())
+        .fold(0.0, f32::max);
+        peak = peak.max(ring);
+    }
+    println!("still sea: largest |h| 1 m from the impact over 1 s {peak:.5} m");
+    assert!(peak >= 0.001, "the still sea answers with {peak} m at 1 m");
     sim.finish();
 }
