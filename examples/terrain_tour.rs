@@ -85,6 +85,7 @@ fn grade_glide(time: Res<Time>, glide: Option<Res<GradeGlide>>, mut look: ResMut
     *look = TerrainLook {
         tint: base.tint.lerp(glide.target.tint, t),
         saturation: base.saturation + (glide.target.saturation - base.saturation) * t,
+        ..base
     };
 }
 
