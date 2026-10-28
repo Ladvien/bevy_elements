@@ -34,6 +34,7 @@ use crate::celestial::{
 };
 use crate::climate::Weather;
 use crate::flash::LightningFlash;
+use crate::fog::{HORIZON_RING, HorizonRing};
 use crate::gpu::grid::storage_buffer;
 use crate::gpu::readback::{Readbacks, decode};
 use crate::plugin::{
@@ -341,6 +342,9 @@ pub(crate) struct CloudGpu {
     pub threshold: Handle<ShaderBuffer>,
     /// Every fourth shadow-map texel's transmittance, `SHADOW_COARSE_CELLS²` row-major.
     pub shadow_coarse: Handle<ShaderBuffer>,
+    /// The sky's radiance at the horizon in `HORIZON_RING` azimuths, `vec4` each with `w` 1 once
+    /// the probe pass has written it (`docs/research/fog-colour.md`).
+    pub horizon: Handle<ShaderBuffer>,
     /// The cube the clouds' skylight is read from: the followed camera's atmosphere environment
     /// map (Bevy's clear sky, [`SkyProbe::atmosphere`] once the probe has taken the environment
     /// map over), or `neutral_sky`.
@@ -476,6 +480,7 @@ impl Plugin for CloudPlugin {
                         .chain()
                         .in_set(ElementsSystems::Simulation),
                     read_shadows.in_set(ElementsSystems::Readback),
+                    read_horizon.in_set(ElementsSystems::Readback),
                 ),
             );
         #[cfg(test)]
@@ -620,6 +625,11 @@ fn create_resources(
             &mut buffers,
             "elements_clouds_shadow_coarse",
             vec![1f32; (SHADOW_COARSE_CELLS * SHADOW_COARSE_CELLS) as usize],
+        ),
+        horizon: storage_buffer(
+            &mut buffers,
+            "elements_clouds_horizon",
+            vec![[0f32; 4]; HORIZON_RING],
         ),
         sky_probe: neutral_sky.clone(),
         neutral_sky,
@@ -1163,6 +1173,34 @@ fn read_shadows(
                         1.0
                     },
                 });
+            }
+        },
+    );
+}
+
+/// The sky's horizon radiance, read back for the distance fog (`docs/research/fog-colour.md`).
+/// Until the probe pass has written the ring (no probe, or the first frames) nothing is stored
+/// and the fog keeps its analytic colour.
+fn read_horizon(gpu: Option<Res<CloudGpu>>, mut readbacks: Readbacks) {
+    let Some(gpu) = gpu else {
+        return;
+    };
+    if !gpu.active || !gpu.live.load(Ordering::Relaxed) {
+        return;
+    }
+    readbacks.request(
+        "cloud_horizon",
+        gpu.horizon.clone(),
+        move |bytes, snapshot| {
+            if let Some(values) = decode::<[f32; 4]>(bytes)
+                && values.len() >= HORIZON_RING
+                && values[..HORIZON_RING].iter().all(|v| v[3] > 0.5)
+            {
+                let mut ring = [Vec3::ZERO; HORIZON_RING];
+                for (slot, v) in ring.iter_mut().zip(&values) {
+                    *slot = Vec3::new(v[0], v[1], v[2]);
+                }
+                snapshot.horizon = Some(HorizonRing(ring));
             }
         },
     );

@@ -134,6 +134,44 @@ pub fn orthographic_near_depth(eye: Vec3, forward: Vec3, focus: Vec3, view_heigh
     (focus - eye).dot(forward) - 0.5 * view_height_m * cot
 }
 
+/// Azimuths the horizon's radiance is read in (`clouds::march.wesl` `cloud_horizon_ring`).
+pub(crate) const HORIZON_RING: usize = 32;
+
+/// The sky's radiance at the horizon in [`HORIZON_RING`] azimuths, cd/m² before exposure, azimuth
+/// `i` at `(i + 0.5)/N` of a turn from -Z toward +X: the colour the distance fog converges on
+/// (`docs/research/fog-colour.md`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct HorizonRing(pub [Vec3; HORIZON_RING]);
+
+impl HorizonRing {
+    /// The ring averaged over the azimuths a view toward `forward` sees: weighted by cos² of the
+    /// angle to its heading, nothing behind it, so a camera facing the dusk glow takes the glow
+    /// and one facing away takes the cool side. A view looking straight up or down has no heading
+    /// and takes the plain mean; the two blend with the heading's horizontal share.
+    pub(crate) fn toward(&self, forward: Vec3) -> Vec3 {
+        let heading = forward.x.atan2(-forward.z);
+        let share = ((forward.x.hypot(forward.z) - 0.05) / 0.45).clamp(0.0, 1.0);
+        let (mut sum, mut weights) = (Vec3::ZERO, 0.0);
+        for (i, radiance) in self.0.iter().enumerate() {
+            let azimuth = (i as f32 + 0.5) / HORIZON_RING as f32 * std::f32::consts::TAU;
+            let facing = (azimuth - heading).cos().max(0.0);
+            let weight = 1.0 - share + share * facing * facing;
+            sum += *radiance * weight;
+            weights += weight;
+        }
+        sum / weights.max(1e-6)
+    }
+}
+
+/// How much of the fog's colour is the sky's horizon rather than the weather's own hue: 1 under a
+/// clear sky and visibility, falling to 0 as cloud or air thick enough to hide the sky takes
+/// over (a deck's horizon is the deck's grey, a fog's the fog's), by the same law the sky's air
+/// uses (`sky_air_extinction` over the march's 32 km).
+pub(crate) fn horizon_share(cloud_cover: f32, visibility_m: f32) -> f32 {
+    let air = 1.0 - (-sky_air_extinction(extinction_for_visibility(visibility_m)) * 32_000.0).exp();
+    (1.0 - air) * (1.0 - cloud_cover.clamp(0.0, 1.0))
+}
+
 /// Linear-RGB fog colour before brightness: the fog hue, tinted toward sunset orange as the sun
 /// drops below 10° (`celestial::dusk_tint`); and toward dust as `dust` rises.
 pub fn fog_hue(sun_altitude_deg: f32, dust: f32) -> Vec3 {
@@ -498,6 +536,7 @@ fn update_distance_fog(
     view: Res<ElementsView>,
     units: Res<ElementsUnits>,
     shadows: Option<Res<CloudShadows>>,
+    snapshot: Option<Res<EnvironmentSnapshot>>,
     mut cameras: FogCameras,
 ) {
     // Fog colour is added after exposure (bevy_pbr fog.wesl), so it carries the scene's
@@ -515,7 +554,17 @@ fn update_distance_fog(
         }
         let exposure = exposure.copied().unwrap_or_default().exposure();
         let brightness = luminance * exposure;
-        let c = hue * brightness;
+        let analytic = hue * brightness;
+        // Where the sky's horizon has been read back, the colour distant ground converges on is
+        // that sky's, toward the camera's heading; the analytic hue is what remains of it as the
+        // weather hides the sky, and the first frames' and a camera with no probe's colour.
+        let c = match snapshot.as_deref().and_then(|s| s.horizon.as_ref()) {
+            Some(ring) => {
+                let sky = ring.toward(*transform.forward()) * exposure;
+                analytic.lerp(sky, horizon_share(weather.cloud_cover, weather.visibility_m))
+            }
+            None => analytic,
+        };
         fog.color = Color::linear_rgb(c.x, c.y, c.z);
         fog.falloff = match projection {
             Some(Projection::Orthographic(o)) => {
