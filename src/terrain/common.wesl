@@ -1377,18 +1377,20 @@ fn scree_scatter(xz: vec2<f32>, footprint_m: f32) -> Scree {
 /// The ground's detail at `p` (metres) for a view whose footprint is `footprint_m` metres per
 /// pixel: two octave sums, each band-limited by their own scale, whose albedo modulation and bump
 /// gradient replace the one fixed 0.8 m⁻¹ band faded by a distance constant. `albedo` is a
-/// multiplier around 1; `grad` is the surface gradient the bump adds.
+/// multiplier around 1; `grad` is the surface gradient the bump adds. `amplitude` scales both
+/// (`TerrainLook::detail`, 1 for the crate's own); `coarse` and `fine` stay the raw band values,
+/// which are the turf palette's clump field and not grain.
 ///
 /// The octaves are the crate's 3D noise at the 3D point, so the detail is the same field on
 /// every surface and does not weave the cliff faces (`rock-material.md` Model 1).
-fn ground_detail(p: vec3<f32>, footprint_m: f32) -> GroundDetail {
+fn ground_detail(p: vec3<f32>, footprint_m: f32, amplitude: f32) -> GroundDetail {
     let coarse = detail_scale(p, DETAIL_COARSE_M, DETAIL_COARSE_OCTAVES, footprint_m, 1u);
     let fine = detail_scale(p, DETAIL_FINE_M, DETAIL_FINE_OCTAVES, footprint_m, 21u);
     let coarse_value = coarse.sum / max(coarse.norm, 1e-6);
     let fine_value = fine.sum / max(fine.norm, 1e-6);
-    let world_grad = DETAIL_COARSE_HEIGHT_M * coarse.grad + DETAIL_FINE_HEIGHT_M * fine.grad;
+    let world_grad = amplitude * (DETAIL_COARSE_HEIGHT_M * coarse.grad + DETAIL_FINE_HEIGHT_M * fine.grad);
     return GroundDetail(
-        1.0 + DETAIL_COARSE_AMP * coarse_value + DETAIL_FINE_AMP * fine_value,
+        1.0 + amplitude * (DETAIL_COARSE_AMP * coarse_value + DETAIL_FINE_AMP * fine_value),
         world_grad,
         max(coarse.present, fine.present),
         coarse_value,
