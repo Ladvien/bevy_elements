@@ -36,7 +36,9 @@ fn setup(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     mut director: ResMut<WeatherDirector>,
+    units: Res<ElementsUnits>,
 ) {
+    let u = units.units_per_metre;
     let mut target = Image::new_target_texture(TARGET, TARGET, TextureFormat::Rgba16Float, None);
     target.texture_descriptor.usage |= TextureUsages::COPY_SRC;
     let image = images.add(target);
@@ -45,7 +47,7 @@ fn setup(
         Camera3d::default(),
         RenderTarget::Image(image.into()),
         ElementsCamera::default(),
-        Transform::from_xyz(0.0, 40.0, 0.0).looking_at(Vec3::ZERO, Vec3::NEG_Z),
+        Transform::from_xyz(0.0, 40.0 * u, 0.0).looking_at(Vec3::ZERO, Vec3::NEG_Z),
     ));
     commands.spawn(
         Terrain::flat(BED)
@@ -56,8 +58,17 @@ fn setup(
 }
 
 fn build() -> App {
+    build_in(1.0)
+}
+
+/// The same scene in a world of `units` units to the metre: the terrain is built in metres, so
+/// only the camera's placement changes.
+fn build_in(units: f32) -> App {
     let mut app = App::new();
     app.add_plugins((support::headless_plugins(), ElementsPlugins))
+        .insert_resource(ElementsUnits {
+            units_per_metre: units,
+        })
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
             DT,
         )))
@@ -196,4 +207,56 @@ fn gpu_a_still_level_is_drawn_with_absorption_and_answered() {
     assert!((shallow_depth - 0.3).abs() < 0.01, "answer {shallow_depth}");
     assert!((deep_depth - 8.0).abs() < 0.01, "answer {deep_depth}");
     app.world_mut().write_message(AppExit::Success);
+}
+
+/// One scene of the foot-world check: an 8 m sea over a flat bed at level 0, drawn and answered.
+/// Returns the mean radiance of the target's middle and the depth the query gives at the origin,
+/// in metres.
+fn sea_at_level_zero(units: f32) -> (Vec3, f32) {
+    let mut app = build_in(units);
+    app.world_mut().insert_resource(StillWater { level: 0.0 });
+    run_until(&mut app, "the terrain", |app| {
+        app.world()
+            .get_resource::<TerrainState>()
+            .is_some_and(|s| s.is_live())
+    });
+    run_until(&mut app, "the still water to be drawn", |app| {
+        let world = app.world_mut();
+        let mut query = world.query::<(&WaterPatch, &Visibility)>();
+        query
+            .iter(world)
+            .any(|(p, v)| p.surface && *v == Visibility::Inherited)
+    });
+    for _ in 0..60 {
+        app.update();
+    }
+    run_until(&mut app, "the depth answer", |app| {
+        depth_at_origin(app).is_some_and(|d| d > 0.0)
+    });
+    let depth = depth_at_origin(&mut app).unwrap_or(f32::NAN);
+    let radiance = centre_radiance(&mut app);
+    app.world_mut().write_message(AppExit::Success);
+    (radiance, depth)
+}
+
+/// #44 acceptance 6: `units_per_metre = 3.2808` with a level of 0.0 draws and answers as the metre
+/// world with a level of 0.0 (the bed 8 m down in both).
+#[test]
+#[ignore = "needs a GPU"]
+fn gpu_a_still_level_in_a_foot_world_draws_and_answers_as_in_metres() {
+    let _lock = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let (metres, depth_m) = sea_at_level_zero(1.0);
+    let (feet, depth_ft) = sea_at_level_zero(3.2808);
+    println!("metres {metres:?} depth {depth_m}; feet {feet:?} depth {depth_ft}");
+    assert!((depth_m - -BED).abs() < 0.01, "metre answer {depth_m}");
+    assert!((depth_ft - depth_m).abs() < 0.01, "foot answer {depth_ft}");
+    let worst = (metres - feet).abs().max_element() / metres.max_element().max(1e-6);
+    println!(
+        "RESULT feet vs metres: worst channel difference {:.3} %",
+        worst * 100.0
+    );
+    assert!(
+        worst < 0.02,
+        "the foot world draws {feet:?}, the metre world {metres:?}"
+    );
 }
