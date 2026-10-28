@@ -1381,12 +1381,15 @@ fn scree_scatter(xz: vec2<f32>, footprint_m: f32) -> Scree {
 ///
 /// The octaves are the crate's 3D noise at the 3D point, so the detail is the same field on
 /// every surface and does not weave the cliff faces (`rock-material.md` Model 1).
-fn ground_detail(p: vec3<f32>, footprint_m: f32) -> GroundDetail {
-    let coarse = detail_scale(p, DETAIL_COARSE_M, DETAIL_COARSE_OCTAVES, footprint_m, 1u);
-    let fine = detail_scale(p, DETAIL_FINE_M, DETAIL_FINE_OCTAVES, footprint_m, 21u);
-    let coarse_value = coarse.sum / max(coarse.norm, 1e-6);
-    let fine_value = fine.sum / max(fine.norm, 1e-6);
-    let world_grad = DETAIL_COARSE_HEIGHT_M * coarse.grad + DETAIL_FINE_HEIGHT_M * fine.grad;
+fn ground_detail(p: vec3<f32>, footprint_m: f32, control: vec2<f32>) -> GroundDetail {
+    // `control` is the host's (`TerrainLook`): x scales the detail's amplitude, y is the finest
+    // feature its camera resolves, m, which floors the band limit's footprint (0: none).
+    let footprint = max(footprint_m, control.y);
+    let coarse = detail_scale(p, DETAIL_COARSE_M, DETAIL_COARSE_OCTAVES, footprint, 1u);
+    let fine = detail_scale(p, DETAIL_FINE_M, DETAIL_FINE_OCTAVES, footprint, 21u);
+    let coarse_value = control.x * coarse.sum / max(coarse.norm, 1e-6);
+    let fine_value = control.x * fine.sum / max(fine.norm, 1e-6);
+    let world_grad = control.x * (DETAIL_COARSE_HEIGHT_M * coarse.grad + DETAIL_FINE_HEIGHT_M * fine.grad);
     return GroundDetail(
         1.0 + DETAIL_COARSE_AMP * coarse_value + DETAIL_FINE_AMP * fine_value,
         world_grad,

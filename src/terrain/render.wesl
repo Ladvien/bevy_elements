@@ -68,6 +68,9 @@ struct TerrainMaterialParams {
     colours: array<vec4<f32>, 3>,
     // The game's grade of the bare ground (`TerrainLook`): xyz the tint, w the saturation.
     look: vec4<f32>,
+    // The host's ground detail (`TerrainLook`): x the amplitude multiplier, y the finest feature
+    // its camera resolves (m, 0 for none).
+    grain: vec4<f32>,
     // Paths (`PathNetwork`): xy the mask's minimum corner (metre frame), z its texel edge (m),
     // w its texels a side; w below 0.5 is no mask.
     path: vec4<f32>,
@@ -637,7 +640,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var tint = vec3<f32>(1.0);
     var grad = vec3<f32>(0.0);
     if turf > 0.01 {
-        let grain = ground_detail(pv, footprint);
+        let grain = ground_detail(pv, footprint, material.grain.xy);
         // Under detail textures the procedural grain's *albedo* keeps only its share
         // (`GroundTextures::grain`): its mottle is the felt the textures replace. Its *relief*
         // stays whole: the turf's 10–50 cm bumps are the ground's micro-topography, which a low
@@ -769,7 +772,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             // The route's own grain: the mask's per-texel value at its own resolution (0.175 m for a
             // footpath), so a road keeps its stone past the band limit that drops the noise
             // octaves, plus the finer noise up close.
-            let grain = path_grain(pv.xz, path.kind, footprint, path.grain);
+            let grain = path_grain(pv.xz, path.kind, footprint, path.grain, material.grain.xy);
             // A route is the *ground it crosses*, worn — not a strip of imported earth. On sand a
             // track is trodden sand (a little darker, finer), on snow it keeps the snow's colour,
             // and only on turf and soil does the route's own earth or stone show. `ground_tint` is

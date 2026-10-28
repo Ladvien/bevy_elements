@@ -10,7 +10,9 @@
 //! - `ELEMENTS_FLY=8` glides the camera forward at 8 m/s along its view's heading, held
 //!   `ELEMENTS_AGL` (default 6) metres above the ground: a moving capture for what streams with
 //!   the camera (the scattered rocks' rings and their fade). Use it with `ELEMENTS_SHOT_DIR`.
-//! - `ELEMENTS_TINT=r,g,b` and `ELEMENTS_SATURATION=s` grade the bare ground (`TerrainLook`);
+//! - `ELEMENTS_TINT=r,g,b` and `ELEMENTS_SATURATION=s` grade the bare ground (`TerrainLook`),
+//!   `ELEMENTS_DETAIL=k` scales its micro-detail and `ELEMENTS_FINEST_M=m` drops the detail finer
+//!   than the camera's metres per pixel (issue #42);
 //!   `ELEMENTS_GRADE_GLIDE=8` glides between the default and that grade and back every 8 s,
 //!   written every frame, as a palette blend would.
 //! - `ELEMENTS_ORTHO=18` looks through an orthographic camera showing 18 m of ground top to
@@ -85,6 +87,7 @@ fn grade_glide(time: Res<Time>, glide: Option<Res<GradeGlide>>, mut look: ResMut
     *look = TerrainLook {
         tint: base.tint.lerp(glide.target.tint, t),
         saturation: base.saturation + (glide.target.saturation - base.saturation) * t,
+        ..base
     };
 }
 
