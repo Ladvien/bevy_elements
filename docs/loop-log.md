@@ -4933,3 +4933,21 @@ Host: the Mac, with `ssh big` reachable this time (RTX 3090, Xvfb; the remote sh
 3. #41/#39 wetness as drawn and a footprint press threshold.
 4. #40 `TerrainGrid` height that follows the drawn triangles.
 5. Items 1-5 of iteration 63.
+
+## Iteration 70 — 2026-10-27 — `terrain_drawn_height`: a height that follows the drawn triangles (#40)
+
+Host: the Mac (no Xvfb/GPU run this pass; `ssh big` answered but nothing needed it). Issues read through the API: #38-#43 open, all enhancements apart from #38 (fix confirmed on the GPU in iteration 69, left open for the owner). Item: #40, the one open issue that is a measurable wrong answer (0.703 ft at a crease on Sanctuary's town) and fully verifiable on the CPU; runner-up #42 (needs GPU capture and a design for the knob).
+
+- **Change**: `TerrainGrid::drawn_height`, `TerrainSnapshot::drawn_height` and `Environment::terrain_drawn_height` (`src/terrain/model.rs`, `src/query.rs`): the same taps as `sample`, interpolated over `patch_mesh`'s two triangles per quad (split along `(1, 0)-(0, 1)`). `terrain_height` is unchanged (bilinear).
+- **Sources**: `docs/research/orthographic-lod.md` addendum (Model 4, Deviation 4, `patch_mesh` index order); no new literature, the formula is the mesh's own.
+- **Verification**: `the_drawn_height_is_the_patch_meshs_triangles` (400 random level-0 quads on the hills, 3200 points): equals the vertex stage's triangles to 1e-4 m, within the quad's twist/4 of the bilinear, equal to it at samples and on quad edges, continuous across the diagonal, equal at the clamped edge. The test first failed because the morph centre was far from the quad (vertices morphed); fixed by morphing about the quad. Gates 1-4: 335 lib tests, integration and doc tests pass, clippy `-D warnings`, rustdoc `-D warnings`, wasm32 lib build. Gate 5 (GPU suites) not run: no GPU or shader change.
+- **Visual and performance gates**: not applicable (a CPU query over the readback; nothing drawn changed, no per-frame cost).
+- **Not done**: no `Environment`-level test (the wrapper is a unit conversion over the tested grid function); coarser LODs still not answered.
+
+### Next five items, ranked
+
+1. Gravel/packed-snow legibility from eye level (grain at 1x; the band on snow).
+2. #42 ground detail amplitude / finest-feature knob.
+3. #41/#39 wetness as drawn and a footprint press threshold.
+4. #43 rocks: keep the scatter out of a host's town; per-facet palette for host rocks.
+5. Items 1-5 of iteration 63.
