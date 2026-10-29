@@ -34,7 +34,11 @@ use model::{
 /// drawn as meshes (the terrain material's scree and turf carry them), so a cover of 0.30 shows
 /// as 17 % of the ground under rocks of 25 cm and up.
 #[derive(Resource, Clone, Debug, PartialEq, Reflect)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct RockSettings {
     /// Cover of a talus apron: the band of slope at a cliff's foot where the terrain material
     /// draws its scree (16°–40°, densest at 26°). Default 0.30.

@@ -91,6 +91,10 @@ required-features = ["serde"]
 name = "setup"
 required-features = ["serde"]
 
+[[test]]
+name = "surface_setup"
+required-features = ["serde"]
+
 [lints.rust]
 missing_docs = "warn"
 unsafe_code = "forbid"

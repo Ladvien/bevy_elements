@@ -38,7 +38,11 @@ use model::{StepClock, can_transport};
 
 /// The aeolian transport's settings. Insert it before the plugin to override the defaults.
 #[derive(Resource, Clone, Debug, PartialEq, Reflect)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct DustSettings {
     /// Whether the wind moves sand. Default `true`.
     pub enabled: bool,
