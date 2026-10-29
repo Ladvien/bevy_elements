@@ -5314,3 +5314,21 @@ Host: the Mac (no `big`, no captures, no benchmark). Issues read through the API
 4. #41 remainder: GPU fixture comparing `ground_look_at` to a rendered pixel; `FootprintPressure`.
 5. #39 `paths_resist_prints`.
 - Published: https://crates.io/crates/bevy_elements/0.7.0, tag v0.7.0; #45 and #38 closed.
+
+## Iteration 90 — 2026-10-29 — EnvironmentSetup (what bevy_emerge's Environment panel needs, #98 there)
+
+Host: the Mac (no `big`, no captures, no benchmark; nothing rendered changes). Issues read through the API: #46 (adopted by Sanctuary with numbers; left open by its author), #44 and #43 (delivered, awaiting Sanctuary's look decision). No open bug, no `consumer` issue, no workable enhancement; no parked branch. So the idle-pass rule: item 1, what the owner's editor needs. Ranked: (1) `EnvironmentSetup` (the editor wrapped four resources plus a private forced preset in its own `ElementsSettings`, with an `applied_force` local to avoid restarting blends); (2) night sea horizon step (needs `big`/judged captures); (3) dusk sea film. Took (1): self-contained, provable headless, and unblocks #98's acceptance.
+
+- **Change**: `src/setup.rs`, `EnvironmentSetup { clock, location, climate, forced_weather, blend_minutes }` (serde `default` + `deny_unknown_fields`), `validate() -> SetupError { field, problem }`, `apply` / `apply_to_world` (validate first, nothing changes on error, force only when the forced preset differs), `capture` / `capture_from_world`; `WeatherDirector::forced()`. Research: `docs/research/environment-setup.md` (no physics; bounds from the models' own ranges).
+- **Proof**: `tests/setup.rs` (6): each bound rejects a value just outside it and names the field; an invalid setup changes nothing; force once / change forces / `None` releases only a forced director (director equality unchanged on a repeat apply); capture equals apply; missing plugins lose no resource; JSON round trip, defaults, typo rejected.
+- **Verdict**: no visual feature touched; critique and GREAT/NOT YET do not apply. No GPU code, so no benchmark.
+- **Gates (Mac)**: `cargo test --release --features serde --test setup` and `--test leaf`, clippy `-D warnings --all-targets --all-features`, rustdoc `-D warnings`, wasm32 lib. Full `cargo test` and GPU suites not re-run (additive, no shader or system change).
+- **Cleanup**: removed `/tmp/i90_emerge` (shallow clone of bevy_emerge). No worktree made.
+
+### Next five items, ranked
+
+1. Night: the sea's horizon step (4.1x) and the near rows' olive tint.
+2. The sea film at grazing angles should reach the sky's colour at dusk.
+3. Capture the still sea, skirt and distant terrain on `big`; benchmark `elements_clouds_sky_probe`.
+4. bevy_emerge #99/#100: terrain and hydrology settings as one serialisable setup, same shape as `EnvironmentSetup`.
+5. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
