@@ -109,6 +109,11 @@ pub struct StillWater {
 
 /// How the water looks. Insert it before the plugin to override the defaults.
 #[derive(Resource, Clone, Debug, PartialEq, Reflect)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct WaterSettings {
     /// Absorption of the water per linear colour channel, m⁻¹: the light's transmittance through
     /// `t` metres is `exp(−σ t)`. Default `(0.45, 0.06, 0.03)`: slightly tinted natural water
