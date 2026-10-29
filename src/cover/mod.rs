@@ -52,7 +52,11 @@ const SNOW_FALL_SPEED_MS: f32 = 1.0;
 /// How snow behaves: its density, how fast it settles and melts, when the wind moves it and which
 /// slopes shed it. Insert it before the plugin to override the defaults.
 #[derive(Resource, Clone, Debug, PartialEq, Reflect)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct SnowSettings {
     /// Density of fresh snow, kg/m³. Default 100.
     pub new_density: f32,
@@ -96,7 +100,11 @@ impl Default for SnowSettings {
 /// How the ground gets wet and dries, and when water becomes a puddle. Insert it before the
 /// plugin to override the defaults.
 #[derive(Resource, Clone, Debug, PartialEq, Reflect)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct WetnessSettings {
     /// Wetness gained per mm of rain: 1 is a film of `1 / wet_per_mm` mm. Default 0.5.
     pub wet_per_mm: f32,
