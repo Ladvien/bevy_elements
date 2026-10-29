@@ -5296,3 +5296,20 @@ Host: the Mac (Apple M1 Max, Metal; no `big`, no benchmark). Issues read through
 3. Capture the still sea, skirt and distant terrain on `big` (multi-angle, dusk, night, fog, frame sequence) and benchmark `elements_clouds_sky_probe` with the ring kernel and `night_fill`.
 4. #41 remainder: GPU fixture comparing `ground_look_at` to a rendered pixel; `FootprintPressure`.
 5. #39 `paths_resist_prints`.
+
+## Iteration 89 — 2026-10-29 — Release 0.7.0 (#45)
+
+Host: the Mac (no `big`, no captures, no benchmark). Issues read through the API: #46 (`sinkage_at` shipped, iteration 78), #45, #44, #43 (both wait on Sanctuary's look decision), #38 (fixed on `main`). No new bug; no parked branch for this item. The owner's standing rule (2026-10-29) is that a loop publishes, so the pass's item is #45 (release), which outranks a feature of the loop's own.
+
+- **Version: 0.7.0, not the 0.6.1 #45 names.** `TrailSettings`, `RockSettings`, `TerrainLook` gained public fields (literals need `..default()`), which is breaking for a pre-1.0 crate: MINOR bump. `cargo-semver-checks` did not finish compiling in two 40-minute attempts on this Mac (contended with other cargo jobs), so the breaking-ness is judged from the changelog's own migration notes, not the tool.
+- **Gates**: `cargo build --release`, `cargo test --release` (all suites ok), `cargo build --examples --all-features`, clippy `-D warnings`, rustdoc `-D warnings`, wasm32 lib, doctests (run before the version-string edit in the README). GPU suites not re-run (no code change since iteration 88's gates).
+- **Not verified**: captures, benchmark, `big` (unreachable).
+- **Cleanup**: no worktree made.
+
+### Next five items, ranked
+
+1. Night: the sea's horizon step (4.1x) and the near rows' olive tint (`docs/research/night-sky-light.md`).
+2. The sea film at grazing angles should reach the sky's colour at dusk.
+3. Capture the still sea, skirt and distant terrain on `big`; benchmark `elements_clouds_sky_probe`.
+4. #41 remainder: GPU fixture comparing `ground_look_at` to a rendered pixel; `FootprintPressure`.
+5. #39 `paths_resist_prints`.
