@@ -307,6 +307,11 @@ impl WeatherDirector {
         }
     }
 
+    /// The preset [`force`](Self::force) holds, or `None` when the scheduler decides.
+    pub fn forced(&self) -> Option<WeatherPreset> {
+        self.forced
+    }
+
     /// Whether [`force`](Self::force) is in effect.
     pub fn is_forced(&self) -> bool {
         self.forced.is_some()

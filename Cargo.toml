@@ -87,6 +87,10 @@ required-features = ["isomesh"]
 name = "save"
 required-features = ["serde"]
 
+[[test]]
+name = "setup"
+required-features = ["serde"]
+
 [lints.rust]
 missing_docs = "warn"
 unsafe_code = "forbid"
