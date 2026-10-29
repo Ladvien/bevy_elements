@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Added
+
+- **`EnvironmentSetup`: the sky and weather as one saved, validated, live-appliable value.** It bundles `WorldClock`, `GeoLocation`, `Climate` and the forced weather preset (with `serde`: any format, absent fields default, unknown fields are an error). `validate()` returns a `SetupError { field, problem }` naming the field that broke its range; `apply(..)` / `apply_to_world(..)` validate first, change nothing on error, and force the weather only when the forced preset differs, so reloading an unchanged file does not restart a blend; `capture(..)` / `capture_from_world(..)` read the running state back to save. New `WeatherDirector::forced()` reads the forced preset the director kept private. Built for an editor that previews a map's environment live and saves it (`docs/research/environment-setup.md`).
+
 ## [0.7.0] - 2026-10-29
 
 ### Fixed
