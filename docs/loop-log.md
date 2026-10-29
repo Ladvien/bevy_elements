@@ -5313,3 +5313,4 @@ Host: the Mac (no `big`, no captures, no benchmark). Issues read through the API
 3. Capture the still sea, skirt and distant terrain on `big`; benchmark `elements_clouds_sky_probe`.
 4. #41 remainder: GPU fixture comparing `ground_look_at` to a rendered pixel; `FootprintPressure`.
 5. #39 `paths_resist_prints`.
+- Published: https://crates.io/crates/bevy_elements/0.7.0, tag v0.7.0; #45 and #38 closed.
