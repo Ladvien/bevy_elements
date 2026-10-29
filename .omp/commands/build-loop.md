@@ -101,7 +101,7 @@ Write down concrete findings with locations (file and region `x,y,w,h` or pixel 
 4. **The owner's reply wins.** An owner comment that contradicts an assumed decision overrides it: the next pass that reads it reworks the item to the owner's choice before anything else.
 5. **Earlier blocks are lifted.** An issue or backlog item logged as blocked on, or waiting for, an owner decision is workable now: decide it this way.
 6. **Protected checks change only additively.** An assumed decision may add to a protected test or check (a new row or entry, a new field's empty default in a literal, a count or version raised by exactly what the change adds), with the commit message `assumed owner exception: <what>`. It never removes, loosens, skips or re-pins an existing assertion, golden, eval answer or threshold; that is the one block left, so say so on the issue and go on.
-7. **Never, whatever you assume.** These need the owner's word in a conversation, and no prompt can give it: publishing, tagging, yanking or bumping a release; force-pushing, rewriting history or deleting branches; deleting files or work this pass did not create; editing this command file; spending money or sharing credentials.
+7. **Never, whatever you assume.** These need the owner's word in a conversation, and no prompt can give it: yanking a release or changing crate ownership; force-pushing, rewriting history or deleting branches; deleting files or work this pass did not create; editing this command file; spending money or sharing credentials.
 
 ## Filed issues come before new features
 
@@ -158,8 +158,7 @@ Then, in this order:
    and do not close one whose fix this pass did not verify. For a `consumer` issue the close is the signal
    the requester waits for: close it only through a verified fix pushed to `main`, never as not planned
    without the owner's word.
-5. **Re-check a release issue, do not act on it.** An issue asking to publish or bump a version is
-   the owner's call, never a loop's (see the release rule above). Record it as seen and skip it.
+5. **A release issue is done by the next release.** An issue asking to publish or bump a version is closed by the pass whose release (the "Release" block in the ship section) publishes it, with the crates.io URL.
 
 **When the API fallback answers `403` or `429`** (rate limit — 60 requests/hour per IP unauthenticated,
 shared by everything on this network), do not treat it as "no issues": write one line saying the list
@@ -229,7 +228,7 @@ You are grading your own work, so grade it as a hostile art director would.
 
 ## 8. Ship
 
-Start only after section 7 passes. Never bump the version, tag or publish; releases are the owner's call.
+Start only after section 7 passes. Then release (the "Release" block at the end of this section).
 
 1. Document: rustdoc for every changed public item, the README for user-visible changes, the research note's `Deviations` and `Pending index`, and an entry under `## [Unreleased]` in `CHANGELOG.md` (`Added`, `Changed`, `Fixed`, `Removed`).
 2. Regenerate the GIFs and stills in `docs/` that this change affects, from the new build (`docs/tour.gif` recipe: `examples/weather_tour.rs` doc comment).
@@ -243,6 +242,14 @@ Start only after section 7 passes. Never bump the version, tag or publish; relea
 4. Branch and commit: `git checkout -b loop/iter-N` from `main`. Commit by path with messages that state the user-visible change: the research note (already committed in section 5), the implementation, the docs and changelog, then the log (`Loop log: iteration N, <title>`). `git status --short` must be empty afterwards.
 5. Push and merge: `git push -u origin loop/iter-N`, then `git checkout main && git pull --ff-only && git merge --no-ff loop/iter-N -m "Merge loop/iter-N: <title>"`. On a conflict, `git merge --abort`, log it, and stop.
 6. Re-run gates 1-4 on the merged tree; a failure stops the pass before the push. Then `git push origin main`.
+
+**Release, every pass that changed the package** (owner, 2026-10-29: loops publish, and never wait on CI to do it). After the push, from that pushed commit, on a clean tree with the gate green: if a file `cargo package --list` ships changed since the last published version (`git diff --quiet v<last> HEAD -- <those files>` fails; with no tag `v<last>`, diff from the commit that set that version in `Cargo.toml`, found with `git log -S'version = "<last>"' -- Cargo.toml`), release:
+1. Decide the version with `cargo semver-checks check-release` (`cargo install cargo-semver-checks --locked` if missing). Pre-1.0: a breaking change bumps MINOR and resets PATCH, anything else bumps PATCH; never 1.0.0. Move `## [Unreleased]` in `CHANGELOG.md` to `## [<version>] - <date>`, bump `Cargo.toml` and `Cargo.lock`, and commit `release: v<version>`.
+2. `cargo publish --dry-run`, then `cargo publish`, locally, with the credentials `cargo login` stored; never print them. Never wait for, watch or re-run a GitHub workflow to release.
+3. `git tag -a v<version> -m v<version>`, then push the commit and the tag (merge, never force, on a refused push).
+4. `cargo info <crate>@<version>` resolves; put the crates.io URL in the log entry.
+
+A failed publish is logged with its error and retried next pass. Never yank, never reuse a version; fix a bad release forward.
 
 ### README, demos and docs stay true
 
