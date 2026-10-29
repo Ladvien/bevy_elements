@@ -18,6 +18,7 @@ mod plugin;
 mod precipitation;
 mod query;
 mod rocks;
+mod setup;
 mod terrain;
 mod trails;
 #[cfg(feature = "isomesh")]
@@ -34,6 +35,9 @@ pub use plugin::{
 
 // Readback cadence.
 pub use gpu::readback::ElementsReadback;
+
+// One saved, validated, live-appliable sky and weather setup.
+pub use setup::{EnvironmentSetup, SetupError};
 
 // Gameplay queries.
 pub use query::{Environment, EnvironmentSnapshot, GroundLook};
