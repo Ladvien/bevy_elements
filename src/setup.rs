@@ -31,14 +31,14 @@ impl fmt::Display for SetupError {
 
 impl std::error::Error for SetupError {}
 
-fn bad(field: &'static str, problem: impl Into<String>) -> SetupError {
+pub(crate) fn bad(field: &'static str, problem: impl Into<String>) -> SetupError {
     SetupError {
         field,
         problem: problem.into(),
     }
 }
 
-fn within(field: &'static str, v: f64, lo: f64, hi: f64) -> Result<(), SetupError> {
+pub(crate) fn within(field: &'static str, v: f64, lo: f64, hi: f64) -> Result<(), SetupError> {
     if v.is_finite() && (lo..=hi).contains(&v) {
         Ok(())
     } else {
