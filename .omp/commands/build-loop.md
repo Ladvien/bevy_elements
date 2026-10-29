@@ -184,6 +184,13 @@ Ownership is a gate: if `AGENTS.md`'s ownership map gives the item to a sibling 
 
 State in one sentence why your pick beats the runner-up. If it is too big, carve off the most valuable self-contained slice. Record the ranked candidate list in the log, not only the winner.
 
+**A pass never ends idle** (owner, 2026-10-29: "If they're not addressing bugs or enhancing features, they need to evolve their own code base to support Bevy Emerge better or add new features. Research these things in home still, implement them. They shouldn't stay idle."). An empty issue list or a stale backlog is this step's input, never a reason to ship nothing, and a candidate is not "speculation" once it is researched. When the ranked list above gives no workable item, take the first of these that applies:
+1. **What the owner's editor needs from this crate.** bevy_emerge configures this crate live from its own panels: the crate's own serde types are the data, saved in a game's project and edited live (its `AGENTS.md`, "Use the ladvien crate family"). Read its issues for this crate (`gh issue view <N> --repo Ladvien/bevy_emerge` for #98 sky and weather, #99 terrain, #100 water) and how the editor uses the crate today (a shallow clone of `Ladvien/bevy_emerge` under `/tmp`, removed afterwards; `ElementsSettings` and `apply_environment` landed there on 2026-10-29). Build the crate-side piece that makes that integration easier or richer, in this crate's general form and never named for the editor: settings that serialise and change at runtime, validation with a useful error, presets, a query or event the editor can show, a preview it can drive. Prove it with a test here.
+2. **A feature a shipping game in this domain expects and this crate lacks**, found by research: home-still first (`distill_search`; for a paper the corpus lacks, `paper_search`, `paper_download`, `scribe_convert`, then `distill_index`), then shipped-game practice, then section 5 before any code.
+3. **Depth on the weakest existing feature**: measure it against its research note's validation targets and improve the worst gap.
+
+Record the ranked candidates and the pick in the log. A pass that ships nothing names the concrete blocker that stopped all three; "nothing new to do" is not a blocker.
+
 ## 5. Research thoroughly with home-still (before any code)
 
 Every feature gets researched, new or improved, with no exceptions.
