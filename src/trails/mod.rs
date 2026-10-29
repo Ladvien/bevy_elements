@@ -131,6 +131,11 @@ impl std::fmt::Debug for TrailGround {
 /// Whether trails are pressed and drawn, and how fine. Insert it before the plugin to override
 /// the default.
 #[derive(Resource, Clone, Debug, PartialEq, Reflect)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct TrailSettings {
     /// Press and draw trails. Default `true`.
     pub enabled: bool,

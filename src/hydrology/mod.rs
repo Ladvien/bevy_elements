@@ -68,7 +68,11 @@ pub enum HydrologyBoundary {
 
 /// The water simulation's settings. Insert it before the plugin to override the defaults.
 #[derive(Resource, Clone, Debug, PartialEq, Reflect)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct HydrologySettings {
     /// The simulation step, s. Default 0.02.
     pub step_s: f32,
@@ -101,7 +105,11 @@ impl Default for HydrologySettings {
 
 /// Hydraulic and thermal erosion. The water flows whether or not erosion is enabled.
 #[derive(Resource, Clone, Debug, PartialEq, Reflect)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct ErosionSettings {
     /// Whether the flow dissolves, carries and deposits sediment and the slopes relax. Default
     /// `true`.
