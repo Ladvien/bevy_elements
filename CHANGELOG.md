@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-29
+
 ### Fixed
 
 - **A moonless night's sea no longer glows over a black sky.** The sky cube carries the night sky's light times the camera's exposure so that surfaces are lit (`docs/research/night-sky-light.md`, Deviation 2), and Bevy multiplies the cube by the exposure again, so a specular reflection of it was lifted twice: a `StillWater` sea at a grazing view drew 42-80 DN (about 100x) under a sky of 5-8 DN, a grey slab with a hard line at the horizon. The lift now fades in with elevation (8 to 40 degrees, `night_fill` in `march.wesl`); toward the horizon the cube is the sky the screen draws, and a normalisation keeps a horizontal surface's irradiance as it was (3.283e-3 against 3.286e-3 measured). The sea at midnight is 4.1x the sky above it (was ~100x). A vertical surface's night fill falls to about 0.6 of what it was, so a wall reads darker than a roof under a moonless sky. Measured on the Apple M1 Max (`gpu_a_night_sea_is_not_brighter_than_the_sky_it_reflects`, `the_night_fill_lifts_the_light_on_surfaces_and_not_the_horizon`).
@@ -891,6 +893,8 @@ Everything from 0.2 through 0.5 lands in one release. Every system was studied i
 
 New: `terrain_tour`, `external_ground`, `flood`, `lake`, `erosion_bake`, `weathered_town`, `ground_cover`, `dust_storm`, `voxel_snow` (feature `isomesh`), and `quickstart` now stands on hills. `bench_elements` times every pass, with `ELEMENTS_TERRAIN=hills|mountains|dunes|lake|none`.
 
+[Unreleased]: https://github.com/Ladvien/bevy_elements/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/Ladvien/bevy_elements/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Ladvien/bevy_elements/compare/v0.5.3...v0.6.0
 [0.5.1]: https://github.com/Ladvien/bevy_elements/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Ladvien/bevy_elements/compare/v0.1.0...v0.5.0
