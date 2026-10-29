@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-29
+
 ### Added
 
 - **`EnvironmentSetup`: the sky and weather as one saved, validated, live-appliable value.** It bundles `WorldClock`, `GeoLocation`, `Climate` and the forced weather preset (with `serde`: any format, absent fields default, unknown fields are an error). `validate()` returns a `SetupError { field, problem }` naming the field that broke its range; `apply(..)` / `apply_to_world(..)` validate first, change nothing on error, and force the weather only when the forced preset differs, so reloading an unchanged file does not restart a blend; `capture(..)` / `capture_from_world(..)` read the running state back to save. New `WeatherDirector::forced()` reads the forced preset the director kept private. Built for an editor that previews a map's environment live and saves it (`docs/research/environment-setup.md`).
@@ -897,7 +899,8 @@ Everything from 0.2 through 0.5 lands in one release. Every system was studied i
 
 New: `terrain_tour`, `external_ground`, `flood`, `lake`, `erosion_bake`, `weathered_town`, `ground_cover`, `dust_storm`, `voxel_snow` (feature `isomesh`), and `quickstart` now stands on hills. `bench_elements` times every pass, with `ELEMENTS_TERRAIN=hills|mountains|dunes|lake|none`.
 
-[Unreleased]: https://github.com/Ladvien/bevy_elements/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/Ladvien/bevy_elements/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/Ladvien/bevy_elements/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/Ladvien/bevy_elements/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Ladvien/bevy_elements/compare/v0.5.3...v0.6.0
 [0.5.1]: https://github.com/Ladvien/bevy_elements/compare/v0.5.0...v0.5.1
