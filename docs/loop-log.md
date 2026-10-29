@@ -5353,3 +5353,4 @@ Host: the Mac (no `big`, no captures, no benchmark; nothing rendered changes). I
 4. bevy_emerge #99/#100 remainder: a terrain edit message (`apply` of a `TerrainSetup` to a live terrain without respawn) and a `Terrain` height write from the CPU for brushes.
 5. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
 
+- Published: https://crates.io/crates/bevy_elements/0.7.2, tag v0.7.2 (additive, patch; cargo-semver-checks: no update required).
