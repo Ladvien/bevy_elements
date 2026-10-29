@@ -5333,3 +5333,23 @@ Host: the Mac (no `big`, no captures, no benchmark; nothing rendered changes). I
 4. bevy_emerge #99/#100: terrain and hydrology settings as one serialisable setup, same shape as `EnvironmentSetup`.
 5. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
 - Published: https://crates.io/crates/bevy_elements/0.7.1, tag v0.7.1 (additive, patch).
+
+## Iteration 91 — 2026-10-29 — SurfaceSetup and TerrainSetup (what bevy_emerge's terrain and water panels need, #99 and #100 there)
+
+Host: the Mac (no `big`, no captures, no benchmark; nothing rendered changes). Issues read through the API: #46, #44, #43 (all delivered, awaiting Sanctuary's adoption; none workable, none a bug). No `consumer` issue; no parked branch for this item (the only `parked` commit is pass 22's, stale). Idle-pass rule, item 1. Ranked: (1) `SurfaceSetup`/`TerrainSetup`, the ground twin of `EnvironmentSetup` (nine settings resources, three without serde, a `Terrain` whose height map is a `Handle`); (2) night sea horizon step (needs `big`); (3) dusk sea film. Took (1): headless-provable and the editor's next integration.
+
+- **Change**: `src/surface_setup.rs`. `SurfaceSetup { hydrology, erosion, snow, wetness, water, waves, rocks, dust, trails }` with `validate() -> SetupError`, `apply_to_world` (validate first; writes a resource only when it differs, so an unchanged re-apply leaves the rocks' scatter alone), `capture_from_world`. `TerrainSetup { source: Procedural | Flat | Heightmap { path, height_range_m }, extent_m, resolution, external }` with `validate`, `terrain(&AssetServer)` (linear one-channel load) and `capture(&Terrain)`. `WaterSettings`, `TrailSettings`, `WaveSettings` gain serde; all nine structs get `serde(default)` so a file may give one field of a section. Research: `docs/research/surface-setup.md` (no physics; bounds from each setting's own doc).
+- **Assumed decision (owner may override):** `apply_to_world` inserts a missing settings resource instead of erroring (the sky setup errors). Options: error like `EnvironmentSetup`; insert. Picked insert: a game may omit dust or waves, and an inserted resource is inert without its plugin.
+- **Proof**: `tests/surface_setup.rs` (8): each bound rejects a value just outside and names the field, edges validate; invalid changes nothing; apply/capture round trip; change ticks (unchanged re-apply marks nothing, one changed setting marks its resource only); JSON round trip, partial sections, typo rejected; terrain bounds; terrain setup builds and captures back for all three sources, memory heightmap errors.
+- **Verdict**: no visual feature touched; critique and GREAT/NOT YET do not apply. No GPU code; no benchmark.
+- **Gates (Mac)**: `cargo test --release --features serde --test surface_setup --test setup --test save --test leaf`, `cargo test --release --doc`, clippy `-D warnings --all-targets --all-features`, rustdoc `-D warnings`, wasm32 lib: all green. Full `cargo test` and GPU suites not re-run (additive, no shader or system change; `serde(default)` only loosens deserialisation).
+- **Cleanup**: no worktree made, no scratch outside `target/`.
+
+### Next five items, ranked
+
+1. Night: the sea's horizon step (4.1x) and the near rows' olive tint.
+2. The sea film at grazing angles should reach the sky's colour at dusk.
+3. Capture the still sea, skirt and distant terrain on `big`; benchmark `elements_clouds_sky_probe`.
+4. bevy_emerge #99/#100 remainder: a terrain edit message (`apply` of a `TerrainSetup` to a live terrain without respawn) and a `Terrain` height write from the CPU for brushes.
+5. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
+
