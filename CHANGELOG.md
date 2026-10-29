@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+### Added
+
+- **`SurfaceSetup` and `TerrainSetup`: the ground, water and cover settings, and the terrain's source, as saved, validated, live-appliable values.** `SurfaceSetup` bundles `HydrologySettings`, `ErosionSettings`, `SnowSettings`, `WetnessSettings`, `WaterSettings`, `WaveSettings`, `RockSettings`, `DustSettings` and `TrailSettings`; `validate()` returns the same `SetupError { field, problem }` as `EnvironmentSetup`, `apply_to_world(..)` validates first, changes nothing on error and writes a resource only when it differs (an unchanged re-apply does not rebuild the rocks' scatter), and `capture_from_world(..)` reads the running settings back. `TerrainSetup { source, extent_m, resolution, external }` describes a `Terrain` as data (`TerrainSetupSource::{Procedural, Flat, Heightmap { path, height_range_m }}`): `terrain(&AssetServer)` validates and builds the component, loading a height map linearly as one channel, and `capture(&Terrain)` reads one back. Built for an editor that sculpts and previews a map's ground and saves it as a file (`docs/research/surface-setup.md`).
+
+### Changed
+
+- `WaterSettings`, `TrailSettings` and `WaveSettings` derive serde (feature `serde`), and every settings struct in `SurfaceSetup` deserialises with `serde(default)`, so a file may give one field of a section. Previously a partial section was a missing-field error.
+
 ## [0.7.1] - 2026-10-29
 
 ### Added
