@@ -67,6 +67,7 @@ impl WaterContact {
 
 /// The wave field's settings. Insert it before the plugin to override the default.
 #[derive(Resource, Clone, Debug, PartialEq, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct WaveSettings {
     /// Simulate and draw the waves. Default `true`.
     pub enabled: bool,
