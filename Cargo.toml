@@ -1,6 +1,6 @@
 [package]
 name = "bevy_elements"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2024"
 rust-version = "1.97.1"
 description = "Living environments for Bevy: sun, moon and stars, climate-driven weather, GPU wind, volumetric clouds, rain, snow and fog, lightning, terrain with hydraulic and thermal erosion, flooding, snow cover, wetness and dust — simulated in compute shaders."
