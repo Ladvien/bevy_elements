@@ -5332,3 +5332,4 @@ Host: the Mac (no `big`, no captures, no benchmark; nothing rendered changes). I
 3. Capture the still sea, skirt and distant terrain on `big`; benchmark `elements_clouds_sky_probe`.
 4. bevy_emerge #99/#100: terrain and hydrology settings as one serialisable setup, same shape as `EnvironmentSetup`.
 5. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
+- Published: https://crates.io/crates/bevy_elements/0.7.1, tag v0.7.1 (additive, patch).
