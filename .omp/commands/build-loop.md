@@ -132,9 +132,14 @@ Then, in this order:
      A blocked consumer issue never stops the pass.
    - **Read `git log` first.** While this loop is stopped, the requester's loop may fix the issue here at the
      source, in its own commits with tests; check whether that has happened so the work is not done twice.
-3. **Any other enhancement issue is ranked with your own candidates**, not above them: an issue is one
-   person's idea of what matters, and the ranking below still decides. Note the issue number beside
-   the item so the rank list records that it came from outside.
+3. **Every other open enhancement issue is the pass's item next, ahead of your own candidates** (the
+   owner's rule, 2026-10-29): a filed request was asked for; a candidate this pass invents was not. The
+   order of work is: **bugs first** (a bug issue, then a bug already recorded in the backlog or the log),
+   then `consumer` issues, then every other open enhancement issue, oldest first. Only when each of them
+   is done, blocked or a release issue does "Pick the single most valuable item" choose a feature of your
+   own. A blocked issue gets a `gh issue comment` saying exactly what it needs and is skipped; it never
+   stops the pass. Name the issues you skipped, and why, in the log line, so the next pass sees the list
+   was worked through.
 4. **Close the loop.** An issue your pass fixes is referenced in the commit body (`Fixes #N`) **and**
    in the report, so the next pass can see it was addressed. Do not close an issue you did not fix,
    and do not close one whose fix this pass did not verify. For a `consumer` issue the close is the signal
@@ -155,7 +160,7 @@ and continue — never spend a pass on the lookup.
 
 ## 4. Pick the single most valuable item
 
-Rank candidates from your findings, the loop log's backlog and the extra instructions, always asking what matters most to a game developer who will ship this:
+**You are here only when no bug and no open issue can be worked this pass** (see "Filed issues come before new features"); otherwise that issue is the item. Rank candidates from your findings, the loop log's backlog and the extra instructions, always asking what matters most to a game developer who will ship this:
 
 1. Visible artifacts or physically wrong results (banding, seams, popping, flicker, energy blowouts, wrong sky for a date and time).
 2. Features that look flat, dull or unconvincing next to what shipping games achieve. Beauty gaps rank here, not last.
