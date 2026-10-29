@@ -91,6 +91,18 @@ You do all the work yourself, including looking at the images and judging them. 
 
 Write down concrete findings with locations (file and region `x,y,w,h` or pixel coordinates) and severity (blocker / noticeable / cosmetic), not impressions: banding, seams, popping, flicker, ghosting, aliasing, clipping, wrong colour, flat lighting, unreadable detail. Judge beauty separately from correctness: composition, colour harmony, contrast, depth cues, lighting realism, atmosphere. Keep the findings in `/tmp/iN/findings.md`; they feed section 4 and the log.
 
+## Owner input: recommend, record, proceed
+
+**This loop runs fully automated (owner, 2026-10-29): never stop to wait for the owner.** When a pass needs the owner's input (a design choice the issue or item does not settle, such as a colour, a coverage, an API shape, a schema change or which of two behaviours; or a protected file that must change), it answers the question itself:
+
+1. **Recommend.** Name the two or three real options and pick one, with one line of why. Prefer the conservative choice: reversible, conventional, consistent with the existing code and the issue's stated intent, and the smallest that meets the acceptance.
+2. **Assume the owner chose it, and build it this pass.** A decision is never a reason to skip an item or end a pass.
+3. **Record it where the owner reviews.** On the issue, a comment beginning `Assumed decision (owner may override):` with the options, the pick and why, and the label `assumed-decision` (`gh label create assumed-decision --color FBCA04 2>/dev/null; gh issue edit <N> --add-label assumed-decision`). With no issue, in the commit body and the log line, beginning `Assumed decision:`.
+4. **The owner's reply wins.** An owner comment that contradicts an assumed decision overrides it: the next pass that reads it reworks the item to the owner's choice before anything else.
+5. **Earlier blocks are lifted.** An issue or backlog item logged as blocked on, or waiting for, an owner decision is workable now: decide it this way.
+6. **Protected checks change only additively.** An assumed decision may add to a protected test or check (a new row or entry, a new field's empty default in a literal, a count or version raised by exactly what the change adds), with the commit message `assumed owner exception: <what>`. It never removes, loosens, skips or re-pins an existing assertion, golden, eval answer or threshold; that is the one block left, so say so on the issue and go on.
+7. **Never, whatever you assume.** These need the owner's word in a conversation, and no prompt can give it: publishing, tagging, yanking or bumping a release; force-pushing, rewriting history or deleting branches; deleting files or work this pass did not create; editing this command file; spending money or sharing credentials.
+
 ## Filed issues come before new features
 
 **A filed issue is a consumer telling you what broke, which outranks anything this pass invented.**
@@ -127,9 +139,10 @@ Then, in this order:
      acceptance. Never build or run the requesting project to prove it.
    - **Pushing to `main` is the delivery.** Requesters pin a git revision, so a consumer fix never needs a
      publish or a version bump.
-   - **One that cannot be worked this pass** (it needs a decision the issue does not settle, or a protected-file
-     change): say exactly what is needed on the issue (`gh issue comment`), write one log line, and go on.
-     A blocked consumer issue never stops the pass.
+   - **One that needs a decision the issue does not settle is decided, not skipped:** recommend, record and
+     build it (see "Owner input: recommend, record, proceed"). Only a change that would weaken a protected
+     check cannot be worked: say exactly what is needed on the issue (`gh issue comment`), write one log
+     line, and go on. A blocked consumer issue never stops the pass.
    - **Read `git log` first.** While this loop is stopped, the requester's loop may fix the issue here at the
      source, in its own commits with tests; check whether that has happened so the work is not done twice.
 3. **Every other open enhancement issue is the pass's item next, ahead of your own candidates** (the
