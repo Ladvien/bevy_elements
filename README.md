@@ -289,6 +289,25 @@ fn night_palette(mut look: ResMut<TerrainLook>) {
 
 `TerrainLook::detail` scales the ground's grain and bump (1 is the crate's own, 0 none; the route grain follows) and `TerrainLook::finest_m` tells the band limit how wide one screen pixel is on the ground, so a fixed orthographic zoom whose pixels are wider than the crate's derived footprint can drop the octaves it cannot resolve instead of drawing them as speckle. Both are uniform writes, like the tint.
 
+**Saving the ground.** `TerrainSetup` is a `Terrain` as plain data (a procedural preset, level ground, or a height map named by path) and `SurfaceSetup` is the nine settings resources of hydrology, erosion, snow, wetness, water, waves, rocks, dust and trails as one value. With the `serde` feature both read and write any serde format, absent fields take their defaults and an unknown field is an error. `validate()` names the field that broke its range, `SurfaceSetup::apply_to_world` writes only the settings that differ (an unchanged file reloaded does not rebuild the rocks), and `TerrainSetup::terrain` loads a height map as the terrain needs it (linear, one channel). A `Terrain` is built once when it spawns, so a changed terrain setup means spawning a new entity.
+
+```rust
+# use bevy::prelude::*;
+# use bevy_elements::{SurfaceSetup, TerrainSetup};
+fn load_level(world: &mut World) {
+    let mut surface = SurfaceSetup::default();
+    surface.snow.drift = false;
+    surface.rocks.seed = 7;
+    if let Err(e) = surface.apply_to_world(world) {
+        error!("bad surface setup: {e}");
+    }
+    let terrain = TerrainSetup::default().terrain(world.resource::<AssetServer>());
+    if let Ok(terrain) = terrain {
+        world.spawn(terrain);
+    }
+}
+```
+
 ### Ground cover
 
 `GroundCoverPlugin` keeps two maps on the `Terrain`'s grid, stepped on game time (the `WorldClock`) at most 20 times a second after hydrology's substeps. **Snow** is a depth and a water equivalent per cell: it accumulates at the cell's own rain–snow split (the lapse rate makes ridges snowier than valleys), keeps less on slopes between 35° and 55° and none under a `PrecipitationBlocker` (the roof's shelter follows the slanted fall of the rain or snow), settles from 100 toward 300 kg/m³ with a 3-day time constant, drifts downwind above 5 m/s (a flux that grows with the cube of the excess, deposited where the wind slows in the lee), is smoothed over a few cells, and melts at 4 mm of water per °C per day, every millimetre arriving in the `water` layer. **Wetness** follows rain and evaporation; the terrain and ground materials shade snow, wet darkening and a porous sheen, and puddles with ripples. On the terrain the grass is a canopy whose wax beads the rain: a wet meadow deepens its green by `bevy_flora`'s wet-leaf rule (saturation × 1.25, brightness kept) and does not gloss, and only the soil, sand, rock and scree between darken and shine. Rain rings on a live terrain only where water stands at least `WetnessSettings::puddle_min_m` deep (`docs/research/wet-ground.md`).
