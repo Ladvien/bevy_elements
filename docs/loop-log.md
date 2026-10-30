@@ -5372,3 +5372,4 @@ Host: the Mac (no `big`, no captures, no benchmark). Issues read through the API
 3. The sea film at grazing angles should reach the sky's colour at dusk.
 4. bevy_emerge #99 remainder: a CPU read of a whole heightfield for saving (`TerrainState` readback of bedrock) and a stroke-undo helper (inverse of a stroke for Raise/Lower).
 5. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
+- Published: https://crates.io/crates/bevy_elements/0.7.3, tag v0.7.3 (additive, patch).
