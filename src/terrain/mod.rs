@@ -16,6 +16,7 @@ mod gpu_tests;
 pub(crate) mod lod;
 mod material;
 pub(crate) mod model;
+mod sculpt;
 mod textures;
 
 use std::collections::HashMap;
@@ -49,6 +50,7 @@ pub use material::{
 pub(crate) use material::{
     NO_TERRAIN, insert_placeholder, lod_centre_uniform, lod_uniform, shadow_inputs,
 };
+pub use sculpt::{DEFAULT_SCULPT_HARDNESS, SculptKind, SculptTerrain, sculpt_weight};
 use model::{
     F_HALF, GAIN, LACUNARITY, LEAF_CELLS, OCTAVE_ROTATION, R_LOW, R_SPAN, octave_count,
     resolve_resolution, seed_mix,
@@ -353,6 +355,13 @@ pub(crate) struct TerrainGpu {
     pub packed: Arc<std::sync::atomic::AtomicU64>,
     /// Set by the render world once the generator has run.
     pub generated: Arc<std::sync::atomic::AtomicBool>,
+    /// The brush stroke the render world runs once, at the head of the frame's kernels, while
+    /// `stroke_epoch` is ahead of `stroked`.
+    pub stroke: Option<sculpt::SculptParamsGpu>,
+    /// Counts the strokes handed to the render world.
+    pub stroke_epoch: u64,
+    /// The `stroke_epoch` the render world last ran.
+    pub stroked: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// Entities per patch pool: the measured worst case of the selection (187 on flat Ultra, 133 at
@@ -440,6 +449,7 @@ impl Plugin for TerrainPlugin {
         embedded_asset!(app, "heightmap.wesl");
         embedded_asset!(app, "pack.wesl");
         embedded_asset!(app, "flow.wesl");
+        embedded_asset!(app, "sculpt.wesl");
         embedded_asset!(app, "render.wesl");
         embedded_asset!(app, "ground.wesl");
         // The ground's detail textures' hex-tiling, imported by `render.wesl`.
@@ -448,12 +458,19 @@ impl Plugin for TerrainPlugin {
             MaterialPlugin::<TerrainMaterial>::default(),
             MaterialPlugin::<GroundMaterial>::default(),
         ))
+        .add_message::<SculptTerrain>()
+        .init_resource::<sculpt::SculptQueue>()
         .init_resource::<TerrainRuntime>()
         .init_resource::<textures::GroundTexturePack>()
         .init_resource::<TerrainLook>()
         .add_systems(
             Update,
-            (ensure_terrain, update_lod_centre).in_set(ElementsSystems::Simulation),
+            (
+                ensure_terrain,
+                sculpt::apply_sculpts.after(ensure_terrain),
+                update_lod_centre,
+            )
+                .in_set(ElementsSystems::Simulation),
         )
         .add_systems(
             Update,
@@ -670,6 +687,9 @@ fn ensure_terrain(
         changes: 1,
         packed: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         generated: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        stroke: None,
+        stroke_epoch: 0,
+        stroked: Arc::new(std::sync::atomic::AtomicU64::new(0)),
     });
     let cells_handle = new_state.cells.clone();
     commands.insert_resource(new_state);
