@@ -461,16 +461,6 @@ pub(crate) fn sky_clear_gain(state: &SunState, cloud: CloudLight) -> f32 {
     }
 }
 
-/// Factor on the sun's and moon's light: with the cloud shadow map, the Kasten & Czeplak overcast
-/// floor with the obscuration measured, `0.25 + 0.75 · T̄` (T̄ the camera's mean direct
-/// transmittance); without [`CloudShadows`], the cover-only [`cloud_transmission`].
-pub(crate) fn sky_dimming(cover: f32, shadows: Option<&CloudShadows>) -> f32 {
-    match shadows {
-        Some(shadows) => 0.25 + 0.75 * shadows.camera_transmittance.clamp(0.0, 1.0),
-        None => cloud_transmission(cover),
-    }
-}
-
 fn light_transform(toward: Vec3) -> Transform {
     let up = if toward.y.abs() > 0.999 {
         Vec3::Z
@@ -1410,116 +1400,6 @@ mod tests {
         // Under overcast the glow is hidden and the illuminance meters again.
         let (lux, glow) = target(-0.5, 1.0);
         assert!(glow < lux, "{glow} against {lux}");
-    }
-
-    fn shadows(camera_transmittance: f32) -> CloudShadows {
-        CloudShadows {
-            map: Handle::default(),
-            origin: Vec2::ZERO,
-            extent: 8000.0,
-            light_direction: Vec3::Y,
-            camera_transmittance,
-        }
-    }
-
-    /// Run `update_sky` once at `hour` on 2026-06-21 and return the state, the frame, the sun's
-    /// and the moon's `DirectionalLight::illuminance`.
-    fn run_sky(
-        hour: f64,
-        cover: f32,
-        shadows: Option<CloudShadows>,
-    ) -> (SunState, CelestialFrame, f32, f32) {
-        let mut world = World::new();
-        world.insert_resource(WorldClock {
-            date: CivilDate::new(2026, 6, 21),
-            hour,
-            ..default()
-        });
-        world.insert_resource(GeoLocation::default());
-        world.insert_resource(Weather {
-            cloud_cover: cover,
-            ..default()
-        });
-        world.insert_resource(SunState::default());
-        world.insert_resource(CelestialFrame::default());
-        if let Some(shadows) = shadows {
-            world.insert_resource(shadows);
-        }
-        let sun = world
-            .spawn((Sun, DirectionalLight::default(), Transform::default()))
-            .id();
-        let moon = world
-            .spawn((Moon, DirectionalLight::default(), Transform::default()))
-            .id();
-        assert!(world.run_system_once(update_sky).is_ok());
-        let state = *world.resource::<SunState>();
-        let frame = *world.resource::<CelestialFrame>();
-        let lux_of = |entity| {
-            world
-                .get::<DirectionalLight>(entity)
-                .map_or(f32::NAN, |light| light.illuminance)
-        };
-        let (sun_lux, moon_lux) = (lux_of(sun), lux_of(moon));
-        (state, frame, sun_lux, moon_lux)
-    }
-
-    fn close(a: f32, b: f32) -> bool {
-        (a - b).abs() <= 1e-3 * b.abs().max(1e-9)
-    }
-
-    #[test]
-    fn cloud_shadow_transmittance_dims_the_sun_and_moon() {
-        let cover = 0.5;
-        // A moon-up hour, found with the same ephemeris the system uses.
-        let moon_hour = (0..24)
-            .map(f64::from)
-            .find(|&h| run_sky(h, cover, None).0.moon_altitude_deg > MOON_OFF_DEG);
-        assert!(
-            moon_hour.is_some(),
-            "the moon is up at some hour of the day"
-        );
-        let moon_hour = moon_hour.unwrap_or(0.0);
-
-        for (t, factor) in [(1.0, 1.0), (0.5, 0.625), (0.0, 0.25)] {
-            let (state, _, sun_lux, _) = run_sky(12.0, cover, Some(shadows(t)));
-            assert!(state.altitude_deg > SUN_OFF_DEG);
-            assert!(
-                close(sun_lux, lux::RAW_SUNLIGHT * factor),
-                "sun T={t}: {sun_lux}"
-            );
-
-            let (state, frame, _, moon_lux) = run_sky(moon_hour, cover, Some(shadows(t)));
-            assert!(state.moon_altitude_deg > MOON_OFF_DEG);
-            assert!(frame.moon_lux > 0.0);
-            assert!(
-                close(moon_lux, frame.moon_lux * factor),
-                "moon T={t}: {moon_lux}"
-            );
-
-            let dimmed = scene_illuminance(
-                &state,
-                frame.moon_lux,
-                sky_dimming(cover, Some(&shadows(t))),
-            );
-            let open = scene_illuminance(&state, frame.moon_lux, 1.0) - ILLUMINANCE_FLOOR_LUX;
-            assert!(close(dimmed, open * factor + ILLUMINANCE_FLOOR_LUX));
-        }
-
-        // Without the cloud shadow map the cover-only factor stays.
-        let (_, _, sun_lux, _) = run_sky(12.0, cover, None);
-        assert!(close(
-            sun_lux,
-            lux::RAW_SUNLIGHT * cloud_transmission(cover)
-        ));
-        let (_, frame, _, moon_lux) = run_sky(moon_hour, cover, None);
-        assert!(close(moon_lux, frame.moon_lux * cloud_transmission(cover)));
-
-        // Before the first readback the camera transmittance is `1 − cover^3.4`: same factor.
-        for c in [0.0f32, 0.3, 0.7, 1.0] {
-            let s = shadows(1.0 - c.powf(3.4));
-            assert!((sky_dimming(c, Some(&s)) - cloud_transmission(c)).abs() < 1e-6);
-            assert_eq!(sky_dimming(c, None), cloud_transmission(c));
-        }
     }
 }
 
