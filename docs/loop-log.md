@@ -5511,3 +5511,22 @@ Host: the Mac (Metal offscreen renders dumped as PPM; no GPU timestamps, so no b
 3. A shower that really stands in the weather map's cell (`PrecipitationBlocker`-aware curtain, the cloud hiding a nearer bow).
 4. Night: the horizon sky's warm residual against the sea's blue fill is a taste call; revisit only with a moonless-night fixture.
 5. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
+
+## Iteration 101 — 2026-10-30 — SurfaceCover (#49)
+
+Host: the Mac (Metal; no captures, no GPU timestamps, so no benchmark). Issues read through the API: #49 (consumer:bevy_emerge, new, taken: oldest consumer item), #50 (enhancement, heat haze, not reached; later than the consumer item), #46/#44/#43 (delivered, awaiting adoption). No parked branch. Ranked: (1) #49; (2) #50; (3) rainbow in the sea reflection; (4) #41 remainder.
+
+- **Change**: `SurfaceCover { snow, wetness }` of `CoverBand { amount, max_slope_deg, slope_soft_deg, min/max_height_m, height_soft_m }` (serde, defaulted fields); `WeatheredExtension::with_cover` / `set_cover` (hot-reload through `Assets::get_mut`), `SurfaceCover::snow_at` / `wetness_at` on the CPU. Shader: four `vec4`s and a flag in the existing `WeatheredParams` uniform, `band_coverage` replaces the weather's snow and base wetness while a cover is set (rain streaks still follow the weather). Note: `docs/research/surface-cover.md`.
+- **Assumed decision (owner may override)**: cover lives on the material, not as a component on the volume (chunk meshes take the host's material); absolute amounts replace the weather. Voxel snow slab geometry still follows the weather (not done).
+- **Proof**: unit tests (wet sphere full on top, dry beneath; snow shed curve; height window; serde round trip) and `tests/gpu_weathered.rs::a_surface_cover_weathers_a_dry_scene` (cover snow/wet pixels equal the plain material within 1 level in dry weather; snow line and slope limit bare the top; `None` restores dry). Gates: `cargo test --release` all, clippy `-D warnings`, rustdoc `-D warnings`, wasm32 lib, `tools/wesl-check`, `gpu_weathered` (6).
+- **Verdict**: no new look beyond reusing the weather's own shading (pixel-equal to it), so no visual verdict claimed beyond the pixel tests.
+- **Not released**: v0.7.6 under 6 h old; CHANGELOG `[Unreleased]`.
+- **Cleanup**: no worktree or scratch made.
+
+### Next five items, ranked
+
+1. #50 heat haze (screen-space refraction above fires).
+2. Voxel snow slab following a `SurfaceCover` snow band.
+3. A rainbow in the still sea's reflection and over terrain; fogbow, moonbow.
+4. Capture the bow on `big` and measure its cost.
+5. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
