@@ -11,6 +11,7 @@ mod flash;
 mod flora;
 mod fog;
 mod gpu;
+mod heat_haze;
 mod hydrology;
 mod lightning;
 mod paths;
@@ -82,6 +83,9 @@ pub use fog::{
 pub use clouds::{
     CloudLayer, CloudPlugin, CloudQuality, CloudShadows, CloudWeatherMap, RainbowSettings,
 };
+
+// Heat haze: the shimmer of the air above a fire.
+pub use heat_haze::{HeatHazePlugin, HeatHazeSettings, HeatSource, MAX_HEAT_SOURCES};
 
 // Lightning and thunder; `LightningFlash` is shared with the cloud and precipitation passes.
 pub use flash::LightningFlash;

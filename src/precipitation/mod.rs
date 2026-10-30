@@ -17,6 +17,8 @@ mod look;
 pub(crate) mod model;
 
 pub use look::PrecipitationLook;
+/// The precipitation's draw pass, which passes that read the scene colour after it order after.
+pub(crate) use gpu::draw as draw_precipitation;
 
 use bevy::asset::embedded_asset;
 use bevy::color::Luminance;
