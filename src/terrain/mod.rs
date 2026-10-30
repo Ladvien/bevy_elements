@@ -50,7 +50,7 @@ pub use material::{
 pub(crate) use material::{
     NO_TERRAIN, insert_placeholder, lod_centre_uniform, lod_uniform, shadow_inputs,
 };
-pub use sculpt::{DEFAULT_SCULPT_HARDNESS, SculptKind, SculptTerrain, sculpt_weight};
+pub use sculpt::{DEFAULT_SCULPT_HARDNESS, RestoreTerrain, SculptKind, SculptTerrain, sculpt_weight};
 use model::{
     F_HALF, GAIN, LACUNARITY, LEAF_CELLS, OCTAVE_ROTATION, R_LOW, R_SPAN, octave_count,
     resolve_resolution, seed_mix,
@@ -443,6 +443,13 @@ pub(crate) struct TerrainGpu {
     pub stroke_epoch: u64,
     /// The `stroke_epoch` the render world last ran.
     pub stroked: Arc<std::sync::atomic::AtomicU64>,
+    /// The region the render world writes into the bedrock and sediment layers once, before the
+    /// frame's kernels, while `restore_epoch` is ahead of `restored`.
+    pub restore: Option<sculpt::RestoreGpu>,
+    /// Counts the restores handed to the render world.
+    pub restore_epoch: u64,
+    /// The `restore_epoch` the render world last wrote.
+    pub restored: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// Entities per patch pool: the measured worst case of the selection (187 on flat Ultra, 133 at
@@ -540,6 +547,7 @@ impl Plugin for TerrainPlugin {
             MaterialPlugin::<GroundMaterial>::default(),
         ))
         .add_message::<SculptTerrain>()
+        .add_message::<RestoreTerrain>()
         .init_resource::<sculpt::SculptQueue>()
         .init_resource::<TerrainRuntime>()
         .init_resource::<textures::GroundTexturePack>()
@@ -771,6 +779,9 @@ fn ensure_terrain(
         stroke: None,
         stroke_epoch: 0,
         stroked: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        restore: None,
+        restore_epoch: 0,
+        restored: Arc::new(std::sync::atomic::AtomicU64::new(0)),
     });
     let cells_handle = new_state.cells.clone();
     commands.insert_resource(new_state);
