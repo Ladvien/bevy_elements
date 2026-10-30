@@ -60,6 +60,7 @@ const MODULES: &[&str] = &[
     "bevy_elements::dust::surface_wind",
     "bevy_elements::fog::density",
     "bevy_elements::grid",
+    "bevy_elements::heat_haze::haze",
     "bevy_elements::hydrology::readback",
     "bevy_elements::hydrology::source_map",
     "bevy_elements::hydrology::substep",
