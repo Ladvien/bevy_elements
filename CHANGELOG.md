@@ -1,4 +1,7 @@
 ## [Unreleased]
+### Changed
+
+- **The night sea's horizon is closer to the sky above it.** The night fill's lift now rises from 20° to 60° over the horizon (was 8° to 40°) and keeps 5 % of itself at the horizon (was 15 %), so a sea at a grazing view reflects a lobe that no longer reaches the lifted sky: the sea at midnight is 2.3x the sky just over the horizon (was 4.1x). A horizontal surface's night irradiance is unchanged (3.26e-3 against 3.29e-3); a vertical one gets about 0.50 of the uniform lift (was 0.69). `docs/research/night-sky-light.md` Deviation 6.
 ### Added
 
 - **`Environment::terrain_normal` and `terrain_slope_deg`.** The ground's unit normal and slope at a world XZ, from the one gradient the trail kernel and `sinkage_at` already use (`docs/research/terrain-normal.md`); unit-free, so a foot world answers as a metre world. `None` off the terrain and before the first readback.

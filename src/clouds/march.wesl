@@ -590,15 +590,18 @@ fn probe_ray(
     return finish_ray(r, aerial_along(dir, r.depth_sum / r.depth_weight, o_r, sky), veil);
 }
 
-/// Sines of the elevations over which the night fill's lift fades in from the horizon (8° and 40°).
-const NIGHT_LIFT_FROM: f32 = 0.13917;
-const NIGHT_LIFT_TO: f32 = 0.64279;
+/// Sines of the elevations over which the night fill's lift fades in from the horizon (20° and
+/// 60°). The specular lobe of a grazing sea reaches the lifted sky from about 10° over it, so a
+/// ramp from 8° to 40° lit the sea's horizon 4.1x over the sky (2.3x with this one).
+const NIGHT_LIFT_FROM: f32 = 0.34202;
+const NIGHT_LIFT_TO: f32 = 0.86603;
 /// Keeps a horizontal surface's irradiance what the uniform lift gave: `1 / (2 ∫ w s ds)` for the
 /// ramp above, computed numerically.
-const NIGHT_LIFT_NORMALISE: f32 = 1.19839;
-/// The drawn night sky's luminance at the horizon over its zenith's (3.2e-4 over 3.3e-3 linear,
-/// measured at midnight, clear).
-const NIGHT_HORIZON_RATIO: f32 = 0.15;
+const NIGHT_LIFT_NORMALISE: f32 = 1.608;
+/// The night fill's share left at the horizon, under the drawn sky's own luminance there over its
+/// zenith's (3.2e-4 over 3.3e-3 linear, measured at midnight, clear): the lobe of a reflection
+/// carries what the ramp does not hold down.
+const NIGHT_HORIZON_RATIO: f32 = 0.05;
 
 /// The night sky's light in the cube toward a direction of elevation sine `up`, as a multiple of
 /// the night sky's radiance colour. Bevy multiplies the cube by the camera's exposure, so a value
