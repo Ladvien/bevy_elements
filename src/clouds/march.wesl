@@ -591,14 +591,14 @@ fn probe_ray(
 }
 
 /// Sines of the elevations over which the night fill's lift fades in from the horizon (8° and 40°).
-const NIGHT_LIFT_FROM: f32 = 0.13917;
-const NIGHT_LIFT_TO: f32 = 0.64279;
+const NIGHT_LIFT_FROM: f32 = 0.34202;
+const NIGHT_LIFT_TO: f32 = 0.86603;
 /// Keeps a horizontal surface's irradiance what the uniform lift gave: `1 / (2 ∫ w s ds)` for the
 /// ramp above, computed numerically.
-const NIGHT_LIFT_NORMALISE: f32 = 1.19839;
+const NIGHT_LIFT_NORMALISE: f32 = 1.608;
 /// The drawn night sky's luminance at the horizon over its zenith's (3.2e-4 over 3.3e-3 linear,
 /// measured at midnight, clear).
-const NIGHT_HORIZON_RATIO: f32 = 0.15;
+const NIGHT_HORIZON_RATIO: f32 = 0.05;
 
 /// The night sky's light in the cube toward a direction of elevation sine `up`, as a multiple of
 /// the night sky's radiance colour. Bevy multiplies the cube by the camera's exposure, so a value
