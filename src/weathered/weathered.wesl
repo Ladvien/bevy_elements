@@ -50,9 +50,32 @@ struct WeatheredParams {
     trails: f32,
     // The stone grain's feature size, m; 0 for none.
     grain_m: f32,
+    // 1 when the material wears a `SurfaceCover` (its snow and wet bands replace the scene's).
+    cover: f32,
     // A colour grade of the base colour: xyz tint, w saturation (the identity by default; the
     // crate's scattered rocks carry `TerrainLook`, docs/research/terrain-look.md).
     look: vec4<f32>,
+    // The cover's bands (src/weathered/cover.rs `CoverBand::packed`): [amount, max slope deg,
+    // slope soft deg, height soft m] and [min height, max height, 0, 0].
+    snow_band: array<vec4<f32>, 2>,
+    wet_band: array<vec4<f32>, 2>,
+}
+
+/// `CoverBand::coverage` of src/weathered/cover.rs: a smooth ramp of `value` over `soft`, a step at 0.
+fn cover_ramp(value: f32, soft: f32) -> f32 {
+    if soft > 0.0 {
+        let t = clamp(value / soft, 0.0, 1.0);
+        return t * t * (3.0 - 2.0 * t);
+    }
+    return select(0.0, 1.0, value >= 0.0);
+}
+
+fn band_coverage(band: array<vec4<f32>, 2>, normal: vec3<f32>, height_m: f32) -> f32 {
+    let a = band[0];
+    let b = band[1];
+    let angle = degrees(acos(clamp(normal.y, -1.0, 1.0)));
+    return clamp(a.x, 0.0, 1.0) * cover_ramp(a.y - angle, a.z)
+        * cover_ramp(height_m - b.x, a.w) * cover_ramp(b.y - height_m, a.w);
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> params: WeatheredParams;
@@ -175,7 +198,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         graded(pbr_input.material.base_color.rgb, params.look),
         pbr_input.material.base_color.a,
     );
-    var wet = g.weather.x * exposure;
+    let covered = params.cover > 0.5;
+    var wet = select(g.weather.x, band_coverage(params.wet_band, n, p.y), covered) * exposure;
     let rain = g.weather.z * exposure;
     if rain > 0.0 {
         // The streak noise is in metres; the fragment's world position is in world units.
@@ -185,7 +209,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // the snow cover is the authority on unpressed ground).
     let snow_depth = g.trail_light.w;
     let bared = select(0.0, smoothstep(snow_depth - 0.02, snow_depth, pressed), pressed > 0.0);
-    let snow = mesh_snow_cover(g.weather.y, n.y) * exposure * (1.0 - bared);
+    let snow_base = select(
+        mesh_snow_cover(g.weather.y, n.y),
+        band_coverage(params.snow_band, n, p.y),
+        covered,
+    );
+    let snow = snow_base * exposure * (1.0 - bared);
     // Ruts in saturated ground hold water on their floors (trails.md Deviation 6).
     let puddle = smoothstep(0.6, 1.0, wet) * smoothstep(0.01, 0.04, pressed)
         * (1.0 - smoothstep(0.3, 0.8, length(grad))) * (1.0 - snow);
