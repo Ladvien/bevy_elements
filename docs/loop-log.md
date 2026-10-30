@@ -5406,3 +5406,19 @@ Host: the Mac (no captures, no benchmark). Issues read through the API: #46, #44
 4. The sea film at grazing angles should reach the sky's colour at dusk.
 5. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
 - Published: https://crates.io/crates/bevy_elements/0.7.5, tag v0.7.5 (additive, patch). Cleanup: nothing created outside the clone.
+
+## Iteration 95 — 2026-10-30 — ProceduralTerrain::sample_surface (consumer #48, bevy_emerge #99)
+
+Host: the Mac (no captures, no benchmark; not a rendering change, no visual verdict claimed). Issues read through the API: #48 (consumer, picked: oldest consumer, no bug issue open), #46, #44, #43 (not bugs, delivered/partial earlier; skipped for the consumer). No parked branch.
+
+- **Change**: `ProceduralTerrain::sample_surface(size, cell_m) -> Vec<f32>`, the CPU generator, public and app-free. The test mirror's generator moved to `terrain/model/surface.rs` and the lattice hash and `perlin3_d` to `gpu/perlin.rs` (non-test); the test mirrors re-export them, so every existing comparison uses the same code. No corpus source (nothing new modelled), recorded in `docs/research/terrain-surface-cpu.md`. Built general: no editor names.
+- **Proof**: `tests/terrain_surface.rs` (4 tests: per-seed determinism and seed difference for the four presets, relief bounds, row-major layout and grid-independence of a cell, empty on zero size or bad cell size); they did not compile before (no such method). The GPU test `the_gpu_generator_matches_the_cpu_mirror` now calls the public function and passes on Metal. Gates: `cargo test --release` (all green), doctests, clippy `-D warnings --all-targets --all-features`, rustdoc `-D warnings`, wasm32 lib. The other GPU suites were not rerun: no kernel touched.
+- **Cleanup**: no worktree made.
+
+### Next five items, ranked
+
+1. Restore sediment too (second image + kernel) and a region-restore message for undoing Smooth/Flatten/Noise strokes.
+2. Capture a sculpted hill (aerial and grazing) on `big` and judge the rim.
+3. Night: the sea's horizon step (4.1x) and the near rows' olive tint.
+4. The sea film at grazing angles should reach the sky's colour at dusk.
+5. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.

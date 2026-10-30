@@ -249,6 +249,8 @@ impl TerrainSnapshot {
     }
 }
 
+pub(crate) mod surface;
+
 #[cfg(test)]
 pub(crate) mod mirror;
 
