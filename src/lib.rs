@@ -90,10 +90,10 @@ pub use lightning::{
 
 // Terrain.
 pub use terrain::{
-    GroundExtension, GroundLayerTextures, GroundMaterial, GroundParams, ProceduralTerrain, Terrain,
-    TerrainExtension, TerrainExtensionKey, TerrainGrid, TerrainLook, TerrainMaterial,
-    TerrainMaterialParams, TerrainPlugin, TerrainRender, TerrainSnapshot, TerrainSource,
-    TerrainState, TerrainTextures,
+    DEFAULT_SCULPT_HARDNESS, GroundExtension, GroundLayerTextures, GroundMaterial, GroundParams,
+    ProceduralTerrain, SculptKind, SculptTerrain, Terrain, TerrainExtension, TerrainExtensionKey,
+    TerrainGrid, TerrainLook, TerrainMaterial, TerrainMaterialParams, TerrainPlugin, TerrainRender,
+    TerrainSnapshot, TerrainSource, TerrainState, TerrainTextures, sculpt_weight,
 };
 
 // Aeolian transport.
