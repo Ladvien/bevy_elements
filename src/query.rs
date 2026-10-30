@@ -175,6 +175,14 @@ impl Environment<'_> {
             .map(|h| self.units.world(h))
     }
 
+    /// The terrain's heights at the last readback, as a [`TerrainSnapshot`] in the metre frame:
+    /// what a host saves to keep a sculpted ground, and
+    /// [`TerrainSnapshot::terrain`] respawns. `None` when there is no terrain or before the
+    /// first readback. A cheap clone (the heights are shared).
+    pub fn terrain_snapshot(&self) -> Option<TerrainSnapshot> {
+        self.snapshot.terrain.clone()
+    }
+
     /// [`terrain_height`](Self::terrain_height) on the surface the level-0 patches draw: the
     /// same taps, interpolated over the mesh's triangles (split along `(1, 0)–(0, 1)`) instead of
     /// bilinearly. The two agree at every cell centre and differ inside a quad by at most a
