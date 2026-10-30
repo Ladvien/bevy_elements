@@ -6,12 +6,13 @@
 //! The flames are stand-ins (additive emissive cones sized with [`HeatSource::flame_height_m`]
 //! and a point light); a game draws its own and puts a `HeatSource` on them. A wooden post stands
 //! between the camera and the campfire: the haze bends what is behind the plume, never the post.
-//! `ELEMENTS_HEAT_GAIN` sets [`HeatHazeSettings::gain`] (default 10; 0 switches the haze off),
+//! `ELEMENTS_HEAT_GAIN` sets [`HeatHazeSettings::gain`] (default 20; 0 switches the haze off),
 //! `ELEMENTS_HOUR` holds an hour (default 13), `ELEMENTS_PRESET` picks the weather (default
 //! `Clear`), `ELEMENTS_WIND=6` holds the wind at that many m/s at 10 m, blowing toward +x.
-//! `ELEMENTS_EYE=x,y,z` places the camera `y` metres above the ground at `x,z` (default `0,1.7,7`)
+//! `ELEMENTS_EYE=x,y,z` places the camera `y` metres above the ground at `x,z` (default
+//! `0.5,1.2,6.5`, low, so the plume rises against the hills and the sky)
 //! and `ELEMENTS_LOOK=x,y,z` aims it at a point `y` metres above the ground (default
-//! `0,1.6,-20`). `ELEMENTS_SEED` picks the hills (default 42). `ELEMENTS_FRAMES`, `ELEMENTS_SHOT`,
+//! `0,2,-20`). `ELEMENTS_SEED` picks the hills (default 42). `ELEMENTS_FRAMES`, `ELEMENTS_SHOT`,
 //! `ELEMENTS_SHOT_DIR` and `ELEMENTS_OFFSCREEN` work as in the other examples.
 
 mod common;
@@ -54,8 +55,9 @@ const FIRES: [(Vec2, f32, HeatSource); 3] = [
     ),
 ];
 
-/// A post between the camera and the campfire, world XZ, m.
-const POST: Vec2 = Vec2::new(0.45, 3.2);
+/// A post between the camera and the campfire's plume (which a breeze leans toward +x), world
+/// XZ, m.
+const POST: Vec2 = Vec2::new(0.6, 3.5);
 
 fn env_f32(name: &str, default: f32) -> f32 {
     std::env::var(name)
@@ -114,7 +116,7 @@ fn main() {
         .insert_resource(clock)
         .insert_resource(Climate::temperate())
         .insert_resource(HeatHazeSettings {
-            gain: env_f32("ELEMENTS_HEAT_GAIN", 10.0),
+            gain: env_f32("ELEMENTS_HEAT_GAIN", HeatHazeSettings::default().gain),
         })
         .insert_resource(ErosionSettings {
             enabled: false,
@@ -125,8 +127,8 @@ fn main() {
             wind: std::env::var("ELEMENTS_WIND")
                 .ok()
                 .and_then(|v| v.parse().ok()),
-            eye: env_vec3("ELEMENTS_EYE", Vec3::new(0.0, 1.7, 7.0)),
-            look: env_vec3("ELEMENTS_LOOK", Vec3::new(0.0, 1.6, -20.0)),
+            eye: env_vec3("ELEMENTS_EYE", Vec3::new(0.5, 1.2, 6.5)),
+            look: env_vec3("ELEMENTS_LOOK", Vec3::new(0.0, 2.0, -20.0)),
             seed: env_f32("ELEMENTS_SEED", 42.0) as u64,
         })
         .add_systems(Startup, setup)
@@ -158,10 +160,10 @@ fn setup(
     ));
 
     let u = units();
+    // An emissive flame in nits, so it reads at a daylight exposure and blooms at night.
     let flame = materials.add(StandardMaterial {
-        base_color: Color::linear_rgba(1.0, 0.45, 0.12, 0.85),
-        emissive: LinearRgba::rgb(60.0, 22.0, 5.0),
-        unlit: true,
+        base_color: Color::BLACK,
+        emissive: LinearRgba::rgb(12_000.0, 4_000.0, 700.0),
         alpha_mode: AlphaMode::Add,
         ..default()
     });
