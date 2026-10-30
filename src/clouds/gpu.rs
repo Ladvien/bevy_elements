@@ -276,6 +276,10 @@ fn init_pipelines(
                 uniform_buffer::<CloudParams>(false),
                 float_2d!(),
                 texture_depth_2d(),
+                float_2d!(),
+                float_2d!(),
+                sampler(SamplerBindingType::Filtering),
+                sampler(SamplerBindingType::Filtering),
             ),
         ),
     );
@@ -451,6 +455,7 @@ fn prepare_views(
         Some(history_a),
         Some(history_b),
         Some(sky_probe),
+        Some(bow_table),
     ) = (
         images.get(&cloud.base),
         images.get(&cloud.detail),
@@ -459,6 +464,7 @@ fn prepare_views(
         images.get(&images_view.history[0]),
         images.get(&images_view.history[1]),
         images.get(&cloud.sky_probe),
+        images.get(&cloud.bow_table),
     )
     else {
         return;
@@ -522,6 +528,10 @@ fn prepare_views(
                 &uniform.0,
                 &write.texture_view,
                 depth,
+                &weather.texture_view,
+                &bow_table.texture_view,
+                &pipelines.repeat,
+                &pipelines.clamp,
             )),
         );
         let probe_group = probe_bind_group(
