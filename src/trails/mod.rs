@@ -151,6 +151,9 @@ pub struct TrailSettings {
     /// wetness 0.5 and 3.4 cm into dry sand. Snow deeper than 1 cm always presses. The test is
     /// per texel on the ground the kernel resolves, and a moving imprint is judged by its depth
     /// there, not by whether it moved. Default `0.0`: everything presses, as before.
+    ///
+    /// To test a threshold before walking, ask [`Environment::sinkage_at`](crate::Environment::sinkage_at)
+    /// for the contact's depth at a point: it is the depth this test compares with `min_depth_m`.
     pub min_depth_m: f32,
 }
 
