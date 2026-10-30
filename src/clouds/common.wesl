@@ -63,9 +63,13 @@ struct CloudParams {
     /// maximum corner.
     sea_box: vec4<f32>,
     /// The rainbow (`docs/research/rainbow.md`): xyz the sun's illuminance at the camera times the
-    /// settings' strength, lx. w: the phase-function table's row for the shower's median drop, or
+    /// settings' strength, lx. w: the phase-function table's row for the rain's median drop, or
     /// −1 for no bow.
     bow: vec4<f32>,
+    /// The rainbow's curtain, the extinctions where the weather map's green is 1, m⁻¹: x the
+    /// rain's (the liquid share of its 25 mm/h), y the snow's; a texel of green `g` stands for
+    /// `x · g^0.68` and `y · g`.
+    shower: vec4<f32>,
 }
 
 const PI: f32 = 3.14159265358979;
