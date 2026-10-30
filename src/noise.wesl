@@ -228,47 +228,6 @@ fn fbm3_periodic(p: vec3<f32>, period: i32, octaves: u32) -> f32 {
     return sum / max(norm, 1e-6);
 }
 
-/// Gradient (Perlin) noise on a lattice that wraps every `period` cells on every axis, so the
-/// result tiles with period `period` (in lattice units). `period` must be a power of two no
-/// larger than NOISE_PERIOD. Roughly in [-1, 1], quintic interpolation, same gradients as
-/// `perlin3` (a cell's gradient is `lattice_gradient` of the wrapped cell).
-fn perlin3_periodic(p: vec3<f32>, period: i32) -> f32 {
-    let i = vec3<i32>(floor(p));
-    let f = p - floor(p);
-    let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-    let m = vec3<i32>(period - 1);
-    let va = dot(lattice_gradient(i & m), f);
-    let vb = dot(lattice_gradient((i + vec3<i32>(1, 0, 0)) & m), f - vec3<f32>(1.0, 0.0, 0.0));
-    let vc = dot(lattice_gradient((i + vec3<i32>(0, 1, 0)) & m), f - vec3<f32>(0.0, 1.0, 0.0));
-    let vd = dot(lattice_gradient((i + vec3<i32>(1, 1, 0)) & m), f - vec3<f32>(1.0, 1.0, 0.0));
-    let ve = dot(lattice_gradient((i + vec3<i32>(0, 0, 1)) & m), f - vec3<f32>(0.0, 0.0, 1.0));
-    let vf = dot(lattice_gradient((i + vec3<i32>(1, 0, 1)) & m), f - vec3<f32>(1.0, 0.0, 1.0));
-    let vg = dot(lattice_gradient((i + vec3<i32>(0, 1, 1)) & m), f - vec3<f32>(0.0, 1.0, 1.0));
-    let vh = dot(lattice_gradient((i + vec3<i32>(1, 1, 1)) & m), f - vec3<f32>(1.0, 1.0, 1.0));
-    let x0 = mix(mix(va, vb, u.x), mix(vc, vd, u.x), u.y);
-    let x1 = mix(mix(ve, vf, u.x), mix(vg, vh, u.x), u.y);
-    return mix(x0, x1, u.z) * 1.1547;
-}
-
-/// Fractal sum of `octaves` periodic Perlin octaves (lacunarity 2, gain 0.5) that tiles with
-/// `period` lattice units at the base octave, divided by the sum of the amplitudes. Octave `o`
-/// uses lattice period `period · 2^o` and its own whole-cell hash offset.
-fn fbm3_periodic(p: vec3<f32>, period: i32, octaves: u32) -> f32 {
-    var sum = 0.0;
-    var amplitude = 0.5;
-    var norm = 0.0;
-    var q = p;
-    var n = period;
-    for (var o = 0u; o < octaves; o += 1u) {
-        sum += amplitude * perlin3_periodic(q + seed_offset(o + 1u), n);
-        norm += amplitude;
-        amplitude *= 0.5;
-        q = q * 2.0;
-        n = n * 2;
-    }
-    return sum / max(norm, 1e-6);
-}
-
 /// Integer lattice offset that decorrelates octave or component `k` (a different hash seed
 /// without moving the lattice).
 fn seed_offset(k: u32) -> vec3<f32> {
