@@ -199,6 +199,27 @@ impl Environment<'_> {
             .map(|h| self.units.world(h))
     }
 
+    /// Unit upward normal of the terrain's ground at `position` (world XZ), from the gradient
+    /// the trail kernel and the sinkage law use (central differences over ±1 cell of the last
+    /// readback, interpolated bilinearly). It is smooth across cells, so it is the ground's
+    /// tilt, not a facet's; a slope has no unit, so a foot world and a metre world answer
+    /// alike. `None` outside the terrain, with no terrain and before the first readback.
+    pub fn terrain_normal(&self, position: Vec2) -> Option<Vec3> {
+        self.snapshot
+            .terrain
+            .as_ref()
+            .and_then(|t| t.normal(self.xz_to_metres(position)))
+    }
+
+    /// The terrain's slope at `position` (world XZ), degrees from horizontal: the angle of
+    /// [`terrain_normal`](Self::terrain_normal) from +Y. `None` where that is.
+    pub fn terrain_slope_deg(&self, position: Vec2) -> Option<f32> {
+        self.snapshot
+            .terrain
+            .as_ref()
+            .and_then(|t| t.slope_deg(self.xz_to_metres(position)))
+    }
+
     /// [`terrain_height`](Self::terrain_height) in the metre frame: at a metre-frame XZ, in m.
     pub(crate) fn terrain_height_metres(&self, position: Vec2) -> Option<f32> {
         self.snapshot
@@ -773,5 +794,70 @@ mod tests {
             )
         });
         assert_eq!(degenerate, (None, None));
+    }
+    #[test]
+    fn the_ground_answers_its_tilt_as_a_unit_normal_and_a_slope() {
+        let mut w = world(None);
+        let mut plane = flat_terrain();
+        // h = 0.5 x: cell (i, j) is centred at x = i + 0.5.
+        plane.surface = (0..32 * 32)
+            .map(|i| 0.5 * ((i % 32) as f32 + 0.5))
+            .collect();
+        w.resource_mut::<EnvironmentSnapshot>().terrain = Some(plane);
+        let expected = Vec3::new(-0.5, 1.0, 0.0).normalize();
+        // Inside, across a cell border, and on the edge cell (a one-sided difference).
+        for at in [
+            Vec2::new(9.3, 7.7),
+            Vec2::new(16.0, 3.0),
+            Vec2::new(0.2, 5.0),
+            Vec2::new(31.9, 31.9),
+        ] {
+            let n = ask_at(&mut w, at, |e, p| e.terrain_normal(p)).expect("on the map");
+            let slope = ask_at(&mut w, at, |e, p| e.terrain_slope_deg(p)).expect("on the map");
+            assert!((n - expected).length() < 1e-5, "{at}: {n}");
+            assert!((n.length() - 1.0).abs() < 1e-6);
+            assert!(
+                (slope - 0.5f32.atan().to_degrees()).abs() < 1e-4,
+                "{at}: {slope}"
+            );
+            assert!((n.angle_between(Vec3::Y).to_degrees() - slope).abs() < 1e-3);
+        }
+        // Off the grid, and before any readback.
+        assert_eq!(
+            ask_at(&mut w, Vec2::new(-1.0, 4.0), |e, p| e.terrain_normal(p)),
+            None
+        );
+        let mut bare = world(None);
+        assert_eq!(
+            ask_at(&mut bare, Vec2::new(4.0, 4.0), |e, p| e
+                .terrain_slope_deg(p)),
+            None
+        );
+    }
+
+    #[test]
+    fn in_feet_the_ground_has_the_same_tilt_at_the_matching_point() {
+        let mut w = world(None);
+        let mut plane = flat_terrain();
+        plane.surface = (0..32 * 32)
+            .map(|i| 0.5 * ((i % 32) as f32 + 0.5))
+            .collect();
+        w.resource_mut::<EnvironmentSnapshot>().terrain = Some(plane);
+        let metres =
+            ask_at(&mut w, Vec2::new(9.3, 7.7), |e, p| e.terrain_normal(p)).expect("on the map");
+        w.insert_resource(ElementsUnits {
+            units_per_metre: 3.2808,
+        });
+        let feet = ask_at(&mut w, Vec2::new(9.3, 7.7) * 3.2808, |e, p| {
+            e.terrain_normal(p)
+        })
+        .expect("on the map");
+        assert!((metres - feet).length() < 1e-5, "{metres} {feet}");
+    }
+
+    fn ask_at<T: Send + 'static>(world: &mut World, at: Vec2, f: fn(&Environment, Vec2) -> T) -> T {
+        world
+            .run_system_once(move |env: Environment| f(&env, at))
+            .expect("the query system runs")
     }
 }

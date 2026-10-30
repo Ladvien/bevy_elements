@@ -171,11 +171,10 @@ impl TerrainSnapshot {
             .then(|| self.grid.sample(&self.sediment, p))
     }
 
-    /// Surface slope at `p` (metre-frame XZ), degrees: `atan` of the gradient's length, the
-    /// gradient taken by central differences over ±1 cell (one-sided at the edge) at the four
-    /// surrounding cells and interpolated bilinearly, as `terrain_pack` and the trail kernel
-    /// do. `None` outside the grid.
-    pub(crate) fn slope_deg(&self, p: Vec2) -> Option<f32> {
+    /// Surface gradient `(dh/dx, dh/dz)` at `p` (metre-frame XZ), m/m: central differences
+    /// over ±1 cell (one-sided at the edge) at the four surrounding cells, interpolated
+    /// bilinearly, as `terrain_pack` and the trail kernel do. `None` outside the grid.
+    pub(crate) fn gradient(&self, p: Vec2) -> Option<Vec2> {
         if !self.grid.contains(p) {
             return None;
         }
@@ -196,7 +195,19 @@ impl TerrainSnapshot {
         };
         let row0 = gradient(0, 0).lerp(gradient(1, 0), w.x);
         let row1 = gradient(0, 1).lerp(gradient(1, 1), w.x);
-        Some(row0.lerp(row1, w.y).length().atan().to_degrees())
+        Some(row0.lerp(row1, w.y))
+    }
+
+    /// Surface slope at `p` (metre-frame XZ), degrees: `atan` of the [`gradient`](Self::gradient)'s
+    /// length. `None` outside the grid.
+    pub(crate) fn slope_deg(&self, p: Vec2) -> Option<f32> {
+        self.gradient(p).map(|g| g.length().atan().to_degrees())
+    }
+
+    /// Unit upward surface normal at `p` (metre-frame XZ), from the same
+    /// [`gradient`](Self::gradient). `None` outside the grid.
+    pub(crate) fn normal(&self, p: Vec2) -> Option<Vec3> {
+        self.gradient(p).map(|g| Vec3::new(-g.x, 1.0, -g.y).normalize())
     }
 
     /// Where the ray from `origin` along the unit `dir` (metre frame) first meets the ground,
