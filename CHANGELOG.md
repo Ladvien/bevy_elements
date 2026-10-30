@@ -1,4 +1,6 @@
 ## [Unreleased]
+### Added
+- **`RestoreTerrain { snapshot, region_m }`: put a region of the live terrain back as a snapshot held it.** The undo of a Smooth, Flatten or Noise stroke (no `SculptTerrain::inverse`), or of any stroke, without respawning the terrain and so without losing the water, the cover maps or the trails. Cells whose centres lie in the metre-frame `Rect` take the snapshot's bedrock (`surface - sediment`) and sediment back; the rest are untouched. Applied in order with strokes, one edit per frame; the render world writes the rows with `write_buffer` ahead of the pack, bounds and readback kernels (no new kernel). A snapshot from another grid (or the coarser readback above 1024² cells) is dropped with a warning; `validate()` checks the rect. For bevy_emerge #99. `docs/research/terrain-restore.md`.
 
 ## [0.7.6] - 2026-10-30
 ### Added
