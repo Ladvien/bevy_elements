@@ -7,6 +7,9 @@ mod gpu;
 mod gpu_tests;
 #[cfg(test)]
 mod model;
+mod rainbow;
+
+pub use rainbow::RainbowSettings;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -321,6 +324,10 @@ pub(crate) struct CloudParams {
     /// xy: the minimum corner, zw: the maximum corner, of the region (world XZ, m) the sea and
     /// its skirt cover. The composite leaves the pixels whose ray meets the sea there to the water.
     pub sea_box: Vec4,
+    /// The rainbow (`docs/research/rainbow.md`): xyz the sun's illuminance at the camera
+    /// through the atmosphere and the cloud's beam, lx, times [`RainbowSettings::strength`]; w
+    /// the phase-function table's row for the shower's median drop, or −1 for no bow.
+    pub bow: Vec4,
 }
 
 /// The per-view images: this frame's march result and the two history textures.
@@ -338,6 +345,8 @@ pub(crate) struct CloudGpu {
     pub detail: Handle<Image>,
     pub weather: Handle<Image>,
     pub shadow: Handle<Image>,
+    /// The rainbow's phase function (`rainbow::build_table`), angle across and median drop down.
+    pub bow_table: Handle<Image>,
     pub histogram: Handle<ShaderBuffer>,
     pub threshold: Handle<ShaderBuffer>,
     /// Every fourth shadow-map texel's transmittance, `SHADOW_COARSE_CELLS²` row-major.
@@ -456,6 +465,7 @@ impl Plugin for CloudPlugin {
         embedded_asset!(app, "resolve.wesl");
         embedded_asset!(app, "composite.wesl");
         app.init_resource::<LightningFlash>()
+            .init_resource::<RainbowSettings>()
             .init_resource::<CloudLayer>()
             .init_resource::<CloudRuntime>()
             .init_resource::<CelestialFrame>()
@@ -522,6 +532,29 @@ fn texture(
         mag_filter: ImageFilterMode::Linear,
         min_filter: ImageFilterMode::Linear,
         mipmap_filter: ImageFilterMode::Linear,
+        ..default()
+    });
+    images.add(image)
+}
+
+/// The rainbow's phase-function table as a filtered texture (`rainbow::table_bytes`).
+fn bow_table_image(images: &mut Assets<Image>) -> Handle<Image> {
+    let mut image = Image::new(
+        Extent3d {
+            width: rainbow::ANGLES as u32,
+            height: rainbow::RADII as u32,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        rainbow::table_bytes(),
+        TextureFormat::Rgba16Float,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        address_mode_u: ImageAddressMode::ClampToEdge,
+        address_mode_v: ImageAddressMode::ClampToEdge,
+        mag_filter: ImageFilterMode::Linear,
+        min_filter: ImageFilterMode::Linear,
         ..default()
     });
     images.add(image)
@@ -601,6 +634,7 @@ fn create_resources(
         ImageAddressMode::ClampToEdge,
     );
     let neutral_sky = neutral_sky_cube(&mut images);
+    let bow_table = bow_table_image(&mut images);
     commands.insert_resource(CloudWeatherMap {
         map: weather.clone(),
         origin: Vec2::ZERO,
@@ -618,6 +652,7 @@ fn create_resources(
         detail,
         weather,
         shadow,
+        bow_table,
         histogram: storage_buffer(&mut buffers, "elements_clouds_histogram", vec![0u32; 256]),
         threshold: storage_buffer(&mut buffers, "elements_clouds_threshold", vec![0f32; 4]),
         // Nothing shadowed until the first dispatch: T = 1.
@@ -885,7 +920,12 @@ fn update_gpu(
     weather: Res<Weather>,
     sun: Res<SunState>,
     frame: Res<CelestialFrame>,
-    (flash, units, sea): (Res<LightningFlash>, Res<ElementsUnits>, SeaInputs<'_>),
+    (flash, units, sea, rainbow): (
+        Res<LightningFlash>,
+        Res<ElementsUnits>,
+        SeaInputs<'_>,
+        Res<RainbowSettings>,
+    ),
     quality: Res<ElementsQuality>,
     layer: Res<CloudLayer>,
     atmospheres: Query<&Atmosphere>,
@@ -1052,7 +1092,20 @@ fn update_gpu(
         probe,
         sea,
         sea_box,
+        bow: bow_params(&sun, &weather, shadows.mean_transmittance, rainbow.strength),
     };
+}
+
+/// The rainbow's uniform ([`CloudParams::bow`]): the sun's light at the camera and the row of the
+/// phase-function table that the weather's median drop picks; `w` is −1 (no bow) while the sun
+/// is below the horizon, nothing falls, or the strength is 0.
+fn bow_params(sun: &SunState, weather: &Weather, beam: f32, strength: f32) -> Vec4 {
+    if strength <= 0.0 || sun.altitude_deg <= 0.0 || weather.precipitation_mm_h <= 0.0 {
+        return Vec4::new(0.0, 0.0, 0.0, -1.0);
+    }
+    let light = rainbow::sun_transmittance(sun.altitude_deg) * (lux::RAW_SUNLIGHT * beam.clamp(0.0, 1.0) * strength);
+    let row = rainbow::row_coordinate(rainbow::median_radius_mm(weather.precipitation_mm_h));
+    light.extend(row)
 }
 
 /// The distance fog as the clouds' ground haze: its linear colour and its grey extinction in

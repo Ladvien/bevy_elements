@@ -79,7 +79,9 @@ pub use fog::{
 };
 
 // Clouds.
-pub use clouds::{CloudLayer, CloudPlugin, CloudQuality, CloudShadows, CloudWeatherMap};
+pub use clouds::{
+    CloudLayer, CloudPlugin, CloudQuality, CloudShadows, CloudWeatherMap, RainbowSettings,
+};
 
 // Lightning and thunder; `LightningFlash` is shared with the cloud and precipitation passes.
 pub use flash::LightningFlash;
