@@ -128,8 +128,8 @@ fn heat_haze(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let limit = params.globals.w;
     let index_scale = params.optics.x;
     let vp = view.viewport;
-    let uv = (in.position.xy - vp.xy) / vp.zw;
-    let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    let screen_uv = (in.position.xy - vp.xy) / vp.zw;
+    let ndc = vec2<f32>(screen_uv.x * 2.0 - 1.0, 1.0 - screen_uv.y * 2.0);
     let ortho = view.clip_from_view[3].w == 1.0;
 
     // The pixel's ray in metres: from the eye, or along the view from the near plane.
@@ -236,20 +236,24 @@ fn heat_haze(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     if nearest >= NO_SURFACE {
         return textureLoad(scene, pix, 0);
     }
-    // Where the bent ray shows the background point.
-    var clip: vec4<f32>;
+    // Where the bent ray shows the background point, against where the straight ray shows it
+    // (projected the same way, so the reconstruction's rounding cancels).
+    var straight: vec4<f32>;
+    var bent: vec4<f32>;
     if surface >= NO_SURFACE && !ortho {
-        clip = view.clip_from_world * vec4<f32>(dir + bend, 0.0);
+        straight = view.clip_from_world * vec4<f32>(dir, 0.0);
+        bent = view.clip_from_world * vec4<f32>(dir + bend, 0.0);
     } else {
         var far = surface;
         if surface >= NO_SURFACE {
             far = nearest + ORTHO_SKY_M;
         }
-        clip = view.clip_from_world * vec4<f32>((origin + dir * far + shove) * units, 1.0);
+        let background = (origin + dir * far) * units;
+        straight = view.clip_from_world * vec4<f32>(background, 1.0);
+        bent = view.clip_from_world * vec4<f32>(background + shove * units, 1.0);
     }
-    let shifted_ndc = clip.xy / clip.w;
-    let shifted_uv = vec2<f32>(shifted_ndc.x * 0.5 + 0.5, 0.5 - shifted_ndc.y * 0.5);
-    var delta = (shifted_uv - uv) * vp.zw;
+    let moved = bent.xy / bent.w - straight.xy / straight.w;
+    var delta = vec2<f32>(0.5 * moved.x, -0.5 * moved.y) * vp.zw;
     let len = length(delta);
     if len > limit {
         delta *= limit / len;
@@ -265,5 +269,33 @@ fn heat_haze(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     if textureLoad(depth_tex, at_pix, 0) > plume_clip.z / plume_clip.w {
         return textureLoad(scene, pix, 0);
     }
-    return textureSampleLevel(scene, smp, at / size, 0.0);
+    return sharp_sample(at, size);
+}
+
+/// The scene at pixel position `at` through a 5-tap Catmull-Rom filter (as Bevy's TAA samples its
+/// history), clamped to the taps' range: a bilinear sample at a fractional shift averages a pixel
+/// with its neighbour, which smears fine texture into a blur where the haze should only bend it.
+fn sharp_sample(at: vec2<f32>, size: vec2<f32>) -> vec4<f32> {
+    let texel = 1.0 / size;
+    let centre = floor(at - 0.5) + 0.5;
+    let f = at - centre;
+    let w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+    let w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+    let w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+    let w3 = f * f * (-0.5 + 0.5 * f);
+    let w12 = w1 + w2;
+    let p0 = (centre - 1.0) * texel;
+    let p3 = (centre + 2.0) * texel;
+    let p12 = (centre + w2 / w12) * texel;
+    let a = textureSampleLevel(scene, smp, vec2<f32>(p12.x, p0.y), 0.0);
+    let b = textureSampleLevel(scene, smp, vec2<f32>(p0.x, p12.y), 0.0);
+    let c = textureSampleLevel(scene, smp, p12, 0.0);
+    let d = textureSampleLevel(scene, smp, vec2<f32>(p3.x, p12.y), 0.0);
+    let e = textureSampleLevel(scene, smp, vec2<f32>(p12.x, p3.y), 0.0);
+    let weight = w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y;
+    let sum = a * (w12.x * w0.y) + b * (w0.x * w12.y) + c * (w12.x * w12.y) + d * (w3.x * w12.y)
+        + e * (w12.x * w3.y);
+    let lo = min(min(min(a, b), min(c, d)), e);
+    let hi = max(max(max(a, b), max(c, d)), e);
+    return clamp(sum / weight, lo, hi);
 }
