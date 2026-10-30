@@ -7,32 +7,45 @@ mod gpu;
 mod gpu_tests;
 #[cfg(test)]
 mod model;
+mod rainbow;
+
+pub use rainbow::RainbowSettings;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use bevy::asset::{RenderAssetUsages, embedded_asset};
 use bevy::camera::Exposure;
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
-use bevy::light::Atmosphere;
 use bevy::light::light_consts::lux;
+use bevy::light::{Atmosphere, GeneratedEnvironmentMapLight};
 use bevy::math::DVec2;
+use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
 use bevy::render::RenderApp;
 use bevy::render::extract_component::ExtractComponent;
 use bevy::render::render_resource::{
-    Extent3d, ShaderType, TextureDimension, TextureFormat, TextureUsages,
+    Extent3d, ShaderType, TextureDimension, TextureFormat, TextureUsages, TextureViewDescriptor,
+    TextureViewDimension,
 };
 use bevy::render::storage::ShaderBuffer;
 use bevy::shader::load_shader_library;
 
-use crate::celestial::{CelestialFrame, SunState, scene_illuminance};
+use crate::celestial::{
+    CelestialFrame, CelestialSettings, CloudLight, MOON_TINT, NIGHT_SKY_LUMINANCE, Sun, SunState,
+    beam_transmittance, cloud_ambient, scene_illuminance, sky_clear_gain, sky_gain,
+};
 use crate::climate::Weather;
 use crate::flash::LightningFlash;
+use crate::fog::{HORIZON_RING, HorizonRing};
 use crate::gpu::grid::storage_buffer;
 use crate::gpu::readback::{Readbacks, decode};
-use crate::plugin::{ElementsQuality, ElementsSystems, ElementsView, ensure_gpu_core};
+use crate::plugin::{
+    ElementsQuality, ElementsSystems, ElementsUnits, ElementsView, ensure_gpu_core,
+    needs_depth_prepass,
+};
 use crate::query::EnvironmentSnapshot;
+use crate::terrain::TerrainGrid;
 
 /// Smoothstep, `S(a, b, x)` of the research note.
 fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
@@ -105,12 +118,13 @@ impl CloudLayer {
 /// The 512² `rgba8unorm` weather map the clouds are built from, covering 32 km around the
 /// camera: R coverage, G precipitation (never above `precipitation_mm_h / 25`, zero where there
 /// is no cloud), B cloud type. Sample it with a bilinear, repeating sampler at
-/// `uv = (world_xz − origin) / extent`.
+/// `uv = (p.xz − origin) / extent`, `p` a world position in the metre frame (world ÷
+/// [`crate::ElementsUnits::units_per_metre`]; the same as world for the default 1.0).
 #[derive(Resource, Clone, Debug)]
 pub struct CloudWeatherMap {
     /// The map texture; written by a compute kernel every frame.
     pub map: Handle<Image>,
-    /// World XZ of the map's minimum corner, m (snapped to a whole texel).
+    /// Metre-frame XZ of the map's minimum corner, m (snapped to a whole texel).
     pub origin: Vec2,
     /// Side length of the map, m.
     pub extent: f32,
@@ -120,23 +134,29 @@ pub struct CloudWeatherMap {
 /// 1024² `rgba16float` over an 8 km square centred on the camera. R is the direct transmittance
 /// `T`, G the optical depth (clamped to 60), B the precipitation darkening of the weather map.
 ///
-/// A consumer at world position `P` samples with `uv = (P.xz − light_direction.xz · P.y /
-/// light_direction.y − origin) / extent` and `Clamp` addressing; outside the map `T = 1`.
+/// A consumer at metre-frame position `P` (world ÷ `ElementsUnits::units_per_metre`) samples with
+/// `uv = (P.xz − light_direction.xz · P.y / light_direction.y − origin) / extent` and `Clamp`
+/// addressing; outside the map `T = 1`.
 #[derive(Resource, Clone, Debug)]
 pub struct CloudShadows {
     /// The map texture.
     pub map: Handle<Image>,
-    /// World XZ of the map's minimum corner, m (snapped to a whole texel).
+    /// Metre-frame XZ of the map's minimum corner, m (snapped to a whole texel).
     pub origin: Vec2,
     /// Side length of the map, m.
     pub extent: f32,
     /// Unit vector toward the light the map was generated for: the sun by day, the moon when
     /// the sun is lower than −4°.
     pub light_direction: Vec3,
-    /// Mean direct transmittance over about 70 m around the camera, 0–1, smoothed over 1 s of
-    /// real time. Before the first GPU readback it is `1 − cover^3.4`, which makes the sun's
-    /// light factor `0.25 + 0.75 · T` equal the cover-only estimate of the weather.
-    pub camera_transmittance: f32,
+    /// Mean direct transmittance over the whole map (the 8 km around the camera), 0–1,
+    /// smoothed over 1 s of real time: the share of the clear-sky beam the landscape gets on
+    /// average. Before the first GPU readback it is `1 − cover^3.4`, the cover-only estimate
+    /// of the weather. The sun's and moon's `DirectionalLight` carry `T̄` of their clear-sky
+    /// illuminance (and so do Bevy's sky, aerial perspective and environment map, which they
+    /// light) and the camera's `AmbientLight` the diffuse remainder `0.25 · (1 − T̄)`; a
+    /// surface that samples the map takes its own shadow relative to it,
+    /// `(0.25 + 0.75 T) / (0.25 + 0.75 T̄)` (`docs/research/broken-cloud-light.md`).
+    pub mean_transmittance: f32,
 }
 
 /// Lowest sine of the light's elevation the shadow map is generated for: arcsin 0.1 = 5.74°. A
@@ -156,7 +176,8 @@ impl CloudShadows {
         Vec3::new(flat.x * c, SHADOW_MIN_LIGHT_SINE, flat.y * c)
     }
 
-    /// Texture coordinate (0–1 over the map) of the shadow cast on world position `position`:
+    /// Texture coordinate (0–1 over the map) of the shadow cast on metre-frame position `position`
+    /// (world ÷ `ElementsUnits::units_per_metre`; `Environment::cloud_shadow_at` converts):
     /// `(P.xz − l.xz · P.y / l.y − origin) / extent`, the point where the ray from `P` toward
     /// the light would cross the plane `y = 0` the map is generated for. Sample with `Clamp`
     /// addressing; a coordinate outside 0–1 is outside the map and unshadowed (`T = 1`).
@@ -178,23 +199,36 @@ pub struct CloudQuality {
     pub light_samples: u32,
     /// Frames until every pixel has been marched once (`block²`).
     pub window: u32,
+    /// Texels per face edge of the sky probe (`docs/research/sky-light.md`) marched each frame:
+    /// one texel of every `k × k` block, `k = cube edge / probe_edge` clamped to 1–4. 32 on Low,
+    /// Medium and High, 64 on Ultra (`k` = 4, 4, 4, 2 for Bevy's default 128² cube).
+    pub probe_edge: u32,
 }
 
 impl CloudQuality {
     /// The settings of a quality level.
     pub fn of(quality: ElementsQuality) -> Self {
-        let (block, steps) = match quality {
-            ElementsQuality::Low => (4, 32),
-            ElementsQuality::Medium => (4, 48),
-            ElementsQuality::High => (2, 64),
-            ElementsQuality::Ultra => (2, 96),
+        let (block, steps, probe_edge) = match quality {
+            ElementsQuality::Low => (4, 32, 32),
+            ElementsQuality::Medium => (4, 48, 32),
+            ElementsQuality::High => (2, 64, 32),
+            ElementsQuality::Ultra => (2, 96, 64),
         };
         Self {
             block,
             steps,
             light_samples: 6,
             window: block * block,
+            probe_edge,
         }
+    }
+
+    /// The sky probe's slot block edge `k` for a cube of `size` texels per face edge.
+    pub(crate) fn probe_block(&self, size: u32) -> u32 {
+        (size / self.probe_edge.max(1))
+            .clamp(1, 4)
+            .next_power_of_two()
+            .min(4)
     }
 }
 
@@ -204,33 +238,46 @@ pub(crate) const WEATHER_EXTENT_M: f32 = 32_000.0;
 /// Texels per side of the shadow map and the world size it covers, m.
 pub(crate) const SHADOW_TEXELS: u32 = 1024;
 pub(crate) const SHADOW_EXTENT_M: f32 = 8_000.0;
+/// Shadow-map texels per cell edge of the gameplay query grid ([`CloudShadowSnapshot`]).
+pub(crate) const SHADOW_COARSE_STRIDE: u32 = 4;
+/// Cells per side of the gameplay query grid.
+pub(crate) const SHADOW_COARSE_CELLS: u32 = SHADOW_TEXELS / SHADOW_COARSE_STRIDE;
 /// Texels per side of the base and detail noise volumes.
 pub(crate) const NOISE_BASE_TEXELS: u32 = 128;
 pub(crate) const NOISE_DETAIL_TEXELS: u32 = 32;
-/// World size of the noise tiles, m; the cloud drift is wrapped to each so f32 keeps its
-/// precision. The weather field is periodic in its 32 km extent.
-const BASE_TILE_M: f64 = 8192.0;
-const DETAIL_TILE_M: f64 = 1024.0;
+/// World size of the noise tiles, m (`common.wesl`; cumulus-shape.md); the cloud drift is
+/// wrapped to each so f32 keeps its precision. The weather field is periodic in its 32 km
+/// extent.
+const BASE_TILE_M: f64 = 4096.0;
+const DETAIL_TILE_M: f64 = 640.0;
 /// The drift accumulates in f64 modulo a common multiple of the three periods (2²² · 5³).
 const DRIFT_WRAP_M: f64 = 524_288_000.0;
 /// Cloud drift is this multiple of the 10 m wind: the wind at cloud height (log-law 1.86 at
 /// 1.5 km, 1.94 at the layer top) rounded up as the plan says.
 const DRIFT_WIND_FACTOR: f64 = 2.0;
-/// The moon's light colour (the `Moon` light's own tint).
-const MOON_TINT: Vec3 = Vec3::new(0.88, 0.92, 1.0);
 /// Sun altitude, degrees, below which the clouds are lit by the moon; the sun's light fades
 /// out over the degree above it (the layer keeps the sun to −3.1° at 9.5 km, the dip).
 const SUN_HANDOVER_DEG: f32 = -4.0;
-/// Smoothing time of the camera transmittance, s of real time.
-const CAMERA_TRANSMITTANCE_TAU_S: f32 = 1.0;
+/// Albedo of the ground the diffuse light reflects up into the air, for the in-scatter source.
+const GROUND_ALBEDO: f32 = 0.3;
+/// In-scatter source of the air per unit radiance of the ambient sky: isotropic scattering lights
+/// the air with the scalar irradiance over 4π, `E (1 + ρ) / 4π` for the downward irradiance
+/// `E = π L` of the sky and the ground albedo `ρ`, which is `L (1 + ρ) / 4`.
+const AIRLIGHT_PER_SKY_RADIANCE: f32 = (1.0 + GROUND_ALBEDO) / 4.0;
+/// Smoothing time of the mean transmittance, s of real time.
+const MEAN_TRANSMITTANCE_TAU_S: f32 = 1.0;
 
 /// Uniform of every cloud kernel (`common.wesl`, `CloudParams`).
 #[derive(Clone, Copy, Debug, Default, ShaderType)]
 pub(crate) struct CloudParams {
     /// xyz: camera, m. w: planet radius, m.
     pub camera: Vec4,
-    /// x: atmosphere outer radius, m. y: aerial LUT range, m. z: aerial LUT slices.
+    /// x: atmosphere outer radius, m. y: aerial LUT range, m. z: aerial LUT slices. w: the night
+    /// sky's background radiance behind the atmosphere (`celestial::NIGHT_SKY_LUMINANCE`), cd/m².
     pub atmo: Vec4,
+    /// x: gain on the sky pixels of the composite (`celestial::sky_gain`). yzw: radiance of the
+    /// air lit by the cloud-scattered diffuse light (`celestial::cloud_ambient`), cd/m².
+    pub sky: Vec4,
     /// x: base altitude, m. y: top altitude, m. z: cloud type. w: cover.
     pub layer: Vec4,
     /// xyz: unit direction toward the light.
@@ -255,6 +302,32 @@ pub(crate) struct CloudParams {
     pub misc: Vec4,
     /// x: first noise slice of this frame.
     pub tail: UVec4,
+    /// xyz: the camera's `DistanceFog` colour (linear, after exposure). w: its extinction, m⁻¹
+    /// (0 without distance fog).
+    pub haze: Vec4,
+    /// x: extinction of the weather's air above clear air, m⁻¹ (`fog::sky_air_extinction`).
+    /// The composite fogs sky pixels with it, so the sky converges on `haze.xyz` as distant
+    /// ground does; 0 leaves the sky to the atmosphere alone. `clouds.md` Deviation 29. y: the
+    /// gain that undoes the cloud dimming of the environment map the ambient reads
+    /// (`celestial::sky_clear_gain`), so it holds the clear sky above the layer.
+    pub air: Vec4,
+    /// x: world units per metre ([`crate::ElementsUnits`]). Every other field is in metres;
+    /// Bevy's view matrices and depth are in world units, which the shaders convert with it.
+    pub units: Vec4,
+    /// The sky probe (`docs/research/sky-light.md`): x the followed camera's exposure (the
+    /// display-referred `haze.xyz` over it is the fog's luminance), y the slot block edge `k`,
+    /// z texels per face edge, w the weight a marched texel takes in its history (1 while the
+    /// history is invalid).
+    pub probe: Vec4,
+    /// The still sea (`StillWater`): x its level, m; y 1 while one is set.
+    pub sea: Vec4,
+    /// xy: the minimum corner, zw: the maximum corner, of the region (world XZ, m) the sea and
+    /// its skirt cover. The composite leaves the pixels whose ray meets the sea there to the water.
+    pub sea_box: Vec4,
+    /// The rainbow (`docs/research/rainbow.md`): xyz the sun's illuminance at the camera
+    /// through the atmosphere and the cloud's beam, lx, times [`RainbowSettings::strength`]; w
+    /// the phase-function table's row for the shower's median drop, or −1 for no bow.
+    pub bow: Vec4,
 }
 
 /// The per-view images: this frame's march result and the two history textures.
@@ -272,15 +345,63 @@ pub(crate) struct CloudGpu {
     pub detail: Handle<Image>,
     pub weather: Handle<Image>,
     pub shadow: Handle<Image>,
+    /// The rainbow's phase function (`rainbow::build_table`), angle across and median drop down.
+    pub bow_table: Handle<Image>,
     pub histogram: Handle<ShaderBuffer>,
     pub threshold: Handle<ShaderBuffer>,
-    pub camera_t: Handle<ShaderBuffer>,
+    /// Every fourth shadow-map texel's transmittance, `SHADOW_COARSE_CELLS²` row-major.
+    pub shadow_coarse: Handle<ShaderBuffer>,
+    /// The sky's radiance at the horizon in `HORIZON_RING` azimuths, `vec4` each with `w` 1 once
+    /// the probe pass has written it (`docs/research/fog-colour.md`).
+    pub horizon: Handle<ShaderBuffer>,
+    /// The cube the clouds' skylight is read from: the followed camera's atmosphere environment
+    /// map (Bevy's clear sky, [`SkyProbe::atmosphere`] once the probe has taken the environment
+    /// map over), or `neutral_sky`.
+    pub sky_probe: Handle<Image>,
+    /// A 1×1 white cube: the neutral ambient of a camera with no environment map.
+    pub neutral_sky: Handle<Image>,
     pub view: Option<CloudViewImages>,
+    /// The sky probe's images, while the followed camera has an atmosphere environment map.
+    pub probe: Option<SkyProbeImages>,
+    /// Frames the render world has composed the current probe images on: the probe is handed to
+    /// the environment map once every texel has been marched (`k²` frames).
+    pub probe_frames: Arc<AtomicU32>,
     pub params: CloudParams,
     /// Followed camera present: the weather and shadow kernels run.
     pub active: bool,
     /// Set by the render world after the weather and shadow kernels first ran.
     pub live: Arc<AtomicBool>,
+}
+
+/// The sky probe's textures (`docs/research/sky-light.md`): two cloud states the kernel
+/// ping-pongs between and the composed cube, all of the atmosphere cube's size.
+#[derive(Clone, Debug)]
+pub(crate) struct SkyProbeImages {
+    /// Texels per face edge.
+    pub size: u32,
+    /// Slot block edge `k`: one texel of every `k × k` block is marched each frame.
+    pub block: u32,
+    /// Bevy's atmosphere cube, which the probe composes the clouds over.
+    pub atmosphere: Handle<Image>,
+    /// Premultiplied cloud luminance and transmittance per texel, `[even frame, odd frame]`.
+    pub state: [Handle<Image>; 2],
+    /// The composed sky the environment map is filtered from.
+    pub composed: Handle<Image>,
+}
+
+/// On the followed camera: the clouds composed into its environment map
+/// (`docs/research/sky-light.md`). Its `GeneratedEnvironmentMapLight` is filtered from
+/// `composed` once `lit`, and the camera's `AmbientLight` then no longer carries the
+/// cloud-scattered light, which the cube does.
+#[derive(Component, Clone, Debug)]
+pub(crate) struct SkyProbe {
+    /// Bevy's atmosphere cube (the clear sky): the clouds' own skylight source, and what the
+    /// environment map is given back when the probe ends.
+    pub atmosphere: Handle<Image>,
+    /// The composed cube.
+    pub composed: Handle<Image>,
+    /// The environment map is filtered from `composed`.
+    pub lit: bool,
 }
 
 /// Marks the camera the clouds are drawn for; extracted to the render world.
@@ -318,6 +439,8 @@ pub(crate) struct CloudDebug {
     pub kind: Option<f32>,
     pub cover: Option<f32>,
     pub drift: Option<Vec2>,
+    /// The weather's air extinction, m⁻¹: 0 is clear air and leaves the sky to the atmosphere.
+    pub air: Option<f32>,
 }
 
 /// Volumetric clouds.
@@ -325,13 +448,15 @@ pub(crate) struct CloudDebug {
 /// Creates the noise volumes, the weather map and the shadow map; each frame it derives the
 /// [`CloudLayer`] from the weather, marches the clouds for the followed
 /// [`ElementsCamera`](crate::ElementsCamera) and composites them after the transparent pass, and keeps
-/// [`CloudShadows`] current. It dims the sun and moon lights by the cloud transmittance over the
-/// camera. Needs `DepthPrepass`, `Msaa::Off` and an HDR target, which `ElementsCamera` sets up.
+/// [`CloudShadows`] current. It dims the sun and moon lights by the mean cloud transmittance over
+/// the shadow map's 8 km, so a cloud's shadow over the camera darkens the surfaces in it and not
+/// the sky. Needs `DepthPrepass`, `Msaa::Off` and an HDR target, which `ElementsCamera` sets up.
 pub struct CloudPlugin;
 
 impl Plugin for CloudPlugin {
     fn build(&self, app: &mut App) {
         ensure_gpu_core(app);
+        needs_depth_prepass(app);
         load_shader_library!(app, "common.wesl");
         embedded_asset!(app, "generate.wesl");
         embedded_asset!(app, "weather.wesl");
@@ -340,13 +465,15 @@ impl Plugin for CloudPlugin {
         embedded_asset!(app, "resolve.wesl");
         embedded_asset!(app, "composite.wesl");
         app.init_resource::<LightningFlash>()
+            .init_resource::<RainbowSettings>()
             .init_resource::<CloudLayer>()
             .init_resource::<CloudRuntime>()
+            .init_resource::<CelestialFrame>()
             .add_systems(Startup, create_resources)
             .add_systems(
                 Update,
                 (
-                    smooth_camera_transmittance
+                    smooth_mean_transmittance
                         .in_set(ElementsSystems::Celestial)
                         .before(crate::celestial::update_sky),
                     (
@@ -354,6 +481,7 @@ impl Plugin for CloudPlugin {
                         update_layer,
                         advance_drift,
                         update_views,
+                        update_sky_probe,
                         // The march reads this frame's `LightningFlash`.
                         update_gpu
                             .after(crate::lightning::write_flash)
@@ -361,7 +489,8 @@ impl Plugin for CloudPlugin {
                     )
                         .chain()
                         .in_set(ElementsSystems::Simulation),
-                    read_camera_transmittance.in_set(ElementsSystems::Readback),
+                    read_shadows.in_set(ElementsSystems::Readback),
+                    read_horizon.in_set(ElementsSystems::Readback),
                 ),
             );
         #[cfg(test)]
@@ -408,8 +537,53 @@ fn texture(
     images.add(image)
 }
 
+/// The rainbow's phase-function table as a filtered texture (`rainbow::table_bytes`).
+fn bow_table_image(images: &mut Assets<Image>) -> Handle<Image> {
+    let mut image = Image::new(
+        Extent3d {
+            width: rainbow::ANGLES as u32,
+            height: rainbow::RADII as u32,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        rainbow::table_bytes(),
+        TextureFormat::Rgba16Float,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        address_mode_u: ImageAddressMode::ClampToEdge,
+        address_mode_v: ImageAddressMode::ClampToEdge,
+        mag_filter: ImageFilterMode::Linear,
+        min_filter: ImageFilterMode::Linear,
+        ..default()
+    });
+    images.add(image)
+}
+
 /// Half-precision 1.0, little-endian.
 const HALF_ONE: [u8; 2] = [0x00, 0x3C];
+
+/// A 1×1 white cube: what the ambient's colour is read from when the camera has no atmosphere
+/// environment map.
+fn neutral_sky_cube(images: &mut Assets<Image>) -> Handle<Image> {
+    let texel = [HALF_ONE[0], HALF_ONE[1]].repeat(4);
+    let mut image = Image::new_fill(
+        Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 6,
+        },
+        TextureDimension::D2,
+        &texel,
+        TextureFormat::Rgba16Float,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.texture_view_descriptor = Some(TextureViewDescriptor {
+        dimension: Some(TextureViewDimension::Cube),
+        ..default()
+    });
+    images.add(image)
+}
 
 fn create_resources(
     mut commands: Commands,
@@ -459,6 +633,8 @@ fn create_resources(
         &[HALF_ONE[0], HALF_ONE[1], 0, 0, 0, 0, 0, 0],
         ImageAddressMode::ClampToEdge,
     );
+    let neutral_sky = neutral_sky_cube(&mut images);
+    let bow_table = bow_table_image(&mut images);
     commands.insert_resource(CloudWeatherMap {
         map: weather.clone(),
         origin: Vec2::ZERO,
@@ -469,17 +645,32 @@ fn create_resources(
         origin: Vec2::ZERO,
         extent: SHADOW_EXTENT_M,
         light_direction: Vec3::Y,
-        camera_transmittance: 1.0,
+        mean_transmittance: 1.0,
     });
     commands.insert_resource(CloudGpu {
         base,
         detail,
         weather,
         shadow,
+        bow_table,
         histogram: storage_buffer(&mut buffers, "elements_clouds_histogram", vec![0u32; 256]),
         threshold: storage_buffer(&mut buffers, "elements_clouds_threshold", vec![0f32; 4]),
-        camera_t: storage_buffer(&mut buffers, "elements_clouds_camera_t", vec![0f32; 4]),
+        // Nothing shadowed until the first dispatch: T = 1.
+        shadow_coarse: storage_buffer(
+            &mut buffers,
+            "elements_clouds_shadow_coarse",
+            vec![1f32; (SHADOW_COARSE_CELLS * SHADOW_COARSE_CELLS) as usize],
+        ),
+        horizon: storage_buffer(
+            &mut buffers,
+            "elements_clouds_horizon",
+            vec![[0f32; 4]; HORIZON_RING],
+        ),
+        sky_probe: neutral_sky.clone(),
+        neutral_sky,
         view: None,
+        probe: None,
+        probe_frames: Arc::new(AtomicU32::new(0)),
         params: CloudParams::default(),
         active: false,
         live: Arc::new(AtomicBool::new(false)),
@@ -577,6 +768,130 @@ fn update_views(
     runtime.reset_frames = 2;
 }
 
+/// Weight a re-marched sky-probe texel takes in its history (`docs/research/sky-light.md`,
+/// Parameters): the march's per-texel jitter averaged over about seven marches.
+const PROBE_HISTORY_WEIGHT: f32 = 0.25;
+
+/// The followed camera's sky probe (`docs/research/sky-light.md`, Model 5–7): images of the size
+/// of its atmosphere cube, and the environment map handed over to the composed cube once every
+/// texel has been marched. A camera that stops being followed, or whose atmosphere cube is
+/// replaced, gets the atmosphere cube back until a new probe is composed.
+fn update_sky_probe(
+    mut commands: Commands,
+    view: Res<ElementsView>,
+    quality: Res<ElementsQuality>,
+    mut images: ResMut<Assets<Image>>,
+    mut gpu: ResMut<CloudGpu>,
+    mut cameras: Query<(
+        Entity,
+        &mut GeneratedEnvironmentMapLight,
+        Option<&mut SkyProbe>,
+    )>,
+    orphans: Query<Entity, (With<SkyProbe>, Without<GeneratedEnvironmentMapLight>)>,
+) {
+    for entity in &orphans {
+        commands.entity(entity).remove::<SkyProbe>();
+    }
+    for (entity, mut light, probe) in &mut cameras {
+        if Some(entity) == view.entity {
+            continue;
+        }
+        if let Some(probe) = probe {
+            if light.environment_map == probe.composed {
+                light.environment_map = probe.atmosphere.clone();
+            }
+            commands.entity(entity).remove::<SkyProbe>();
+        }
+    }
+    let Some((entity, mut light, probe)) = view.entity.and_then(|e| cameras.get_mut(e).ok()) else {
+        gpu.probe = None;
+        return;
+    };
+    // The environment map's source is Bevy's atmosphere cube unless it is the composed one.
+    let atmosphere = match probe.as_deref() {
+        Some(p) if light.environment_map == p.composed => p.atmosphere.clone(),
+        _ => light.environment_map.clone(),
+    };
+    let Some(size) = images
+        .get(&atmosphere)
+        .map(|image| image.texture_descriptor.size.width)
+    else {
+        gpu.probe = None;
+        return;
+    };
+    let block = CloudQuality::of(*quality).probe_block(size);
+    let current = gpu
+        .probe
+        .as_ref()
+        .is_some_and(|p| p.atmosphere == atmosphere && p.size == size && p.block == block);
+    if !current {
+        let fresh = sky_probe_images(&mut images, atmosphere.clone(), size, block);
+        gpu.probe_frames.store(0, Ordering::Relaxed);
+        if light.environment_map != atmosphere {
+            light.environment_map = atmosphere.clone();
+        }
+        commands.entity(entity).insert(SkyProbe {
+            atmosphere,
+            composed: fresh.composed.clone(),
+            lit: false,
+        });
+        gpu.probe = Some(fresh);
+        return;
+    }
+    if let Some(mut probe) = probe
+        && !probe.lit
+        && gpu.probe_frames.load(Ordering::Relaxed) >= block * block
+    {
+        light.environment_map = probe.composed.clone();
+        probe.lit = true;
+    }
+}
+
+/// The sky probe's two cloud states (no cloud: no luminance, full transmittance) and its composed
+/// cube, `size²` per face, written by the render world only.
+fn sky_probe_images(
+    images: &mut Assets<Image>,
+    atmosphere: Handle<Image>,
+    size: u32,
+    block: u32,
+) -> SkyProbeImages {
+    let mut cube = |pixel: &[u8], dimension: TextureViewDimension| {
+        let mut image = Image::new_fill(
+            Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 6,
+            },
+            TextureDimension::D2,
+            pixel,
+            TextureFormat::Rgba16Float,
+            RenderAssetUsages::RENDER_WORLD,
+        );
+        // COPY_SRC lets the tests read them back.
+        image.texture_descriptor.usage = TextureUsages::STORAGE_BINDING
+            | TextureUsages::TEXTURE_BINDING
+            | TextureUsages::COPY_SRC;
+        image.texture_view_descriptor = Some(TextureViewDescriptor {
+            dimension: Some(dimension),
+            ..default()
+        });
+        images.add(image)
+    };
+    let clear = [0, 0, 0, 0, 0, 0, HALF_ONE[0], HALF_ONE[1]];
+    let state = [
+        cube(&clear, TextureViewDimension::D2Array),
+        cube(&clear, TextureViewDimension::D2Array),
+    ];
+    let composed = cube(&[0; 8], TextureViewDimension::Cube);
+    SkyProbeImages {
+        size,
+        block,
+        atmosphere,
+        state,
+        composed,
+    }
+}
+
 /// The light the clouds are lit by: the sun, fading out over the degree above the handover
 /// altitude, and below it the moon.
 fn pick_light(sun: &SunState, frame: &CelestialFrame) -> (Vec3, Vec3) {
@@ -593,21 +908,38 @@ fn snap(value: Vec2, step: f32) -> Vec2 {
     (value / step).round() * step
 }
 
+/// The still sea and the terrain whose grid it covers (`CloudParams::sea`).
+type SeaInputs<'w> = (
+    Option<Res<'w, crate::StillWater>>,
+    Option<Res<'w, crate::TerrainState>>,
+);
+
 #[allow(clippy::too_many_arguments)]
 fn update_gpu(
     view: Res<ElementsView>,
     weather: Res<Weather>,
     sun: Res<SunState>,
     frame: Res<CelestialFrame>,
-    flash: Res<LightningFlash>,
+    (flash, units, sea, rainbow): (
+        Res<LightningFlash>,
+        Res<ElementsUnits>,
+        SeaInputs<'_>,
+        Res<RainbowSettings>,
+    ),
     quality: Res<ElementsQuality>,
     layer: Res<CloudLayer>,
     atmospheres: Query<&Atmosphere>,
     exposures: Query<&Exposure>,
+    fogs: Query<&DistanceFog>,
+    probes: Query<&GeneratedEnvironmentMapLight>,
     mut runtime: ResMut<CloudRuntime>,
     mut gpu: ResMut<CloudGpu>,
     mut map: ResMut<CloudWeatherMap>,
     mut shadows: ResMut<CloudShadows>,
+    own_sun: (
+        Option<Res<CelestialSettings>>,
+        Query<&GlobalTransform, With<Sun>>,
+    ),
 ) {
     let Some(entity) = view.entity else {
         gpu.active = false;
@@ -620,12 +952,21 @@ fn update_gpu(
         .map_or((6_360_000.0, 6_460_000.0), |a| {
             (a.inner_radius, a.outer_radius)
         });
-    let (light_dir, light_e) = pick_light(&sun, &frame);
+    let (mut light_dir, light_e) = pick_light(&sun, &frame);
+    // A game that lights its scene itself (`CelestialSettings::lights` off) and marks its key
+    // light `Sun` gets the cloud shadows cast along that light, as its buildings' shadows fall
+    // (`docs/research/integration.md` Deviation 2).
+    let (celestial, suns) = &own_sun;
+    if celestial.as_ref().is_some_and(|c| !c.lights)
+        && let Some(own) = suns.iter().next()
+    {
+        light_dir = *own.back();
+    }
     // Diffuse sky light: the metered illuminance before cloud dimming, all of it diffuse in
     // twilight and 15 % of it at high sun.
     let sky_share = 1.0 + (0.15 - 1.0) * smoothstep(-2.0, 10.0, sun.altitude_deg);
-    let ambient =
-        sky_share * scene_illuminance(&sun, frame.moon_lux, 1.0) / (2.0 * std::f32::consts::PI);
+    let ambient = sky_share * scene_illuminance(&sun, frame.moon_lux, CloudLight::CLEAR)
+        / (2.0 * std::f32::consts::PI);
 
     let weather_texel = WEATHER_EXTENT_M / WEATHER_TEXELS as f32;
     let shadow_texel = SHADOW_EXTENT_M / SHADOW_TEXELS as f32;
@@ -666,9 +1007,50 @@ fn update_gpu(
     let wind = weather.wind_direction.normalize_or(Vec2::X);
 
     gpu.active = true;
+    // The clouds' skylight is the clear sky's: the atmosphere cube of the followed camera (the
+    // one the sky probe composes over, which the environment map no longer shows once the probe
+    // is lit), or the neutral cube without one (Deviation 30).
+    gpu.sky_probe = match &gpu.probe {
+        Some(probe) => probe.atmosphere.clone(),
+        None => probes
+            .get(entity)
+            .map_or_else(|_| gpu.neutral_sky.clone(), |p| p.environment_map.clone()),
+    };
+    // A marched probe texel replaces its history until every texel has been marched once.
+    let probe = gpu.probe.as_ref().map_or(Vec4::ZERO, |p| {
+        let fresh = gpu.probe_frames.load(Ordering::Relaxed) < p.block * p.block;
+        Vec4::new(
+            exposure,
+            p.block as f32,
+            p.size as f32,
+            if fresh { 1.0 } else { PROBE_HISTORY_WEIGHT },
+        )
+    });
+    let cloud = CloudLight::from_beam(shadows.mean_transmittance);
+    let (diffuse_colour, diffuse_brightness) = cloud_ambient(&sun, frame.moon_lux, cloud);
+    let airlight = diffuse_colour * (diffuse_brightness * AIRLIGHT_PER_SKY_RADIANCE);
+    // The still sea: its level and the box of ground and skirt the water draws.
+    let (sea, sea_box) = match (&sea.0, &sea.1) {
+        (Some(still), Some(terrain)) => {
+            let reach = crate::hydrology::WATER_SKIRT_REACH_M;
+            let lo = terrain.grid.origin - Vec2::splat(reach);
+            let hi = terrain.grid.origin + terrain.grid.extent() + Vec2::splat(reach);
+            (
+                Vec4::new(
+                    terrain.grid.y0 + still.level / units.per_metre(),
+                    1.0,
+                    0.0,
+                    0.0,
+                ),
+                Vec4::new(lo.x, lo.y, hi.x, hi.y),
+            )
+        }
+        _ => (Vec4::ZERO, Vec4::ZERO),
+    };
     gpu.params = CloudParams {
         camera: camera.extend(inner),
-        atmo: Vec4::new(outer, 32_000.0, 32.0, 0.0),
+        atmo: Vec4::new(outer, 32_000.0, 32.0, NIGHT_SKY_LUMINANCE),
+        sky: Vec4::new(sky_gain(&sun, cloud), airlight.x, airlight.y, airlight.z),
         layer: Vec4::new(
             layer.base_m,
             layer.top_m,
@@ -686,12 +1068,64 @@ fn update_gpu(
             CloudLayer::precipitation_from_weather(&weather),
         ),
         shadow: Vec4::new(shadows.origin.x, shadows.origin.y, SHADOW_EXTENT_M, 0.0),
-        flash: flash.position.extend(flash.intensity_cd.max(0.0)),
+        flash: units
+            .point_to_metres(flash.position)
+            .extend(flash.intensity_cd.max(0.0)),
         counts: UVec4::new(runtime.frame, q.steps, q.block, q.light_samples),
         sizes: UVec4::new(size.x, size.y, low.x, low.y),
         misc: Vec4::new(exposure_ratio, 0.0, 0.0, if reset { 1.0 } else { 0.0 }),
         tail: UVec4::ZERO,
+        haze: fogs
+            .get(entity)
+            .map_or(Vec4::ZERO, |fog| haze(fog, units.per_metre())),
+        // The sky's air comes from the camera's own `DistanceFog`, so the sky and the meshes
+        // cannot disagree about the fog even if a game replaces it.
+        air: Vec4::new(
+            fogs.get(entity).map_or(0.0, |fog| {
+                crate::fog::sky_air_extinction(fog_extinction(fog, units.per_metre()))
+            }),
+            sky_clear_gain(&sun, cloud),
+            0.0,
+            0.0,
+        ),
+        units: Vec4::new(units.per_metre(), 0.0, 0.0, 0.0),
+        probe,
+        sea,
+        sea_box,
+        bow: bow_params(&sun, &weather, shadows.mean_transmittance, rainbow.strength),
     };
+}
+
+/// The rainbow's uniform ([`CloudParams::bow`]): the sun's light at the camera and the row of the
+/// phase-function table that the weather's median drop picks; `w` is −1 (no bow) while the sun
+/// is below the horizon, nothing falls, or the strength is 0.
+fn bow_params(sun: &SunState, weather: &Weather, beam: f32, strength: f32) -> Vec4 {
+    if strength <= 0.0 || sun.altitude_deg <= 0.0 || weather.precipitation_mm_h <= 0.0 {
+        return Vec4::new(0.0, 0.0, 0.0, -1.0);
+    }
+    let light = rainbow::sun_transmittance(sun.altitude_deg)
+        * (lux::RAW_SUNLIGHT * beam.clamp(0.0, 1.0) * strength);
+    let row = rainbow::row_coordinate(rainbow::median_radius_mm(weather.precipitation_mm_h));
+    light.extend(row)
+}
+
+/// The distance fog as the clouds' ground haze: its linear colour and its grey extinction in
+/// m⁻¹ (`fog::distance_fog_falloff` sets extinction and in-scattering equal).
+fn haze(fog: &DistanceFog, units: f32) -> Vec4 {
+    let c = fog.color.to_linear();
+    Vec4::new(c.red, c.green, c.blue, fog_extinction(fog, units))
+}
+
+/// Extinction of a camera's distance fog, m⁻¹ (Bevy's is per world unit, `units` of them to the
+/// metre); 0 for a falloff this crate never writes (`FogFalloff::Linear` or
+/// `ExponentialSquared`, which a game that replaces the component may).
+fn fog_extinction(fog: &DistanceFog, units: f32) -> f32 {
+    let per_world_unit = match fog.falloff {
+        FogFalloff::Atmospheric { extinction, .. } => extinction.x,
+        FogFalloff::Exponential { density } => density,
+        FogFalloff::ExponentialSquared { .. } | FogFalloff::Linear { .. } => 0.0,
+    };
+    per_world_unit * units
 }
 
 #[cfg(test)]
@@ -712,6 +1146,9 @@ fn apply_debug(debug: Option<Res<CloudDebug>>, mut gpu: ResMut<CloudGpu>) {
     if let Some(cover) = debug.cover {
         p.layer.w = cover;
     }
+    if let Some(air) = debug.air {
+        p.air.x = air;
+    }
     if let Some(light) = debug.light {
         p.light = light.extend(0.0);
     }
@@ -728,9 +1165,9 @@ fn apply_debug(debug: Option<Res<CloudDebug>>, mut gpu: ResMut<CloudGpu>) {
     }
 }
 
-/// The camera transmittance the lights are dimmed by: the readback, smoothed over a second;
-/// until the first readback `1 − cover^3.4`, which makes `0.25 + 0.75 T` the cover-only factor.
-fn smooth_camera_transmittance(
+/// The mean transmittance the lights are dimmed by: the readback grid's mean, smoothed over a
+/// second; until the first readback `1 − cover^3.4`, the cover-only beam.
+fn smooth_mean_transmittance(
     time: Res<Time<Real>>,
     weather: Res<Weather>,
     snapshot: Res<EnvironmentSnapshot>,
@@ -739,31 +1176,125 @@ fn smooth_camera_transmittance(
     let Some(mut shadows) = shadows else {
         return;
     };
-    match snapshot.cloud_transmittance {
+    match &snapshot.cloud_shadow {
         None => {
-            shadows.camera_transmittance = 1.0 - weather.cloud_cover.clamp(0.0, 1.0).powf(3.4);
+            shadows.mean_transmittance = beam_transmittance(weather.cloud_cover);
         }
         Some(measured) => {
-            let k = 1.0 - (-time.delta_secs() / CAMERA_TRANSMITTANCE_TAU_S).exp();
-            let now = shadows.camera_transmittance;
-            shadows.camera_transmittance = now + (measured.clamp(0.0, 1.0) - now) * k;
+            let k = 1.0 - (-time.delta_secs() / MEAN_TRANSMITTANCE_TAU_S).exp();
+            let now = shadows.mean_transmittance;
+            shadows.mean_transmittance = now + (measured.mean - now) * k;
         }
     }
 }
 
-fn read_camera_transmittance(gpu: Option<Res<CloudGpu>>, mut readbacks: Readbacks) {
+fn read_shadows(
+    gpu: Option<Res<CloudGpu>>,
+    shadows: Option<Res<CloudShadows>>,
+    mut readbacks: Readbacks,
+) {
+    let (Some(gpu), Some(shadows)) = (gpu, shadows) else {
+        return;
+    };
+    if !gpu.active || !gpu.live.load(Ordering::Relaxed) {
+        return;
+    }
+    let grid = CloudShadowSnapshot::grid(shadows.origin);
+    let light = shadows.generation_direction();
+    readbacks.request(
+        "cloud_shadow",
+        gpu.shadow_coarse.clone(),
+        move |bytes, snapshot| {
+            let cells = (SHADOW_COARSE_CELLS * SHADOW_COARSE_CELLS) as usize;
+            if let Some(values) = decode::<f32>(bytes)
+                && values.len() >= cells
+            {
+                let values = &values[..cells];
+                // The mean over the finite cells: the share of the clear beam the 8 km get.
+                let (sum, count) = values
+                    .iter()
+                    .filter(|t| t.is_finite())
+                    .fold((0.0f64, 0u32), |(s, n), &t| {
+                        (s + f64::from(t.clamp(0.0, 1.0)), n + 1)
+                    });
+                snapshot.cloud_shadow = Some(CloudShadowSnapshot {
+                    grid,
+                    light,
+                    transmittance: values.into(),
+                    mean: if count > 0 {
+                        (sum / f64::from(count)) as f32
+                    } else {
+                        1.0
+                    },
+                });
+            }
+        },
+    );
+}
+
+/// The sky's horizon radiance, read back for the distance fog (`docs/research/fog-colour.md`).
+/// Until the probe pass has written the ring (no probe, or the first frames) nothing is stored
+/// and the fog keeps its analytic colour.
+fn read_horizon(gpu: Option<Res<CloudGpu>>, mut readbacks: Readbacks) {
     let Some(gpu) = gpu else {
         return;
     };
     if !gpu.active || !gpu.live.load(Ordering::Relaxed) {
         return;
     }
-    readbacks.request("cloud_camera_t", gpu.camera_t.clone(), |bytes, snapshot| {
-        if let Some(values) = decode::<f32>(bytes)
-            && let Some(&t) = values.first()
-            && t.is_finite()
-        {
-            snapshot.cloud_transmittance = Some(t);
+    readbacks.request(
+        "cloud_horizon",
+        gpu.horizon.clone(),
+        move |bytes, snapshot| {
+            if let Some(values) = decode::<[f32; 4]>(bytes)
+                && values.len() >= HORIZON_RING
+                && values[..HORIZON_RING].iter().all(|v| v[3] > 0.5)
+            {
+                let mut ring = [Vec3::ZERO; HORIZON_RING];
+                for (slot, v) in ring.iter_mut().zip(&values) {
+                    *slot = Vec3::new(v[0], v[1], v[2]);
+                }
+                snapshot.horizon = Some(HorizonRing(ring));
+            }
+        },
+    );
+}
+
+/// CPU copy of the cloud shadow map's query grid: the direct transmittance toward the light
+/// every 31.25 m over the map's 8 km square (`docs/research/cloud-shadow-query.md`).
+#[derive(Clone, Debug)]
+pub(crate) struct CloudShadowSnapshot {
+    /// The query grid: cell `k` is centred on shadow-map texel `4k + 2`.
+    pub grid: TerrainGrid,
+    /// Unit direction toward the light the map was generated for (elevation ≥ 5.74°).
+    pub light: Vec3,
+    /// Row-major transmittance, 0–1.
+    pub transmittance: Arc<[f32]>,
+    /// Mean of `transmittance`: the beam the lights carry (`CloudShadows::mean_transmittance`
+    /// before its smoothing).
+    pub mean: f32,
+}
+
+impl CloudShadowSnapshot {
+    /// The query grid of a shadow map whose minimum corner is `origin`.
+    pub(crate) fn grid(origin: Vec2) -> TerrainGrid {
+        let texel = SHADOW_EXTENT_M / SHADOW_TEXELS as f32;
+        TerrainGrid {
+            // Cell k's centre, origin + (k + 0.5)·4t, is texel 4k + 2's centre, origin + (4k + 2.5)·t.
+            origin: origin + Vec2::splat(0.5 * texel),
+            cell_m: texel * SHADOW_COARSE_STRIDE as f32,
+            size: UVec2::splat(SHADOW_COARSE_CELLS),
+            y0: 0.0,
         }
-    });
+    }
+
+    /// Direct transmittance toward the light at a world position: the position projected along
+    /// the light onto the map's plane `y = 0`, bilinear; 1 outside the map.
+    pub(crate) fn transmittance_at(&self, position: Vec3) -> f32 {
+        let q = position.xz() - self.light.xz() * (position.y / self.light.y);
+        if !self.grid.contains(q) {
+            return 1.0;
+        }
+        self.grid.sample(&self.transmittance, q).clamp(0.0, 1.0)
+    }
 }

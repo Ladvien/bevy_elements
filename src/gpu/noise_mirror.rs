@@ -1,91 +1,15 @@
 //! A CPU transliteration of `src/noise.wesl` (f32, wrapping u32 arithmetic), used by tests to
 //! check the analytic derivative and to measure the normalisation constants the kernels use.
 
-use bevy::math::{IVec3, UVec3, Vec3, Vec4};
+use bevy::math::{IVec2, IVec3, UVec3, Vec2, Vec3};
 
-const NOISE_PERIOD: i32 = 4096;
+/// How far a cell network's feature point is drawn *towards* its cell's centre, 0 to 1
+/// (`noise.wesl`'s `CELL_INSET`): the cells are unequal, and a face of unequal cells is a
+/// scatter of fragments and not a mosaic.
+const CELL_INSET: f32 = 0.0;
 
-fn pcg3d(v_in: UVec3) -> UVec3 {
-    let mul = |a: u32, b: u32| a.wrapping_mul(b);
-    let mut v = UVec3::new(
-        mul(v_in.x, 1_664_525).wrapping_add(1_013_904_223),
-        mul(v_in.y, 1_664_525).wrapping_add(1_013_904_223),
-        mul(v_in.z, 1_664_525).wrapping_add(1_013_904_223),
-    );
-    v.x = v.x.wrapping_add(mul(v.y, v.z));
-    v.y = v.y.wrapping_add(mul(v.z, v.x));
-    v.z = v.z.wrapping_add(mul(v.x, v.y));
-    v ^= v >> 16;
-    v.x = v.x.wrapping_add(mul(v.y, v.z));
-    v.y = v.y.wrapping_add(mul(v.z, v.x));
-    v.z = v.z.wrapping_add(mul(v.x, v.y));
-    v
-}
-
-fn hash33(p: IVec3) -> Vec3 {
-    let w = p & IVec3::splat(NOISE_PERIOD - 1);
-    let h: UVec3 = pcg3d(w.as_uvec3()) >> 8u32;
-    h.as_vec3() * (1.0 / 16_777_216.0)
-}
-
-fn lattice_gradient(cell: IVec3) -> Vec3 {
-    (hash33(cell) * 2.0 - 1.0 + Vec3::splat(1e-6)).normalize()
-}
-
-/// Mirror of `perlin3_d`: (value, ∂/∂x, ∂/∂y, ∂/∂z).
-pub(crate) fn perlin3_d(p: Vec3) -> Vec4 {
-    let i = p.floor().as_ivec3();
-    let f = p - p.floor();
-    let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-    let du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
-    let g = |o: IVec3| lattice_gradient(i + o);
-    let (ga, gb, gc, gd) = (
-        g(IVec3::ZERO),
-        g(IVec3::X),
-        g(IVec3::Y),
-        g(IVec3::new(1, 1, 0)),
-    );
-    let (ge, gf, gg, gh) = (
-        g(IVec3::Z),
-        g(IVec3::new(1, 0, 1)),
-        g(IVec3::new(0, 1, 1)),
-        g(IVec3::ONE),
-    );
-    let va = ga.dot(f);
-    let vb = gb.dot(f - Vec3::X);
-    let vc = gc.dot(f - Vec3::Y);
-    let vd = gd.dot(f - Vec3::new(1.0, 1.0, 0.0));
-    let ve = ge.dot(f - Vec3::Z);
-    let vf = gf.dot(f - Vec3::new(1.0, 0.0, 1.0));
-    let vg = gg.dot(f - Vec3::new(0.0, 1.0, 1.0));
-    let vh = gh.dot(f - Vec3::ONE);
-    let (k1, k2, k3) = (vb - va, vc - va, ve - va);
-    let (k4, k5, k6) = (va - vb - vc + vd, va - vc - ve + vg, va - vb - ve + vf);
-    let k7 = -va + vb + vc - vd + ve - vf - vg + vh;
-    let value = va
-        + u.x * k1
-        + u.y * k2
-        + u.z * k3
-        + u.x * u.y * k4
-        + u.y * u.z * k5
-        + u.z * u.x * k6
-        + u.x * u.y * u.z * k7;
-    let yzx = Vec3::new(u.y, u.z, u.x);
-    let zxy = Vec3::new(u.z, u.x, u.y);
-    let grad = ga
-        + u.x * (gb - ga)
-        + u.y * (gc - ga)
-        + u.z * (ge - ga)
-        + u.x * u.y * (ga - gb - gc + gd)
-        + u.y * u.z * (ga - gc - ge + gg)
-        + u.z * u.x * (ga - gb - ge + gf)
-        + u.x * u.y * u.z * (-ga + gb + gc - gd + ge - gf - gg + gh)
-        + du * (Vec3::new(k1, k2, k3)
-            + yzx * Vec3::new(k4, k5, k6)
-            + zxy * Vec3::new(k6, k4, k5)
-            + yzx * zxy * k7);
-    Vec4::new(value, grad.x, grad.y, grad.z) * 1.1547
-}
+pub(crate) use super::perlin::{hash31, hash33, perlin3_d};
+use super::perlin::{NOISE_PERIOD, lattice_gradient};
 
 pub(crate) fn seed_offset(k: u32) -> Vec3 {
     Vec3::new(
@@ -96,6 +20,14 @@ pub(crate) fn seed_offset(k: u32) -> Vec3 {
 }
 
 /// Mirror of `fbm3`.
+/// Mirror of `perlin3` in `noise.wesl`: the **value only**, with the derivative omitted.
+///
+/// The same eight lattice gradients and the same interpolation as `perlin3_d`, with only the
+/// derivative's terms left out, so the value is **bit-identical** to `perlin3_d(p).x`.
+pub(crate) fn perlin3(p: Vec3) -> f32 {
+    perlin3_d(p).x
+}
+
 pub(crate) fn fbm3(p: Vec3, octaves: u32) -> f32 {
     let (mut sum, mut amplitude, mut norm, mut q) = (0.0, 0.5, 0.0, p);
     for o in 0..octaves {
@@ -185,6 +117,121 @@ pub(crate) fn worley3(p: Vec3, period: i32) -> f32 {
     best.sqrt()
 }
 
+/// A cell of the 2D cellular network, the mirror of `cell2` in `noise.wesl`: the distance to the
+/// nearest feature point, the point itself, and the cell's own random factor.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Cell2 {
+    /// The distance to the feature point, in lattice units.
+    pub distance: f32,
+    /// The feature point's position, in lattice units.
+    pub point: Vec2,
+    /// The cell's own random factor, in [0, 1).
+    pub factor: f32,
+}
+
+/// Mirror of `cell2` in `noise.wesl`: the 2D cellular network's nearest feature point, its
+/// distance and its cell's random factor.
+pub(crate) fn cell2(p: Vec2) -> Cell2 {
+    let i = p.floor().as_ivec2();
+    let f = p - p.floor();
+    let mut best = 1e9_f32;
+    let mut best_point = Vec2::ZERO;
+    let mut best_factor = 0.0;
+    for y in -1..=1 {
+        for x in -1..=1 {
+            let o = IVec2::new(x, y);
+            let c = (i + o) & IVec2::splat(NOISE_PERIOD - 1);
+            let h = hash33(IVec3::new(c.x, c.y, 0));
+            let point = o.as_vec2() + h.truncate();
+            let d = point - f;
+            let d2 = d.dot(d);
+            if d2 < best {
+                best = d2;
+                best_point = point;
+                best_factor = h.z;
+            }
+        }
+    }
+    Cell2 {
+        distance: best.sqrt(),
+        point: best_point,
+        factor: best_factor,
+    }
+}
+
+/// A cell of the 3D cellular network, the mirror of `cell3` in `noise.wesl`: the distance to the
+/// nearest feature point, the distance to the second nearest (the cell's *boundary*), the point
+/// itself, and the cell's two random factors.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Cell3 {
+    /// The feature point's position, in lattice units.
+    #[allow(dead_code)]
+    pub point: Vec3,
+    /// The cell's own random factor, in [0, 1).
+    #[allow(dead_code)]
+    pub factor: f32,
+    /// A **second** per-cell draw, in [0, 1): an independent hash of the cell, for the rock's
+    /// palette (`noise.wesl`'s `factor2`).
+    #[allow(dead_code)]
+    pub factor2: f32,
+}
+
+/// Mirror of `cell3` in `noise.wesl`: the 3D cellular network's nearest feature point, the
+/// second nearest point's distance and the cell's two random factors.
+pub(crate) fn cell3(p: Vec3) -> Cell3 {
+    let i = p.floor().as_ivec3();
+    let f = p - p.floor();
+    let mut best = 1e9_f32;
+    let mut best_point = Vec3::ZERO;
+    let mut best_factor = 0.0;
+    let mut best_factor2 = 0.0;
+    // The cells are visited in order of increasing distance, so the prune's bound tightens
+    // quickly. The bound is exact, so the result is the same as the full search.
+    for ring in 0..3 {
+        for z in -1i32..=1 {
+            for y in -1i32..=1 {
+                for x in -1i32..=1 {
+                    // The ring the cell is in, from the point's own cell outwards.
+                    if x.abs().max(y.abs()).max(z.abs()) != ring {
+                        continue;
+                    }
+                    let o = IVec3::new(x, y, z);
+                // The cell is pruned by the distance to its nearest corner: a feature point
+                // lies inside its cell, so a cell whose corner is further than the best
+                // distance so far cannot hold a closer one. The bound is exact, so the result
+                // is the same as the full search.
+                let lo = (o.as_vec3() - f).abs().max((f - o.as_vec3() - 1.0).abs());
+                if lo.dot(lo) >= best {
+                    continue;
+                }
+                let c = (i + o) & IVec3::splat(NOISE_PERIOD - 1);
+                let h = hash33(c);
+                // The point's offset inside its cell is drawn towards the cell's centre, so
+                // the cells are **unequal**: a point near its cell's corner leaves a big cell
+                // behind it and a point at the centre a small one. A cell network's cells are
+                // the same size when the points sit on a lattice, and a face of equal cells is
+                // a mosaic (`noise.wesl`'s `CELL_INSET`).
+                let inset = h.lerp(Vec3::splat(0.5), CELL_INSET);
+                let point = o.as_vec3() + inset;
+                let d = point - f;
+                let d2 = d.dot(d);
+                    if d2 < best {
+                        best = d2;
+                        best_point = point;
+                        best_factor = h.z;
+                        best_factor2 = hash31(c + IVec3::new(7919, 104729, 1299709));
+                    }
+                }
+            }
+        }
+    }
+    Cell3 {
+        point: best_point,
+        factor: best_factor,
+        factor2: best_factor2,
+    }
+}
+
 /// `PERLIN_FBM_MAX` of `generate.wesl`: the largest |fbm| of the 3-octave periodic Perlin sum.
 pub(crate) const PERLIN_FBM_MAX: f32 = 0.55;
 /// `FIELD_MAX` of `weather.wesl`: the same for the coverage field's slice (z = 0.31, period 4),
@@ -264,6 +311,24 @@ mod tests {
             }
         }
         assert!(worst < 2e-3, "worst derivative error {worst}");
+    }
+
+    /// The value-only noise and the derivative-carrying one agree **exactly**.
+    ///
+    /// The value-only noise omits the derivative's terms, so a call site can switch to it
+    /// without changing a pixel. That is the property the crate's shaders rely on: five
+    /// evaluations per rock pixel use the value alone, and the derivative was computed for
+    /// them and thrown away (`docs/research/rock-cost.md`).
+    #[test]
+    fn the_value_only_noise_is_the_same_value() {
+        for i in 0..500 {
+            let p = Vec3::new(
+                i as f32 * 0.137,
+                (i as f32) * 0.071 + 0.5,
+                (i as f32) * 0.211 - 1.5,
+            );
+            assert_eq!(perlin3(p), perlin3_d(p).x, "the value differs at {p:?}");
+        }
     }
 
     #[test]

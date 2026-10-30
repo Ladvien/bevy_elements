@@ -108,6 +108,8 @@ Fetched for M3 (2026-10-13), text from `pdftotext -layout` in `/tmp/research/pdf
 | `10.1145_97880.97884` | Kass & Miller 1990, *Rapid, stable fluid dynamics for computer graphics* | SciDB, ingested |
 | `chentanez2010` | Chentanez & Müller 2010, *Real-time simulation of large bodies of water with small scale details* (SCA) | open PDF `matthias-research.github.io/pages/publications/hfFluid.pdf` |
 
+Also used by `hydrology.md` / `erosion.md`: `10.1145_3658213` (critical angle ≈ 30°, sediment-first layering), `10.1111_cgf.15033` (thermal law), `10.21203_rs.3.rs-4256563_v1`, `eth-cgl-sim_anim-Sol11b`, `10.5194_hess-29-1259-2025` (Oudin potential evapotranspiration). Not in the corpus: Cozzolino et al. 2020, *LInA* local-inertia scheme (`10.48550_arxiv.2009.11188`, the pipe-area and Manning terms); Bates et al. 2010 (abstract only).
+
 ### Water rendering (M3)
 
 | stem | what it is | use |
@@ -123,3 +125,7 @@ No graphics paper on snow cover is in the corpus. Hydrology papers with degree-d
 | stem | what it is | use |
 |---|---|---|
 | `10.1111_cgf.13815` ★ | Paris et al. 2019, *Desertscape simulation* | seed |
+
+### Voxel snow (M5)
+
+No document in the library covers snow or any deposition layer on implicit surfaces, voxel terrain or level sets (phrase searches of 2026-10-13 for `level set` with `snow`, `narrow band`, and incremental marching-cubes re-extraction found none). What `voxel-snow.md` cites: `10.1145_37402.37435` (Lorensen & Cline 1987, marching cubes), `10.1016_j.gmod.2021.101098` (Tereshin et al. 2021, function representation: `min`/`max` set operations on non-distance fields), `10.1109_2945.489388` and `10.1109_2945.597798` (span-space and interval-tree isosurface extraction, not incremental). Festenberg & Gumhold 2011 (`10.1111_j.1467-8659.2011.01904.x`) is not in the corpus; see "Snow cover and melt (M4)".

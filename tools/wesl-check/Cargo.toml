@@ -1,0 +1,24 @@
+# The crate's WESL validator: compiles every shader module to WGSL and parses it with naga, in a
+# second and without a GPU.
+#
+# A WESL error is otherwise **silent at build time** and only shows up as a dark surface in a
+# capture, two minutes later: the crate's shaders are embedded at build time, so a struct with
+# the wrong number of fields fails in the GPU driver and the terrain renders as a flat grey.
+# This tool finds that in a second.
+#
+# Not a workspace member and not part of the published package (`exclude = ["tools/*"]` in the
+# crate manifest).
+[package]
+name = "bevy_elements_wesl_check"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[workspace]
+
+[dependencies]
+# The same WESL compiler Bevy uses, and the same WGSL parser it uses.
+wesl = "0.6.0"
+naga = { version = "29.0", features = ["wgsl-in"] }
+wgsl-parse = "0.6.0"

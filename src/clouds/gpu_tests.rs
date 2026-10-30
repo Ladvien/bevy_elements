@@ -41,6 +41,10 @@ struct Case {
     wall: bool,
     /// Render into an unclamped `Rgba16Float` target with no tonemapping.
     linear_target: bool,
+    /// Civil date of the clock (2026-06-21 unless a test sets it).
+    date: CivilDate,
+    /// Vertical field of view in degrees, `None` for Bevy's default (45°).
+    fov_deg: Option<f32>,
 }
 
 impl Case {
@@ -54,6 +58,8 @@ impl Case {
             debug: CloudDebug::default(),
             wall: false,
             linear_target: false,
+            date: CivilDate::new(2026, 6, 21),
+            fov_deg: None,
         }
     }
 }
@@ -75,7 +81,7 @@ fn app(case: Case) -> App {
         )))
         .insert_resource(WorldClock {
             paused: true,
-            ..WorldClock::new(CivilDate::new(2026, 6, 21)).at_hour(case.hour)
+            ..WorldClock::new(case.date).at_hour(case.hour)
         })
         .insert_resource(case.quality)
         .insert_resource(case.debug.clone())
@@ -106,9 +112,16 @@ fn app(case: Case) -> App {
                     target,
                     ElementsCamera {
                         auto_exposure: false,
+                        ..default()
                     },
                     Transform::from_translation(case.position).looking_to(case.look, up),
                 ));
+                if let Some(fov) = case.fov_deg {
+                    camera.insert(Projection::Perspective(PerspectiveProjection {
+                        fov: fov.to_radians(),
+                        ..default()
+                    }));
+                }
                 if case.linear_target {
                     camera.insert((Tonemapping::None, DebandDither::Disabled, Hdr));
                 }
@@ -471,14 +484,15 @@ fn the_composite_leaves_nearer_surfaces_and_clear_sky_untouched() {
 
     let a = rgba16(bits(&with));
     let b = rgba16(bits(&without));
-    // Camera pitch 20°, vertical field of view 45°: the wall (up to 31° elevation) fills the
-    // rows below about the screen's 36 % mark counted from the top.
+    // Camera pitch 20°, vertical field of view 45°: the wall (elevation −0.2° to 31°) fills the
+    // rows from about the screen's 36 % mark counted from the top down to row 58; the rows
+    // below it see the sky under the horizon, which the composite lifts with the sky gain.
     let mut wall_identical = 0;
     let mut sky_changed = 0;
     for y in 0..64 {
         for x in 0..64 {
             let (pa, pb) = (a[y * 64 + x], b[y * 64 + x]);
-            if y > 40 {
+            if (41..59).contains(&y) {
                 // The volumetric fog jitters every frame: equal up to a half-float step or two.
                 let delta = (0..4).map(|c| (pa[c] - pb[c]).abs()).fold(0.0, f32::max);
                 assert!(
@@ -499,6 +513,69 @@ fn the_composite_leaves_nearer_surfaces_and_clear_sky_untouched() {
         sky_changed > 100,
         "the overcast deck should show in the sky"
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Deviation 29: the sky carries the weather's air
+// ---------------------------------------------------------------------------------------------
+
+/// Deviation 29: the weather's air above clear air fogs the sky exactly as the distance fog
+/// fogs a mesh, so a whiteout has no horizon line. The camera looks straight up under Blizzard
+/// (200 m visibility), where every pixel is sky and the layer entry is the base 1.5 km away:
+/// 2.2×10⁻¹³ of the deck's radiance survives, so the frame is `haze.xyz` to within a half-float
+/// step. Then the same frame with the air suppressed (`CloudDebug::air = 0`, the clear-air
+/// no-op): the deck's own radiance must differ from the fog colour by at least 10 % of its
+/// luminance, or the test would pass on a frame with no cloud and no sky at all.
+#[test]
+#[ignore = "needs a GPU"]
+fn the_weather_air_makes_the_sky_the_fog_colour() {
+    let mut case = Case::sky(WeatherPreset::Blizzard);
+    case.linear_target = true;
+    let mut app = app(case);
+    // Past the 1 s light smoothing and a full accumulation window.
+    run(&mut app, 400);
+    let haze = app.world().resource::<CloudGpu>().params.haze;
+    let air = app.world().resource::<CloudGpu>().params.air.x;
+    assert!(air > 0.0, "Blizzard's air must be above clear air");
+    let target = app.world().resource::<Target>().0.clone();
+    let texels = rgba16(&support::read_texture(&mut app, target.clone(), 64 * 8, 64));
+    let fogged = mean_rgb(&texels);
+
+    set_debug(&mut app, |d| d.air = Some(0.0));
+    run(&mut app, 8);
+    let texels = rgba16(&support::read_texture(&mut app, target, 64 * 8, 64));
+    let deck = mean_rgb(&texels);
+    finish(&mut app);
+
+    let fog = [haze.x, haze.y, haze.z];
+    let difference = (0..3).map(|c| (fogged[c] - fog[c]).abs()).fold(0.0, f32::max);
+    let luminance = luminance([fog[0], fog[1], fog[2], 0.0]);
+    println!(
+        "air {air:.5} m⁻¹: fogged {fogged:?} vs fog {fog:?} (max Δ {difference:.4} of {luminance:.3}); \
+         deck {deck:?}",
+    );
+    // Every pixel is sky: the whole frame is the fog, to the half-float step.
+    assert!(
+        difference <= 0.01 * luminance,
+        "the sky is not the fog colour: {fogged:?} vs {fog:?}"
+    );
+    // Without the air the frame is the deck, which is a different colour: the first assertion
+    // is about the fog, not about a frame that renders nothing.
+    let step = (0..3).map(|c| (deck[c] - fog[c]).abs()).fold(0.0, f32::max);
+    assert!(
+        step >= 0.1 * luminance,
+        "the deck should not be the fog colour: {deck:?} vs {fog:?}"
+    );
+}
+
+fn mean_rgb(texels: &[[f32; 4]]) -> [f32; 3] {
+    let mut sum = [0.0f32; 3];
+    for texel in texels {
+        for c in 0..3 {
+            sum[c] += texel[c];
+        }
+    }
+    sum.map(|v| v / texels.len() as f32)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -585,12 +662,13 @@ fn a_still_camera_gives_a_steady_history() {
 }
 
 /// Validation 13: with no flash the cloud is what it was; a 7.96×10⁶ cd flash at the layer base
-/// lights the cloud over it at dusk by at least 50×, and changes the exposed noon sky by under
-/// 1 %.
+/// lights the cloud over it at dusk by at least 50×, and changes the exposed noon sky by a few
+/// per cent at most: 3.4 % since the cumulonimbus has a flat base 480 m thick where the
+/// flash fires (cumulus-shape.md Deviation 10; under 2 % with the old 800 m ramp).
 #[test]
 #[ignore = "needs a GPU"]
 fn a_flash_lights_the_cloud_at_dusk_and_not_at_noon() {
-    for (hour, minimum_ratio, maximum_change) in [(21.0, 50.0, f32::MAX), (12.0, 0.0, 0.02)] {
+    for (hour, minimum_ratio, maximum_change) in [(21.0, 50.0, f32::MAX), (12.0, 0.0, 0.05)] {
         let mut case = Case::sky(WeatherPreset::Thunderstorm);
         case.hour = hour;
         let mut app = app(case);
@@ -623,5 +701,370 @@ fn a_flash_lights_the_cloud_at_dusk_and_not_at_noon() {
         );
         assert!(lit / dark.max(1e-9) >= minimum_ratio);
         assert!((lit - dark).abs() / dark.max(1e-9) <= maximum_change);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Deviation 27: the far veil continues the marched deck
+// ---------------------------------------------------------------------------------------------
+
+/// Elevation, degrees, of the ray from a camera `camera_m` above the surface that enters the
+/// shell whose lower surface is `base_m` high at distance `distance_m`.
+fn entry_elevation_deg(base_m: f64, camera_m: f64, distance_m: f64) -> f64 {
+    let r = model::PLANET_RADIUS_M;
+    let (o, s) = (r + camera_m, r + base_m);
+    ((s * s - o * o - distance_m * distance_m) / (2.0 * o * distance_m))
+        .asin()
+        .to_degrees()
+}
+
+/// Chroma of a linear colour: (max − min) / max.
+fn chroma(c: [f32; 3]) -> f32 {
+    let max = c.iter().copied().fold(0.0, f32::max);
+    let min = c.iter().copied().fold(f32::MAX, f32::min);
+    (max - min) / max.max(1e-9)
+}
+
+/// The mean colour of the rows of a 64 × 64 target whose centres lie between `from_deg` and
+/// `to_deg` of elevation, for a camera at `pitch_deg` with vertical field of view `fov_deg`.
+fn rows_mean(
+    texels: &[[f32; 4]],
+    pitch_deg: f64,
+    fov_deg: f64,
+    from_deg: f64,
+    to_deg: f64,
+) -> [f32; 3] {
+    let half = (fov_deg.to_radians() / 2.0).tan();
+    let mut sum = [0.0f32; 3];
+    let mut n = 0.0;
+    for y in 0..64 {
+        let ndc = 1.0 - 2.0 * (y as f64 + 0.5) / 64.0;
+        let elevation = pitch_deg + (ndc * half).atan().to_degrees();
+        if elevation >= from_deg && elevation <= to_deg {
+            for x in 0..64 {
+                for c in 0..3 {
+                    sum[c] += texels[y * 64 + x][c];
+                }
+            }
+            n += 64.0;
+        }
+    }
+    assert!(n > 0.0, "no rows between {from_deg}° and {to_deg}°");
+    sum.map(|v| v / n)
+}
+
+/// Blue-ness of a linear colour: (b − r) / (r + g + b), positive for a bluish colour, negative
+/// for a peach one.
+fn tint(c: [f32; 3]) -> f32 {
+    (c[2] - c[0]) / (c[0] + c[1] + c[2]).max(1e-9)
+}
+
+/// Deviation 27: at full cover the far veil continues the marched deck. The camera looks at the
+/// elevation where the layer entry is 32 km away (the end of the march: below it only the veil
+/// shows) at 12° field of view; the rows 0.15–0.6° above that elevation show the fading deck and
+/// the rows 0.15–0.6° below it the veil. Their mean colours differ in luminance by under 20 %
+/// (measured 4–13 %, about the natural gradient of the aerial perspective over 0.9°; before
+/// Deviation 27 the step was 1.7× at sun 60° and 2.4× at 20°), in blue-ness by under 0.03
+/// (measured 0.013 at most; before: about 0.25, a peach band under a blue deck at 20°) and in
+/// chroma by under 0.05 (measured 0.032 at most; before: 0.23); the veil rows 1.5–2.1° below the
+/// boundary have the blue-ness and chroma of the deck rows 1.5–2.1° above it to within 0.06 and
+/// 0.1 (measured 0.034 and 0.068). Sun 60° and 20° (the second is the low winter sun of the
+/// `snowfall` example), Snow (cover 1) and Overcast (0.95), looking away from the sun and
+/// toward it.
+///
+/// The weather's air is suppressed (`CloudDebug::air = 0`): at 1.5 km visibility Deviation 29's
+/// fog saturates both sides of the boundary to the same colour (measured ratio 1.000 at Snow),
+/// which would make the test blind to the step it exists to catch. Suppressing it leaves the
+/// veil-versus-deck comparison the test was written for, unchanged from the build before
+/// Deviation 29.
+#[test]
+#[ignore = "needs a GPU"]
+fn the_far_veil_continues_the_marched_deck_at_full_cover() {
+    let fov_deg = 12.0_f64;
+    let camera_m = 2.0_f32;
+    for (preset, date, hour, sun_range) in [
+        (
+            WeatherPreset::Snow,
+            CivilDate::new(2026, 5, 1),
+            12.0,
+            58.0..63.0,
+        ),
+        (
+            WeatherPreset::Snow,
+            CivilDate::new(2026, 1, 15),
+            10.5,
+            17.0..23.0,
+        ),
+        (
+            WeatherPreset::Overcast,
+            CivilDate::new(2026, 4, 20),
+            12.0,
+            55.0..58.0,
+        ),
+        (
+            WeatherPreset::Overcast,
+            CivilDate::new(2026, 1, 15),
+            10.5,
+            17.0..23.0,
+        ),
+    ] {
+        let mut case = Case::sky(preset);
+        case.date = date;
+        case.hour = hour;
+        case.linear_target = true;
+        case.fov_deg = Some(fov_deg as f32);
+        // Measure the veil, not the weather's fog over both: Deviation 29 saturates a 1.5 km
+        // visibility to one colour and would hide the step this test exists to catch.
+        case.debug.air = Some(0.0);
+        let mut app = app(case);
+        run(&mut app, 4);
+        let sun = *app.world().resource::<crate::celestial::SunState>();
+        let base_m = app.world().resource::<crate::clouds::CloudLayer>().base_m;
+        assert!(
+            sun_range.contains(&sun.altitude_deg),
+            "sun {}°",
+            sun.altitude_deg
+        );
+        let boundary = entry_elevation_deg(f64::from(base_m), f64::from(camera_m), 32_000.0);
+        for rel_azimuth_deg in [180.0_f32, 0.0] {
+            let pitch = (boundary as f32).to_radians();
+            let azimuth = (sun.azimuth_deg + rel_azimuth_deg).to_radians();
+            let look = Dir3::new(Vec3::new(
+                azimuth.sin() * pitch.cos(),
+                pitch.sin(),
+                -azimuth.cos() * pitch.cos(),
+            ))
+            .expect("a unit look direction");
+            let mut cameras = app
+                .world_mut()
+                .query_filtered::<&mut Transform, With<ElementsCamera>>();
+            for mut transform in cameras.iter_mut(app.world_mut()) {
+                *transform = Transform::from_translation(Vec3::new(0.0, camera_m, 0.0))
+                    .looking_to(look, Vec3::Y);
+            }
+            // Past the 1 s smoothing of the light factor and a full accumulation window.
+            run(&mut app, 400);
+            let target = app.world().resource::<Target>().0.clone();
+            let texels = rgba16(&support::read_texture(&mut app, target, 64 * 8, 64));
+
+            let rows = |from: f64, to: f64| {
+                rows_mean(&texels, boundary, fov_deg, boundary + from, boundary + to)
+            };
+            let (deck, veil) = (rows(0.15, 0.6), rows(-0.6, -0.15));
+            let (deck_far, veil_far) = (rows(1.5, 2.1), rows(-2.1, -1.5));
+            let lum = |c: [f32; 3]| luminance([c[0], c[1], c[2], 0.0]);
+            let ratio = lum(veil) / lum(deck);
+            println!(
+                "{preset:?} sun {:.1}° rel {rel_azimuth_deg}: boundary {boundary:.2}°, luminance deck {:.3} veil {:.3} (ratio {ratio:.3}); tint deck {:.3} veil {:.3}, chroma deck {:.3} veil {:.3}; 1.5–2.1° away: tint {:.3} / {:.3}, chroma {:.3} / {:.3}",
+                sun.altitude_deg,
+                lum(deck),
+                lum(veil),
+                tint(deck),
+                tint(veil),
+                chroma(deck),
+                chroma(veil),
+                tint(deck_far),
+                tint(veil_far),
+                chroma(deck_far),
+                chroma(veil_far),
+            );
+            assert!(
+                (0.85..=1.2).contains(&ratio),
+                "{preset:?}: luminance ratio {ratio}"
+            );
+            assert!((tint(veil) - tint(deck)).abs() <= 0.03, "{preset:?}: tint");
+            assert!(
+                (chroma(veil) - chroma(deck)).abs() <= 0.05,
+                "{preset:?}: chroma"
+            );
+            // 1.5–2.1° from the boundary the rows are 4–6 km apart in distance: a deck lit by
+            // diffusion is bright enough that the air's reddening of it outweighs the airlight,
+            // a smooth 0.017 a degree with no step (cloud-lighting.md Deviation 4; measured
+            // 0.062 tint and 0.122 chroma at a 60° sun, 0.033 and 0.067 at 20°).
+            assert!(
+                (tint(veil_far) - tint(deck_far)).abs() <= 0.08,
+                "{preset:?}: far tint"
+            );
+            assert!(
+                (chroma(veil_far) - chroma(deck_far)).abs() <= 0.15,
+                "{preset:?}: far chroma"
+            );
+        }
+        finish(&mut app);
+    }
+}
+
+/// The sky at the horizon is fogged like the ground below it: the veil that draws the deck at
+/// grazing angles (`far_veil`, not the march) and the planet met below the horizon both carry
+/// the distance fog, so no dark band lies between the sky and the fogged ground (clouds.md
+/// Deviations 28 and 29; measured on `ground_cover` at 6 m eye: sky 225 against a 45-row band
+/// of 157–171 under `Snow` and `Rain`).
+#[test]
+#[ignore = "needs a GPU"]
+fn the_horizon_sky_is_the_fog_colour_under_a_deck() {
+    let mut case = Case::sky(WeatherPreset::Snow);
+    // 6 m above the ground looking 1° up: the 45° frame spans +23.5° to −21.5°, so the middle
+    // rows are the veil at the horizon and the bottom rows the planet below it.
+    case.position = Vec3::new(0.0, 6.0, 0.0);
+    let up = 1.0f32.to_radians().sin();
+    let forward = 1.0f32.to_radians().cos();
+    case.look = Vec3::new(0.0, 6.0 + 100.0 * up, -100.0 * forward);
+    case.linear_target = true;
+    let mut app = app(case);
+    // Past the 1 s light smoothing and a full accumulation window.
+    run(&mut app, 400);
+    let haze = app.world().resource::<CloudGpu>().params.haze;
+    let target = app.world().resource::<Target>().0.clone();
+    let texels = rgba16(&support::read_texture(&mut app, target, 64 * 8, 64));
+    finish(&mut app);
+    let fog = [haze.x, haze.y, haze.z];
+    let luminance = luminance([fog[0], fog[1], fog[2], 0.0]);
+    // The target is 64×64: 64 rows span 45° around +1°, so the horizon sits at row 33; rows
+    // 28..=33 are the sky just above it and rows 34..=45 the planet just below it.
+    let band = |rows: std::ops::Range<usize>| {
+        let mut sum = [0.0f32; 3];
+        let mut n = 0.0;
+        for y in rows {
+            for x in 0..64 {
+                let p = texels[y * 64 + x];
+                sum[0] += p[0];
+                sum[1] += p[1];
+                sum[2] += p[2];
+                n += 1.0;
+            }
+        }
+        [sum[0] / n, sum[1] / n, sum[2] / n]
+    };
+    let above = band(28..33);
+    let below = band(34..45);
+    println!("haze {fog:?}; sky just above the horizon {above:?}; just below {below:?}");
+    for (name, band) in [("above", above), ("below", below)] {
+        let d = (0..3).map(|c| (band[c] - fog[c]).abs()).fold(0.0f32, f32::max);
+        assert!(
+            d <= 0.05 * luminance,
+            "the {name}-horizon sky is not the fog colour: {band:?} vs {fog:?} (Δ {d:.4})"
+        );
+    }
+}
+
+/// The sky just above the horizon and the air past the edge of a finite ground are the same
+/// colour, in every azimuth and at every hour — the slab the crate draws where the ground ends
+/// is the sky's own column, not one colour for the whole horizon
+/// (`docs/research/horizon-colour.md`). The camera stands 2 m up looking level at 20° field of
+/// view, so the top rows are the sky and the rows just below the horizon are the slab; the sun
+/// is put behind the camera and to its side in turn, since a dusk horizon is not one colour.
+#[test]
+#[ignore = "needs a GPU"]
+fn the_air_past_the_ground_is_the_sky_in_its_own_column() {
+    for (hour, sun_note) in [
+        (12.0, "noon"),
+        (17.5, "golden hour"),
+        (19.0, "low sun"),
+        (20.0, "after sunset"),
+        // Midnight: the probe's cube adds a night fill so the lighting cube is not black, and
+        // that fill is not the sky the screen draws. Read into the slab it was a grey sea
+        // (9.6, 12.4, 15.5 DN) under a black sky, so the night is checked here.
+        (0.5, "midnight"),
+    ] {
+        for rel_azimuth_deg in [0.0f32, 90.0, 180.0] {
+            let mut case = Case::sky(WeatherPreset::Clear);
+            case.hour = hour;
+            case.position = Vec3::new(0.0, 2.0, 0.0);
+            case.fov_deg = Some(20.0);
+            case.linear_target = true;
+            // The weather's air is suppressed: this is the atmosphere's own colour, not the
+            // fog's (Deviation 29 saturates a short visibility to one colour by design).
+            case.debug.air = Some(0.0);
+            let mut app = app(case);
+            run(&mut app, 30);
+            let sun = *app.world().resource::<crate::celestial::SunState>();
+            let azimuth = (sun.azimuth_deg + rel_azimuth_deg).to_radians();
+            let look = Dir3::new(Vec3::new(azimuth.sin() * 1e-4, 0.0, -azimuth.cos()))
+                .expect("a level look");
+            let mut cameras = app
+                .world_mut()
+                .query_filtered::<&mut Transform, With<ElementsCamera>>();
+            for mut transform in cameras.iter_mut(app.world_mut()) {
+                *transform =
+                    Transform::from_translation(Vec3::new(0.0, 2.0, 0.0)).looking_to(look, Vec3::Y);
+            }
+            // Past the 1 s light smoothing and a full accumulation window.
+            run(&mut app, 400);
+            let target = app.world().resource::<Target>().0.clone();
+            let texels = rgba16(&support::read_texture(&mut app, target, 64 * 8, 64));
+            finish(&mut app);
+
+            // 64 rows span 20° about level: the horizon is row 32. Rows 26..=31 are the sky just
+            // above it, rows 36..=44 the slab. The two rows either side of the edge are skipped:
+            // they hold the geometric transition, not the colours.
+            let band = |rows: std::ops::Range<usize>| {
+                let mut sum = [0.0f32; 3];
+                let mut n = 0.0;
+                for y in rows {
+                    for x in 0..64 {
+                        let p = texels[y * 64 + x];
+                        sum[0] += p[0];
+                        sum[1] += p[1];
+                        sum[2] += p[2];
+                        n += 1.0;
+                    }
+                }
+                [sum[0] / n, sum[1] / n, sum[2] / n]
+            };
+            let sky = band(30..31);
+            let slab = band(36..45);
+            // The slab is a ray that meets the planet, so the air it converges on is the sky
+            // **at the horizon**, and in twilight a row half a degree up is measurably brighter
+            // (the Earth's shadow rising): comparing the two directly failed the after-sunset
+            // case by 24 % of a luminance of 0.10 in linear radiance, on a slab that is right.
+            // `horizon_sky` models the horizon by extrapolating its two taps to zero elevation,
+            // so the oracle here does the same from rows 30 (0.47° up) and 28 (1.09°).
+            let upper = band(28..29);
+            let horizon = [0, 1, 2].map(|c| 2.0 * sky[c] - upper[c]);
+            // What a viewer judges is the slab's brightness and its hue against the sky's, so the
+            // test measures both: the luminance difference, and `(R − B) / luminance`, which is
+            // where a twilight horizon's warmth lives. A single max-channel bound is the wrong
+            // ruler here — in a red-dominated twilight the red channel carries twice the error the
+            // eye sees (measured 6.8 % of luminance against 14.5 % in red).
+            let slab_lum = luminance([slab[0], slab[1], slab[2], 0.0]);
+            let sky_lum = luminance([horizon[0], horizon[1], horizon[2], 0.0]);
+            // At midnight the sky, the horizon and the slab are all exactly zero: there is no hue
+            // to compare, and `(R − B) / luminance` on a luminance floored at 1e-9 turns a
+            // negative rounding residue (−2.8e-9 in blue) into a warmth of −2.8. The invariant
+            // there is a different one — a black sky leaves a black slab — so it is asserted
+            // directly, in linear radiance, against the same floor the ratio would use.
+            if sky_lum <= 1e-6 {
+                assert!(
+                    slab_lum <= 1e-6,
+                    "{sun_note}, rel {rel_azimuth_deg}°: the sky at the horizon is black but the \
+                     slab is not: {slab:?} at a luminance of {slab_lum:.3e}"
+                );
+                println!(
+                    "sun {:.1}°, rel {rel_azimuth_deg:.0}° ({sun_note}): sky {sky:?} horizon \
+                     {horizon:?} slab {slab:?}; both black (luminance {slab_lum:.3e})",
+                    sun.altitude_deg,
+                );
+                continue;
+            }
+            let d_lum = (slab_lum - sky_lum).abs() / sky_lum;
+            let warmth = |c: [f32; 3], l: f32| (c[0] - c[2]) / l;
+            let d_hue = (warmth(slab, slab_lum) - warmth(horizon, sky_lum)).abs();
+            println!(
+                "sun {:.1}°, rel {rel_azimuth_deg:.0}° ({sun_note}): sky {sky:?} horizon {horizon:?} \
+                 slab {slab:?}; Δ luminance {:.3}, Δ warmth {d_hue:.3}",
+                sun.altitude_deg, d_lum,
+            );
+            // Measured on big: luminance within 1.4 % at noon, 1.0 % at golden hour, 1.7 % at a
+            // low sun and 7.3 % just after sunset; warmth within 0.05 at every hour. The
+            // after-sunset residual is the cube's 0.7° texel against the screen's 0.31° row: the
+            // horizon's gradient there is 7 DN/degree, so neither can resolve it closer. Before
+            // this change the slab was the analytic fog hue and differed from the sky by 12-38 DN
+            // in the captures (65-130 DN at dusk), 24 % of luminance at noon.
+            assert!(
+                d_lum <= 0.08 && d_hue <= 0.15,
+                "{sun_note}, rel {rel_azimuth_deg}°: the slab is not the sky at the horizon: \
+                 {slab:?} against {horizon:?} (Δ luminance {d_lum:.3}, Δ warmth {d_hue:.3})"
+            );
+        }
     }
 }

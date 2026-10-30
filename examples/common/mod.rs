@@ -1,8 +1,25 @@
 //! Shared example scaffolding: a free-fly camera, clock and weather keys, a status line, and the
 //! `ELEMENTS_FRAMES` / `ELEMENTS_SHOT` switches used for unattended runs.
 //!
-//! - `ELEMENTS_FRAMES=N` exits after N frames.
+//! - `ELEMENTS_FRAMES=N` exits after N frames at a fixed 1/60 s step, so every run simulates and
+//!   captures the same frames (GPU results are not bit-deterministic, but the simulated time,
+//!   weather, clock and camera are). Without `ELEMENTS_FRAMES` the examples run on wall-clock time.
 //! - `ELEMENTS_SHOT=/tmp/x.png` saves a screenshot of the primary window on the last frame, then exits.
+//! - `ELEMENTS_GROW_HOURS=N` integrates `N` game hours of the forced weather before the first
+//!   frame (see [`grow_weather`]): a still of a snowfall or a rain shows accumulated snow, wet
+//!   ground and streaks instead of the first instant of the preset.
+//! - `ELEMENTS_SHOT_DIR=/tmp/frames` saves a frame sequence to that directory (created if
+//!   missing) as `frame0000.png` and up, `ELEMENTS_SHOT_EVERY=N` capturing every Nth frame
+//!   (default 1) from `ELEMENTS_SHOT_FROM` (default 1). With `ELEMENTS_FRAMES` the simulated time
+//!   is the same every run, which is what temporal effects (cloud accumulation, rain, lightning,
+//!   wind, water flow, snow melt) are reviewed on. A run with `ELEMENTS_SHOT_DIR` and no
+//!   `ELEMENTS_FRAMES` captures until it is killed.
+//! - The terrain wears the golem-generated soil and grass in `assets/ground/golem/`
+//!   ([`TerrainTextures`]); `ELEMENTS_GROUND_TEXTURES=0` renders the procedural ground alone,
+//!   `ELEMENTS_GROUND_SWAP=S` toggles the set every S seconds (re-texturing the terrain at
+//!   runtime) and `ELEMENTS_GROUND_COLOUR=c` sets every layer's colour share
+//!   ([`GroundLayerTextures::colour`]). A binary run directly (not through `cargo run`) finds the
+//!   assets with `BEVY_ASSET_ROOT=<the repository>`.
 //!
 //! Keys: WASD + Q/E move (Shift ×5), hold the right mouse button to look, `[`/`]` halve/double the
 //! time scale, `T` +1 hour, `1`–`0` force a weather preset, `R` release to the scheduler.
@@ -18,10 +35,56 @@ use ground::GroundPlane;
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 use bevy::render::view::window::screenshot::{Screenshot, ScreenshotCaptured, save_to_disk};
+use bevy::time::TimeUpdateStrategy;
 use bevy_elements::*;
 
 /// Adds the harness to an example.
 pub struct ExampleHarness;
+
+/// `ELEMENTS_UNITS`: world units to the metre for this run (default 1). The harness inserts
+/// [`ElementsUnits`] and [`camera`] and [`stand_on_ground`] scale what they place, so an example
+/// whose world is the crate's (terrain, sky, weather) runs in feet with `ELEMENTS_UNITS=3.2808`.
+pub fn units() -> f32 {
+    std::env::var("ELEMENTS_UNITS")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok())
+        .filter(|u| u.is_finite() && *u > 0.0)
+        .unwrap_or(1.0)
+}
+
+/// A vector from an `x,y,z` environment variable (`ELEMENTS_EYE`, `ELEMENTS_LOOK`).
+pub fn vec3_env(name: &str) -> Option<Vec3> {
+    let v: Vec<f32> = std::env::var(name)
+        .ok()?
+        .split(',')
+        .filter_map(|p| p.trim().parse().ok())
+        .collect();
+    (v.len() == 3).then(|| Vec3::new(v[0], v[1], v[2]))
+}
+
+/// `ELEMENTS_TINT=r,g,b`, `ELEMENTS_SATURATION=s`, `ELEMENTS_DETAIL=a` and
+/// `ELEMENTS_FINEST_M=m`: a grade of the terrain's bare ground and its detail ([`TerrainLook`]),
+/// `None` when none is set.
+pub fn terrain_look_env() -> Option<TerrainLook> {
+    let tint = vec3_env("ELEMENTS_TINT");
+    let saturation: Option<f32> = std::env::var("ELEMENTS_SATURATION")
+        .ok()
+        .and_then(|s| s.parse().ok());
+    let detail: Option<f32> = std::env::var("ELEMENTS_DETAIL")
+        .ok()
+        .and_then(|s| s.parse().ok());
+    let finest_m: Option<f32> = std::env::var("ELEMENTS_FINEST_M")
+        .ok()
+        .and_then(|s| s.parse().ok());
+    (tint.is_some() || saturation.is_some() || detail.is_some() || finest_m.is_some()).then(|| {
+        TerrainLook {
+            tint: tint.unwrap_or(Vec3::ONE),
+            saturation: saturation.unwrap_or(1.0),
+            detail: detail.unwrap_or(1.0),
+            finest_m,
+        }
+    })
+}
 
 /// The free-fly camera.
 #[derive(Component, Default)]
@@ -35,14 +98,28 @@ impl FlyCamera {
     pub fn looking(yaw: f32, pitch: f32) -> Self {
         Self { yaw, pitch }
     }
+
+    /// Turn the camera to yaw/pitch, in radians (an aim system pointing it at a body).
+    pub fn face(&mut self, yaw: f32, pitch: f32) {
+        self.yaw = yaw;
+        self.pitch = pitch.clamp(-1.54, 1.54);
+    }
 }
 
 #[derive(Resource)]
 struct RunConfig {
     frames: Option<u32>,
     shot: Option<String>,
+    shot_dir: Option<String>,
+    shot_every: u32,
+    shot_from: u32,
     frame: u32,
     shot_taken: bool,
+    /// `ELEMENTS_GROW_HOURS`: game hours of the held weather to integrate before the first
+    /// captured frame.
+    grow_hours: f64,
+    /// Screenshots spawned but not yet written; the run does not end over one.
+    pending: std::sync::Arc<std::sync::atomic::AtomicU32>,
 }
 
 #[derive(Component)]
@@ -50,27 +127,161 @@ struct StatusLine;
 
 impl Plugin for ExampleHarness {
     fn build(&self, app: &mut App) {
-        let frames = std::env::var("ELEMENTS_FRAMES")
+        let env_u32 = |name: &str, default: u32| {
+            std::env::var(name)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(default)
+        };
+        let frames: Option<u32> = std::env::var("ELEMENTS_FRAMES")
             .ok()
             .and_then(|v| v.parse().ok());
         let shot = std::env::var("ELEMENTS_SHOT").ok();
+        let shot_dir = std::env::var("ELEMENTS_SHOT_DIR").ok();
+        // A frame sequence is only worth reviewing when the frames are the same every run, so
+        // either capture switch runs the app on a fixed 1/60 s step.
+        if frames.is_some() || shot_dir.is_some() {
+            app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+                1.0 / 60.0,
+            )));
+        }
+        if units() != 1.0 {
+            app.insert_resource(ElementsUnits {
+                units_per_metre: units(),
+            });
+        }
+        // `ELEMENTS_PRECIPITATION=readable`: the stylised rain and snow for far-off cameras.
+        if std::env::var("ELEMENTS_PRECIPITATION").as_deref() == Ok("readable") {
+            app.insert_resource(PrecipitationLook::readable());
+        }
         app.insert_resource(RunConfig {
             frames,
             shot,
+            shot_dir,
+            shot_every: env_u32("ELEMENTS_SHOT_EVERY", 1).max(1),
+            shot_from: env_u32("ELEMENTS_SHOT_FROM", 1).max(1),
             frame: 0,
             shot_taken: false,
+            grow_hours: std::env::var("ELEMENTS_GROW_HOURS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.0),
+            pending: std::sync::Arc::default(),
         })
-        .add_systems(Startup, spawn_status)
+        .add_systems(Startup, (spawn_status, load_ground_textures))
+        .add_systems(Update, texture_terrain)
         .add_systems(
             Update,
-            (fly, clock_keys, weather_keys).before(ElementsSystems::Clock),
+            (grow_weather, fly, ortho_rig, clock_keys, weather_keys).before(ElementsSystems::Clock),
         )
-        .add_systems(Update, (status, run_limit).after(ElementsSystems::Readback));
+        .add_systems(
+            Update,
+            (settle_on_ground, plant_pins, status, capture_frames).after(ElementsSystems::Readback),
+        )
+        .add_systems(Update, run_limit.after(capture_frames))
+        .add_systems(PostStartup, scale_projections);
         ground::plugin(app);
     }
 }
 
-/// The standard example camera: an `ElementsCamera` that flies.
+/// The examples' ground texture set (`assets/ground/golem/`): golem's generated soil and grass,
+/// handed to [`TerrainTextures`] as photographs. `ELEMENTS_GROUND_TEXTURES=0` leaves it off,
+/// `ELEMENTS_GROUND_SWAP` toggles it.
+#[derive(Resource)]
+struct GroundSet {
+    set: TerrainTextures,
+    /// The set is on the terrain.
+    on: bool,
+    /// Seconds between toggles, and the time since the last one.
+    swap: Option<f32>,
+    since: f32,
+}
+
+fn load_ground_textures(mut commands: Commands, asset_server: Res<AssetServer>) {
+    // The maps are only read by the crate's packer, so they stay off the GPU.
+    let map = |path: &str| -> Handle<Image> {
+        asset_server
+            .load_builder()
+            .with_settings(|settings: &mut bevy::image::ImageLoaderSettings| {
+                settings.asset_usage = bevy::asset::RenderAssetUsages::MAIN_WORLD;
+            })
+            .load(path.to_owned())
+    };
+    // The soil and the grass; the sand stays procedural until it has a ripple field
+    // (`docs/research/ground-textures.md`, Deviation 15).
+    let mut set = TerrainTextures {
+        soil: Some(
+            GroundLayerTextures::new(map("ground/golem/soil.jpg"), 2.0)
+                .photograph()
+                .with_relief_deg(10.0),
+        ),
+        grass: Some(
+            GroundLayerTextures::new(map("ground/golem/grass.jpg"), 2.0)
+                .photograph()
+                .with_relief_deg(14.0),
+        ),
+        ..default()
+    };
+    // `ELEMENTS_GROUND_COLOUR=c`: every layer's colour share (`GroundLayerTextures::colour`).
+    if let Some(share) = std::env::var("ELEMENTS_GROUND_COLOUR")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+    {
+        for layer in [&mut set.sand, &mut set.soil, &mut set.grass]
+            .into_iter()
+            .flatten()
+        {
+            layer.colour = share;
+        }
+    }
+    commands.insert_resource(GroundSet {
+        set,
+        on: std::env::var("ELEMENTS_GROUND_TEXTURES").as_deref() != Ok("0"),
+        swap: std::env::var("ELEMENTS_GROUND_SWAP")
+            .ok()
+            .and_then(|s| s.parse::<f32>().ok())
+            .filter(|s| *s > 0.0),
+        since: 0.0,
+    });
+}
+
+/// Puts the set on every terrain an example spawns, and toggles it on the `ELEMENTS_GROUND_SWAP`
+/// period.
+fn texture_terrain(
+    mut commands: Commands,
+    ground: Option<ResMut<GroundSet>>,
+    added: Query<Entity, Added<Terrain>>,
+    terrains: Query<Entity, With<Terrain>>,
+    time: Res<Time>,
+) {
+    let Some(mut ground) = ground else {
+        return;
+    };
+    let mut toggled = false;
+    if let Some(period) = ground.swap {
+        ground.since += time.delta_secs();
+        if ground.since >= period {
+            ground.since -= period;
+            ground.on = !ground.on;
+            toggled = true;
+        }
+    }
+    let targets: Vec<Entity> = if toggled {
+        terrains.iter().collect()
+    } else {
+        added.iter().collect()
+    };
+    for entity in targets {
+        if ground.on {
+            commands.entity(entity).insert(ground.set.clone());
+        } else {
+            commands.entity(entity).remove::<TerrainTextures>();
+        }
+    }
+}
+
+/// The standard example camera: an `ElementsCamera` that flies, placed at `position` looking at
+/// `look_at` (metres, scaled by [`units`]).
 pub fn camera(position: Vec3, look_at: Vec3) -> impl Bundle {
     let dir = (look_at - position).normalize_or(Vec3::NEG_Z);
     let yaw = (-dir.x).atan2(-dir.z);
@@ -79,13 +290,220 @@ pub fn camera(position: Vec3, look_at: Vec3) -> impl Bundle {
         Camera3d::default(),
         ElementsCamera::default(),
         FlyCamera::looking(yaw, pitch),
-        Transform::from_translation(position).with_rotation(Quat::from_euler(
+        Transform::from_translation(position * units()).with_rotation(Quat::from_euler(
             EulerRot::YXZ,
             yaw,
             pitch,
             0.0,
         )),
     )
+}
+
+/// A flying camera's near and far planes in [`units`], whatever projection the example gave it.
+fn scale_projections(mut cameras: Query<&mut Projection, With<FlyCamera>>) {
+    let u = units();
+    if u == 1.0 {
+        return;
+    }
+    for mut projection in &mut cameras {
+        if let Projection::Perspective(p) = &mut *projection {
+            p.near *= u;
+            p.far *= u;
+        }
+    }
+}
+
+/// Marks a camera that moves to `height` metres above the terrain at its XZ once the terrain's
+/// heights have been read back (the heights are not known on the first frames).
+#[derive(Component)]
+pub struct StandOnGround {
+    height: f32,
+}
+
+/// See [`StandOnGround`]; `height` is metres, scaled by [`units`].
+pub fn stand_on_ground(height: f32) -> StandOnGround {
+    StandOnGround {
+        height: height * units(),
+    }
+}
+
+fn settle_on_ground(
+    mut commands: Commands,
+    env: Environment,
+    mut cameras: Query<(Entity, &mut Transform, &StandOnGround)>,
+) {
+    for (entity, mut transform, stand) in &mut cameras {
+        if let Some(ground) = env.terrain_height(transform.translation.xz()) {
+            transform.translation.y = ground + stand.height;
+            commands.entity(entity).remove::<StandOnGround>();
+        }
+    }
+}
+
+/// How far an [`ortho_camera`] stands back from its focus, m: Sanctuary's town camera, 1500 ft.
+pub const ORTHO_BACK_M: f32 = 457.0;
+
+/// An orthographic camera rig ([`ortho_camera`]): the focus on the ground it looks at, the view
+/// direction, and the speed the focus walks at along the view's heading, m/s.
+#[derive(Component)]
+pub struct OrthoRig {
+    focus: Vec3,
+    forward: Vec3,
+    speed: f32,
+}
+
+/// `ELEMENTS_ORTHO=18`: an orthographic camera that shows that many metres of ground top to
+/// bottom and stands [`ORTHO_BACK_M`] back from its [`ElementsFocus`], a point on the ground at
+/// `look`'s XZ (an isometric town view, issue #36). `ELEMENTS_PITCH` is the angle below the
+/// horizon (default 35.26°, the isometric angle), `ELEMENTS_HEADING` the compass heading of the
+/// view (default 45°; 0 looks toward −Z, 90° toward +X), and `ELEMENTS_WALK=1.4` walks the focus
+/// along that heading at 1.4 m/s, on the ground, the camera keeping its place behind it.
+pub fn ortho_camera(look: Vec3) -> Option<impl Bundle> {
+    let zoom: f32 = std::env::var("ELEMENTS_ORTHO").ok()?.parse().ok()?;
+    let env_f32 = |name: &str, default: f32| {
+        std::env::var(name)
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(default)
+    };
+    let pitch = env_f32("ELEMENTS_PITCH", 35.26).to_radians();
+    let heading = env_f32("ELEMENTS_HEADING", 45.0).to_radians();
+    let forward = Vec3::new(
+        heading.sin() * pitch.cos(),
+        -pitch.sin(),
+        -heading.cos() * pitch.cos(),
+    );
+    let u = units();
+    let focus = look * u;
+    Some((
+        Camera3d::default(),
+        ElementsCamera::default(),
+        Projection::from(OrthographicProjection {
+            scaling_mode: bevy::camera::ScalingMode::FixedVertical {
+                viewport_height: zoom * u,
+            },
+            far: 2.0 * ORTHO_BACK_M * u,
+            ..OrthographicProjection::default_3d()
+        }),
+        Transform::from_translation(focus - forward * ORTHO_BACK_M * u)
+            .looking_to(forward, Vec3::Y),
+        ElementsFocus::Point(focus),
+        OrthoRig {
+            focus,
+            forward,
+            speed: env_f32("ELEMENTS_WALK", 0.0) * u,
+        },
+    ))
+}
+
+/// Walk an [`OrthoRig`]'s focus, keep it on the ground, and keep the camera behind it.
+fn ortho_rig(
+    env: Environment,
+    time: Res<Time>,
+    mut rigs: Query<(&mut Transform, &mut ElementsFocus, &mut OrthoRig)>,
+) {
+    let u = units();
+    for (mut transform, mut focus, mut rig) in &mut rigs {
+        let heading = (rig.forward * Vec3::new(1.0, 0.0, 1.0)).normalize_or_zero();
+        let step = heading * rig.speed * time.delta_secs();
+        rig.focus += step;
+        if let Some(ground) = env.terrain_height(rig.focus.xz()) {
+            rig.focus.y = ground;
+        }
+        transform.translation = rig.focus - rig.forward * ORTHO_BACK_M * u;
+        *focus = ElementsFocus::Point(rig.focus);
+    }
+}
+
+/// `ELEMENTS_PINS=1`: thin posts standing on [`Environment::terrain_height`] every
+/// [`PIN_SPACING_M`] over a square [`PIN_FIELD_M`] wide around a point, each with a red foot
+/// [`PIN_FOOT_M`] tall, kept on the query every frame as a game keeps its figures (the ground
+/// erodes as the scene runs). Where the drawn ground is not the height the query answers, a foot
+/// sinks out of sight or stands above the ground.
+#[derive(Resource)]
+pub struct Pins {
+    centre: Vec2,
+    planted: bool,
+}
+
+/// One piece of a pin: the world XZ it stands at and the height of its centre above the ground.
+#[derive(Component)]
+struct Pin {
+    xz: Vec2,
+    lift: f32,
+}
+
+/// The pins' spacing, the width of their field and the height of a red foot, m.
+pub const PIN_SPACING_M: f32 = 2.0;
+pub const PIN_FIELD_M: f32 = 40.0;
+pub const PIN_FOOT_M: f32 = 0.10;
+
+/// [`Pins`] around `centre` (world XZ in metres, scaled by [`units`]) when `ELEMENTS_PINS` is set.
+pub fn pins(centre: Vec3) -> Option<Pins> {
+    std::env::var("ELEMENTS_PINS").ok()?;
+    Some(Pins {
+        centre: centre.xz() * units(),
+        planted: false,
+    })
+}
+
+fn plant_pins(
+    mut commands: Commands,
+    env: Environment,
+    pins: Option<ResMut<Pins>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut planted: Query<(&Pin, &mut Transform)>,
+) {
+    let Some(mut pins) = pins else {
+        return;
+    };
+    if pins.planted {
+        for (pin, mut transform) in &mut planted {
+            if let Some(ground) = env.terrain_height(pin.xz) {
+                transform.translation.y = ground + pin.lift;
+            }
+        }
+        return;
+    }
+    if env.terrain_height(pins.centre).is_none() {
+        return;
+    }
+    let u = units();
+    let post_m = 1.7;
+    let post = meshes.add(Cuboid::new(0.06 * u, post_m * u, 0.06 * u));
+    let foot = meshes.add(Cuboid::new(0.08 * u, PIN_FOOT_M * u, 0.08 * u));
+    let white = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.85, 0.85, 0.85),
+        perceptual_roughness: 0.8,
+        ..default()
+    });
+    let red = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.85, 0.04, 0.04),
+        perceptual_roughness: 0.8,
+        ..default()
+    });
+    let n = (PIN_FIELD_M / PIN_SPACING_M) as i32;
+    for iz in -n / 2..=n / 2 {
+        for ix in -n / 2..=n / 2 {
+            let xz = pins.centre + Vec2::new(ix as f32, iz as f32) * PIN_SPACING_M * u;
+            let Some(ground) = env.terrain_height(xz) else {
+                continue;
+            };
+            for (mesh, material, lift) in [
+                (foot.clone(), red.clone(), 0.5 * PIN_FOOT_M * u),
+                (post.clone(), white.clone(), (PIN_FOOT_M + 0.5 * post_m) * u),
+            ] {
+                commands.spawn((
+                    Mesh3d(mesh),
+                    MeshMaterial3d(material),
+                    Transform::from_xyz(xz.x, ground + lift, xz.y),
+                    Pin { xz, lift },
+                ));
+            }
+        }
+    }
+    pins.planted = true;
 }
 
 fn fly(
@@ -117,13 +535,59 @@ fn fly(
                 wish += dir;
             }
         }
-        let speed = if keys.pressed(KeyCode::ShiftLeft) {
-            60.0
-        } else {
-            12.0
-        };
+        let speed = units()
+            * if keys.pressed(KeyCode::ShiftLeft) {
+                60.0
+            } else {
+                12.0
+            };
         transform.translation += wish.normalize_or_zero() * speed * dt;
     }
+}
+
+/// `ELEMENTS_GROW_HOURS`: integrate the held weather's game time before the first frame.
+///
+/// Wetness, snow and the cover maps advance on *game* time, and a held clock (`ELEMENTS_HOUR`)
+/// adds none — so a still captured at the first frame of a preset shows bare ground under a
+/// snowfall whatever the material does. This system advances the clock one chunk per frame and
+/// then rewinds by exactly what it advanced: the last frame's delta comes back and the capture's
+/// hour, sun and sky are the example's own.
+///
+/// Two details make the growth exact. The consumers record the clock on their first frame and
+/// integrate nothing from it (their `last_hours` is `None`), so the first chunk is lost to them
+/// and an extra arming frame is spent; and a jump larger than 24 h is clamped by both consumers,
+/// so the growth is split into chunks of at most an hour. The weather is forced before the first
+/// frame, so the whole warm-up is under the held preset, and a rewound clock adds no game time.
+/// The cover maps drain their queue over the following frames, so a capture a few frames after
+/// the rewind still sees the growth. Only the warm-up frames are at a moved hour — a frame
+/// sequence should start past them.
+fn grow_weather(
+    config: Res<RunConfig>,
+    mut clock: ResMut<WorldClock>,
+    mut plan: Local<Option<(f64, u32)>>,
+    mut advanced: Local<f64>,
+) {
+    if config.grow_hours <= 0.0 {
+        return;
+    }
+    let Some(&mut (chunk, frames)) = plan.as_mut() else {
+        let hours = config.grow_hours.ceil();
+        // `ceil` frames of growth plus one arming frame; `grow_hours` is at most `ceil` hours, so
+        // the growth is integrated in chunks of at most one hour and the consumers' clamps are
+        // never reached.
+        *plan = Some((config.grow_hours / hours, hours as u32 + 1));
+        return;
+    };
+    if frames > 0 {
+        clock.advance_hours(chunk);
+        *advanced += chunk;
+        *plan = Some((chunk, frames - 1));
+        return;
+    }
+    let back = *advanced;
+    clock.advance_hours(-back);
+    *advanced = 0.0;
+    *plan = Some((0.0, 0));
 }
 
 fn clock_keys(keys: Res<ButtonInput<KeyCode>>, mut clock: ResMut<WorldClock>) {
@@ -181,8 +645,12 @@ fn spawn_status(mut commands: Commands) {
     ));
 }
 
-/// A 2 km ground plane (given per-pixel cloud shadows by the harness) and a ring of boxes,
-/// columns and spheres to read shadows and fog depth.
+/// A 40 km ground plane — out past the horizon the sky's own haze covers, so the ground meets the
+/// sky without the sliver of unlit below-horizon atmosphere a short plane leaves between its edge
+/// and the horizon (measured: a 35 DN dark shelf at the horizon of the 2 km plane under Overcast
+/// and PartlyCloudy, gone with this) — and a ring of boxes, columns and spheres to read shadows
+/// and fog depth. The plane gets `WeatheredMaterial` (cloud shadows, wetness, rain streaks and
+/// snow) from this harness.
 pub fn test_scene(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -190,7 +658,7 @@ pub fn test_scene(
 ) {
     commands.spawn((
         GroundPlane,
-        Mesh3d(meshes.add(Plane3d::default().mesh().size(2000.0, 2000.0))),
+        Mesh3d(meshes.add(Plane3d::default().mesh().size(40000.0, 40000.0))),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::srgb(0.30, 0.36, 0.22),
             perceptual_roughness: 0.95,
@@ -222,6 +690,7 @@ pub fn test_scene(
         commands.spawn((
             Mesh3d(mesh),
             MeshMaterial3d(material),
+            ground::ShowcaseProp,
             Transform::from_translation(at + Vec3::Y * y),
         ));
     }
@@ -262,10 +731,49 @@ fn status(
     );
 }
 
+/// Writes a frame sequence while the run lasts: one screenshot every `shot_every` frames from
+/// `shot_from`, as `frameNNNN.png` in `shot_dir`. The counter is counted from `shot_from`, so a
+/// sequence of frames 301..360 is `frame0000.png`..`frame0059.png` and two runs' sequences
+/// compare frame for frame.
+fn capture_frames(
+    mut commands: Commands,
+    config: Res<RunConfig>,
+    mut seen: Local<u32>,
+    mut index: Local<u32>,
+) {
+    let Some(dir) = config.shot_dir.clone() else {
+        return;
+    };
+    *seen += 1;
+    if *seen < config.shot_from || !(*seen - config.shot_from).is_multiple_of(config.shot_every) {
+        return;
+    }
+    if config.frames.is_some_and(|limit| *seen > limit) {
+        return;
+    }
+    if *index == 0
+        && let Err(error) = std::fs::create_dir_all(&dir)
+    {
+        error!("cannot create frame directory {dir}: {error}");
+        return;
+    }
+    let path = format!("{dir}/frame{:04}.png", *index);
+    *index += 1;
+    let pending = config.pending.clone();
+    pending.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    commands
+        .spawn(Screenshot::primary_window())
+        .observe(move |captured: On<ScreenshotCaptured>| {
+            save_to_disk(path.clone())(captured);
+            pending.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        });
+}
+
 fn run_limit(
     mut config: ResMut<RunConfig>,
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
+    mut waited: Local<u32>,
 ) {
     config.frame += 1;
     let Some(limit) = config.frames else {
@@ -273,6 +781,15 @@ fn run_limit(
     };
     if config.frame < limit {
         return;
+    }
+    // Every capture is written before the app exits; a screenshot takes a frame or two to
+    // arrive. Give up after two seconds' worth of frames.
+    let pending = config.pending.load(std::sync::atomic::Ordering::Relaxed);
+    if pending > 0 {
+        *waited += 1;
+        if *waited < 120 {
+            return;
+        }
     }
     match config.shot.clone() {
         Some(path) if !config.shot_taken => {
@@ -284,9 +801,10 @@ fn run_limit(
                     save(captured);
                 },
             );
+            // Wait for the single shot too, rather than exiting over it.
+            *waited = 0;
         }
-        // Waiting for the screenshot; give up after two seconds' worth of frames.
-        Some(_) if config.frame < limit + 120 => {}
+        Some(_) if *waited < 120 => *waited += 1,
         _ => {
             exit.write(AppExit::Success);
         }

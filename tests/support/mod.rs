@@ -86,7 +86,10 @@ pub fn read_textures(app: &mut App, requests: Vec<(Handle<Image>, usize, usize)>
                 .id()
         })
         .collect();
-    for _ in 0..120 {
+    // A wall-clock bound, not a frame count: updates do not wait for the GPU, so on a GPU busy
+    // with other work a readback can take more than a hundred frames, and over 20 s, to arrive.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while std::time::Instant::now() < deadline {
         app.update();
         if slots.iter().all(|s| s.lock().expect("lock").is_some()) {
             break;

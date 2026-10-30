@@ -3,7 +3,7 @@
 //! `common.wesl`, `precip.wesl` and `draw.wesl` and the fog kernel evaluate the same formulas;
 //! the tests here pin them to the numbers in `docs/research/precipitation.md`.
 
-use crate::fog::{KOSCHMIEDER, extinction_for_visibility};
+use crate::fog::{CLEAR_AIR_EXTINCTION, extinction_for_visibility};
 
 /// Marshall–Palmer slope `Λ = 4.1 R^−0.21` in mm⁻¹ for a liquid-equivalent rate `R` in mm/h
 /// (Uijlenhoet 2001, Eq. 11). Rates below 0.01 mm/h are held there so Λ stays finite.
@@ -46,8 +46,9 @@ pub(crate) fn snow_extinction(rate_mm_h: f32) -> f32 {
     4.917e-3 * rate_mm_h.max(0.0)
 }
 
-/// Extinction of clear air at the `Clear` preset's 40 km visibility, m⁻¹.
-pub(crate) const FLOOR_EXTINCTION: f32 = KOSCHMIEDER / 40_000.0;
+/// Extinction of clear air at the `Clear` preset's 40 km visibility, m⁻¹: the fog module's one
+/// authority (`fog::CLEAR_AIR_EXTINCTION`).
+pub(crate) const FLOOR_EXTINCTION: f32 = CLEAR_AIR_EXTINCTION;
 
 /// The weather's extinction `σ_V`, split into the precipitation that is drawn as shafts and the
 /// haze that remains.
@@ -81,43 +82,91 @@ pub(crate) fn precipitation_split(
     }
 }
 
+/// Share of the particle buffer that is dust at the `DustStorm` preset's dust (plan 4.3).
+pub(crate) const DUST_FRACTION: f32 = 0.4;
+/// The `Weather::dust` at which the dust fraction reaches [`DUST_FRACTION`]: the `DustStorm`
+/// preset's value. Weaker dust ramps the fraction down linearly (`dust.md` Deviation 5).
+pub(crate) const DUST_FULL: f32 = 0.9;
+/// Fall speed of a dust sprite, m/s (`dust.md` Parameters).
+pub(crate) const DUST_FALL_SPEED_MS: f32 = 0.05;
+/// Scale height of the dust sprites' respawn heights above the ground, m: the ground fog's
+/// haze scale height (`fog.md`).
+pub(crate) const DUST_HEIGHT_SCALE_M: f32 = 60.0;
+/// Grain diameter of a dust sprite, m (plan 4.3): the size the sprite extinction accounts
+/// (`dust_sprite_extinction`, `dust.md` Validation 8). The sprite is *drawn* at
+/// `DUST_SPRITE_DRAW_M` — see `dust.md` Deviation 15.
+#[cfg(test)]
+pub(crate) const DUST_SIZE_M: f32 = 2e-3;
+/// Diameter a dust sprite is drawn with, m: a visible puff cluster, not the 2 mm grain. At the
+/// grain size a sprite spans 0.02–0.1 px anywhere in the 60 m box, so it fades to nothing under
+/// the sub-pixel coverage rule and a dust storm reads as static fog (`dust.md` Deviation 15).
+pub(crate) const DUST_SPRITE_DRAW_M: f32 = 0.35;
+
 /// How many particles of each kind are active.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ParticleCounts {
     pub rain: u32,
     pub snow: u32,
+    pub dust: u32,
 }
 
 impl ParticleCounts {
     /// Active particles in total; they are the first `total()` of the buffer.
     pub fn total(self) -> u32 {
-        self.rain + self.snow
+        self.rain + self.snow + self.dust
     }
 }
 
+/// The dust fraction of the buffer for `Weather::dust`: `0.4 · min(1, dust / 0.9)`.
+pub(crate) fn dust_fraction(dust: f32) -> f32 {
+    DUST_FRACTION * (dust.max(0.0) / DUST_FULL).min(1.0)
+}
+
 /// Active particles for a buffer of `max`: rain `min(1, R_liq/20)`, snow `min(1, S/3)` of it,
-/// where `R_liq` and `S` are the liquid and snow shares of `precipitation_mm_h`. When the two
-/// fractions sum above 1 (mixed phase) both are divided by the sum.
+/// where `R_liq` and `S` are the liquid and snow shares of `precipitation_mm_h`, and dust
+/// [`dust_fraction`]. When the fractions sum above 1 (mixed phase) all are divided by the sum.
 pub(crate) fn particle_counts(
     max: u32,
     precipitation_mm_h: f32,
     snow_fraction: f32,
+    dust: f32,
 ) -> ParticleCounts {
     let snow = precipitation_mm_h.max(0.0) * snow_fraction.clamp(0.0, 1.0);
     let rain = precipitation_mm_h.max(0.0) - snow;
     let mut f_rain = (rain / 20.0).min(1.0);
     let mut f_snow = (snow / 3.0).min(1.0);
-    let sum = f_rain + f_snow;
+    let mut f_dust = dust_fraction(dust);
+    let sum = f_rain + f_snow + f_dust;
     if sum > 1.0 {
         f_rain /= sum;
         f_snow /= sum;
+        f_dust /= sum;
     }
     let n_rain = ((max as f32 * f_rain).round() as u32).min(max);
     let n_snow = ((max as f32 * f_snow).round() as u32).min(max - n_rain);
+    let n_dust = ((max as f32 * f_dust).round() as u32).min(max - n_rain - n_snow);
     ParticleCounts {
         rain: n_rain,
         snow: n_snow,
+        dust: n_dust,
     }
+}
+
+/// Height above the ground of a respawning dust sprite, m: the exponential profile of scale
+/// `scale` truncated to `[lo, hi]` (the part of the box above the ground), by inverse CDF of
+/// `u ∈ (0, 1)`: `lo − H ln(1 − u (1 − e^{−(hi−lo)/H}))`. With `lo = 0`, `hi = 60` it is the
+/// note's `−H ln(1 − u (1 − e^{−60/H}))`.
+#[cfg(test)]
+pub(crate) fn dust_height_m(u: f32, lo: f32, hi: f32, scale: f32) -> f32 {
+    lo - scale * (1.0 - u * (1.0 - (-(hi - lo) / scale).exp())).ln()
+}
+
+/// Extinction of `count` dust sprites of diameter [`DUST_SIZE_M`] spread over a cube of edge
+/// `box_m`, m⁻¹: `n π r²` (geometric cross-section, each sprite counted once).
+#[cfg(test)]
+pub(crate) fn dust_sprite_extinction(count: u32, box_m: f32) -> f32 {
+    let radius = 0.5 * DUST_SIZE_M;
+    count as f32 / box_m.powi(3) * std::f32::consts::PI * radius * radius
 }
 
 #[cfg(test)]
@@ -334,46 +383,118 @@ mod tests {
     fn counts_follow_the_plan_and_mixed_phase_is_normalised() {
         let high = 150_000;
         assert_eq!(
-            particle_counts(high, 10.0, 0.0),
+            particle_counts(high, 10.0, 0.0, 0.0),
             ParticleCounts {
                 rain: 75_000,
-                snow: 0
+                snow: 0,
+                dust: 0
             }
         );
         assert_eq!(
-            particle_counts(high, 1.5, 1.0),
+            particle_counts(high, 1.5, 1.0, 0.0),
             ParticleCounts {
                 rain: 0,
-                snow: 75_000
+                snow: 75_000,
+                dust: 0
             }
         );
         // Saturation: 20 mm/h of rain, 3 mm/h of snow.
-        assert_eq!(particle_counts(high, 25.0, 0.0).rain, high);
-        assert_eq!(particle_counts(high, 4.0, 1.0).snow, high);
+        assert_eq!(particle_counts(high, 25.0, 0.0, 0.0).rain, high);
+        assert_eq!(particle_counts(high, 4.0, 1.0, 0.0).snow, high);
         // R = 10 mm/h at half snow: 0.25 + 1.0 unnormalised, 0.2 + 0.8 normalised.
-        let mixed = particle_counts(high, 10.0, 0.5);
+        let mixed = particle_counts(high, 10.0, 0.5, 0.0);
         assert_eq!(
             mixed,
             ParticleCounts {
                 rain: 30_000,
-                snow: 120_000
+                snow: 120_000,
+                dust: 0
             }
         );
         assert!(mixed.total() <= high);
-        assert_eq!(particle_counts(high, 0.0, 0.0).total(), 0);
+        assert_eq!(particle_counts(high, 0.0, 0.0, 0.0).total(), 0);
         for max in [20_000, 60_000, 150_000, 300_000] {
-            for (mm, sf) in [
-                (10.0, 0.0),
-                (1.5, 1.0),
-                (10.0, 0.5),
-                (30.0, 0.3),
-                (0.5, 0.0),
+            for (mm, sf, dust) in [
+                (10.0, 0.0, 0.0),
+                (1.5, 1.0, 0.0),
+                (10.0, 0.5, 0.0),
+                (30.0, 0.3, 0.0),
+                (0.5, 0.0, 0.0),
+                (10.0, 0.5, 0.9),
+                (30.0, 0.0, 0.9),
+                (0.0, 0.0, 1.0),
             ] {
-                assert!(particle_counts(max, mm, sf).total() <= max);
+                assert!(particle_counts(max, mm, sf, dust).total() <= max);
             }
-            let half = particle_counts(max, 10.0, 0.0).rain as i64;
+            let half = particle_counts(max, 10.0, 0.0, 0.0).rain as i64;
             assert!((half - i64::from(max) / 2).abs() <= 1);
         }
+    }
+
+    /// `dust.md` Validation 8 (the counting half): 40 % of the maximum at the preset's dust, a
+    /// linear ramp below it, and the shared normalisation with rain.
+    #[test]
+    fn dust_takes_forty_percent_at_the_preset_and_ramps_below() {
+        let high = 150_000i64;
+        let dust = |d: f32| i64::from(particle_counts(150_000, 0.0, 0.0, d).dust);
+        assert!((dust(0.9) - 60_000).abs() <= 1);
+        assert!((dust(0.45) - 30_000).abs() <= 1);
+        assert_eq!(dust(0.0), 0);
+        assert_eq!(
+            dust(1.0),
+            60_000,
+            "above the preset the fraction stays at 0.4"
+        );
+        let storm = particle_counts(150_000, 0.0, 0.0, 0.9);
+        assert_eq!(
+            (storm.rain, storm.snow),
+            (0, 0),
+            "no rain or snow without precipitation"
+        );
+        // Dust and heavy rain together: 1.0 + 0.4 normalised to 0.714 + 0.286.
+        let both = particle_counts(150_000, 30.0, 0.0, 0.9);
+        assert!(i64::from(both.total()) <= high);
+        assert!((i64::from(both.dust) - (high as f64 * 0.4 / 1.4).round() as i64).abs() <= 1);
+        // The records are laid out rain, then snow, then dust.
+        assert_eq!(both.rain + both.snow + both.dust, both.total());
+    }
+
+    /// `dust.md` Validation 8 (the sampler): the median respawn height of the exponential
+    /// profile over the 60 m box is 22.8 m, the density at the top is `e⁻¹` of the bottom's.
+    #[test]
+    fn the_dust_respawn_heights_follow_the_haze_profile() {
+        let h = |u| dust_height_m(u, 0.0, 60.0, DUST_HEIGHT_SCALE_M);
+        let median = 60.0 * -(1.0 - 0.5 * (1.0 - (-1.0f32).exp())).ln();
+        assert!((median - 22.8).abs() < 0.1, "{median}");
+        assert!((h(0.5) - median).abs() < 1e-4);
+        // 10⁶ stratified uniforms stand in for the shader's hash.
+        let n = 1_000_000usize;
+        let mut heights: Vec<f32> = (0..n).map(|i| h((i as f32 + 0.5) / n as f32)).collect();
+        heights.sort_by(f32::total_cmp);
+        assert!((heights[n / 2] - 22.8).abs() < 0.5, "{}", heights[n / 2]);
+        assert!(heights[0] >= 0.0 && heights[n - 1] <= 60.0);
+        // Density ratio top/bottom: histogram of the first and last 1 m.
+        let bottom = heights.iter().filter(|h| **h < 1.0).count() as f64;
+        let top = heights.iter().filter(|h| **h >= 59.0).count() as f64;
+        assert!(
+            (top / bottom - (-1.0f64).exp()).abs() < 0.01,
+            "{}",
+            top / bottom
+        );
+        // A box that only reaches 32 m above the camera's ground: the same profile, truncated.
+        assert!((dust_height_m(1.0 - 1e-6, 0.0, 32.0, 60.0) - 32.0).abs() < 0.01);
+        assert!((dust_height_m(0.0, 5.0, 32.0, 60.0) - 5.0).abs() < 1e-5);
+    }
+
+    /// `dust.md` Validation 8 and 9: the sprites carry 8.7·10⁻⁷ m⁻¹ of the 4.89·10⁻³ m⁻¹.
+    #[test]
+    fn the_sprites_carry_almost_none_of_the_dust_extinction() {
+        let count = particle_counts(150_000, 0.0, 0.0, 0.9).dust;
+        let sprites = dust_sprite_extinction(count, crate::precipitation::PRECIPITATION_BOX_M);
+        assert!((sprites - 8.7e-7).abs() < 8.7e-7 * 0.05, "{sprites}");
+        let sigma_v = extinction_for_visibility(800.0);
+        assert!((sigma_v - 4.890e-3).abs() < 1e-6, "{sigma_v}");
+        assert!(sprites / sigma_v < 3e-4);
     }
 
     /// CPU mirror of the streak setup in `draw.wesl`'s `particle_vertex`: the image length in
@@ -413,6 +534,52 @@ mod tests {
         assert!((coverage(d, 30.0, f) - z_m / 30.0).abs() < 1e-6);
         // The note's 0.25 at z_m gives 0.0125 at 30 m.
         assert!((0.25 * coverage(d, 30.0, f) - 0.0125).abs() < 5e-4);
+    }
+
+    /// CPU mirror of the snow stretch in `particle_vertex`: the world length of a flake's streak
+    /// for the relative speed `v_rel`, capped at `SNOW_MAX_STRETCH` diameters.
+    fn snow_streak_m(v_rel: f32, diameter_m: f32) -> f32 {
+        const SNOW_MAX_STRETCH: f32 = 1.0;
+        (v_rel / 60.0).min(SNOW_MAX_STRETCH * diameter_m)
+    }
+
+    /// Image of a flake at depth `z` moving across the view at `v_rel`: the capsule's total
+    /// length over its width, both in pixels. The width is the flake's own, at least two pixels
+    /// (`SNOW_MIN_HALF_WIDTH` = 1 px each side, as in the vertex shader).
+    fn snow_quad_ratio(v_rel: f32, diameter_m: f32, z: f32, focal_px: f32) -> f32 {
+        const SNOW_MIN_HALF_WIDTH: f32 = 1.0;
+        let half_width = (0.5 * diameter_m * focal_px / z).max(SNOW_MIN_HALF_WIDTH);
+        let length = snow_streak_m(v_rel, diameter_m) * focal_px / z;
+        (length + 2.0 * half_width) / (2.0 * half_width)
+    }
+
+    /// Deviation 17: a flake is a soft, slightly elongated disc, whatever the wind. The note's
+    /// streak `|v_rel| T` made a 6 mm flake in a 4 m/s wind 6.7 cm long (a 12:1 dash); the
+    /// capsule is now at most twice as long as it is wide at 4 and 14 m/s, and a flake moving
+    /// slower than the cap is stretched as the note says.
+    #[test]
+    fn a_snowflake_is_a_disc_of_bounded_elongation_in_any_wind() {
+        let f = 540.0 / 30f32.to_radians().tan();
+        for v_rel in [4.0_f32, 14.0] {
+            for d in [0.004_f32, 0.006, 0.008] {
+                // Without the cap: the streak the note's formula gives, in diameters.
+                assert!(v_rel / 60.0 / d > 8.0, "{v_rel} m/s, {d} m");
+                for z in [0.5_f32, 1.0, 2.0, 5.0, 10.0, 30.0] {
+                    let ratio = snow_quad_ratio(v_rel, d, z, f);
+                    assert!(
+                        (1.0..=2.0 + 1e-4).contains(&ratio),
+                        "{v_rel} m/s, d {d} m, z {z} m: length/width {ratio}"
+                    );
+                }
+                // A flake wider than its minimum is at its cap: exactly 2:1.
+                assert!((snow_quad_ratio(v_rel, d, 1.0, f) - 2.0).abs() < 1e-4);
+            }
+        }
+        // Slower than the cap the note's length stands: 1.7 mm at 0.1 m/s, 4.5 mm flake.
+        let slow = snow_streak_m(0.1, 0.0045);
+        assert!((slow - 0.1 / 60.0).abs() < 1e-7, "{slow}");
+        // Rain streaks are untouched (Validation 9): 9 m/s is 15 cm.
+        assert!((9.0_f32 / 60.0 - 0.150).abs() < 1e-3);
     }
 
     /// Validation 10 (the CPU half): with 7 m/s wind and the 4.4 m/s mean fall speed a shaft

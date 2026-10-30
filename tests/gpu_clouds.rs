@@ -119,8 +119,9 @@ fn shadow_transmittance(app: &mut App) -> Vec<f32> {
         .collect()
 }
 
-/// The sun's light factor `0.25 + 0.75 T̄` as the lights currently carry it.
-fn sun_factor(app: &mut App) -> f32 {
+/// The sun's direct light as a fraction of the clear value, `T̄`, as the light currently carries
+/// it.
+fn sun_light(app: &mut App) -> f32 {
     let mut lights = app
         .world_mut()
         .query_filtered::<&DirectionalLight, With<Sun>>();
@@ -128,8 +129,8 @@ fn sun_factor(app: &mut App) -> f32 {
     light.illuminance / lux::RAW_SUNLIGHT
 }
 
-/// A mean over the 9×9 texels around 64 deterministic texel positions, the light factor a
-/// camera standing there would get.
+/// A mean over the 9×9 texels (70 m) around 64 deterministic texel positions of the light
+/// factor `0.25 + 0.75 T` the ground there gets.
 fn mean_light_factor(t: &[f32]) -> f32 {
     let mut state = 0x2545_F491_4F6C_DD1D_u64;
     let mut next = || {
@@ -215,7 +216,8 @@ fn the_weather_map_holds_the_requested_sky_fraction() {
 }
 
 /// Validation 11 (a)–(e) and the light-factor wiring: the shadow map's coverage, the camera
-/// factor `0.25 + 0.75 T̄` per weather, and the sun light it dims.
+/// factor `0.25 + 0.75 T̄` per weather and the sun's beam `T̄`. The rest, the cloud-scattered
+/// light, reaches this camera through the environment map (`tests/gpu_sky_probe.rs`).
 #[test]
 #[ignore = "needs a GPU"]
 fn the_shadow_map_and_the_sun_factor_follow_the_clouds() {
@@ -225,11 +227,11 @@ fn the_shadow_map_and_the_sun_factor_follow_the_clouds() {
         app.world_mut()
             .resource_mut::<WeatherDirector>()
             .force(preset, Duration::ZERO);
-        // Past the 1 s smoothing of the camera transmittance.
+        // Past the 1 s smoothing of the mean transmittance.
         run(app, 420);
         let t = shadow_transmittance(app);
-        let camera = app.world().resource::<CloudShadows>().camera_transmittance;
-        let sun = sun_factor(app);
+        let camera = app.world().resource::<CloudShadows>().mean_transmittance;
+        let sun = sun_light(app);
         (t, camera, sun)
     };
 
@@ -240,7 +242,10 @@ fn the_shadow_map_and_the_sun_factor_follow_the_clouds() {
         "Clear: dark {clear_dark:.3}, factor {clear_factor:.3}, mean T {:.3}",
         mean(&clear)
     );
-    assert!((0.01..=0.12).contains(&clear_dark), "{clear_dark}");
+    // The 8 km window holds only a few cumulus blobs at cover 0.05, so the fraction here only
+    // says that the clear sky has some cloud; the fraction over the whole field is the CPU
+    // mirror's `the_cumulus_shadow_covers_what_the_weather_says`.
+    assert!((0.001..=0.12).contains(&clear_dark), "{clear_dark}");
     assert!((0.93..=1.0).contains(&clear_factor), "{clear_factor}");
 
     let (overcast, overcast_camera, overcast_sun) =
@@ -259,16 +264,25 @@ fn the_shadow_map_and_the_sun_factor_follow_the_clouds() {
     println!("Thunderstorm: factor {storm_factor:.3}");
     assert!((0.25..=0.30).contains(&storm_factor), "{storm_factor}");
 
-    // The lights carry the factor the readback gave (the `0.25 + 0.75 T̄` of the camera).
-    for (camera, sun) in [(clear_camera, clear_sun), (overcast_camera, overcast_sun)] {
+    // The sun's beam carries the mean transmittance the readback gave, which is the map's mean
+    // (`broken-cloud-light.md` Validation 2; the readback samples every fourth texel).
+    for (camera, map, direct) in [
+        (clear_camera, mean(&clear), clear_sun),
+        (overcast_camera, mean(&overcast), overcast_sun),
+    ] {
+        println!("sun beam {direct:.4}, mean transmittance {camera:.4}, map mean {map:.4}");
         assert!(
-            (sun - (0.25 + 0.75 * camera)).abs() < 5e-3,
-            "sun factor {sun} for camera transmittance {camera}"
+            (direct - camera).abs() < 5e-3,
+            "sun beam {direct} for mean transmittance {camera}"
+        );
+        assert!(
+            (direct - map).abs() <= 0.01,
+            "sun beam {direct} for a map mean {map}"
         );
     }
     let ratio = overcast_sun / clear_sun;
-    println!("sun light overcast / clear = {ratio:.3}");
-    assert!(ratio <= 0.4, "{ratio}");
+    println!("sun beam overcast / clear = {ratio:.3}");
+    assert!(ratio <= 0.05, "{ratio}");
 
     // (d) The mean transmittance falls by at least 0.1 per step with the cover.
     let mut means = Vec::new();
@@ -282,6 +296,89 @@ fn the_shadow_map_and_the_sun_factor_follow_the_clouds() {
         "{means:?}"
     );
     finish(&mut app);
+}
+
+/// `broken-cloud-light.md` Validation 1: a cloud's shadow over the camera leaves the lights (and
+/// so Bevy's sky, aerial perspective and environment map, which they light) as they are under a
+/// partly cloudy sky; only the surfaces in the shadow darken. The camera is moved between the
+/// darkest and the brightest 164 m of the same field, at most 150 m apart (the 8 km window the
+/// lights average moves with the camera, so a farther move compares different clouds).
+#[test]
+#[ignore = "needs a GPU"]
+fn a_cloud_over_the_camera_leaves_the_lights_alone() {
+    use bevy::ecs::system::RunSystemOnce;
+
+    let mut app = app(setup(WeatherPreset::Clear));
+    app.world_mut().resource_mut::<CoverOverride>().0 = Some(0.4);
+    run(&mut app, 420);
+    let t = shadow_transmittance(&mut app);
+    let shadows = app.world().resource::<CloudShadows>().clone();
+    let texel = shadows.extent / 1024.0;
+    // 21 × 21 texels (164 m): the cumulus drift a few tens of metres while the test waits, so
+    // both spots must sit well inside their shade or sun.
+    let block = |x: usize, y: usize| -> f32 {
+        let mut sum = 0.0;
+        for yy in y - 10..=y + 10 {
+            for xx in x - 10..=x + 10 {
+                sum += t[yy * 1024 + xx];
+            }
+        }
+        sum / 441.0
+    };
+    let mut pair = None;
+    'search: for y in (360..664).step_by(4) {
+        for x in (360..664).step_by(4) {
+            if block(x, y) > 0.05 {
+                continue;
+            }
+            for by in (y - 19..=y + 19).step_by(1) {
+                for bx in (x - 19..=x + 19).step_by(1) {
+                    if block(bx, by) > 0.95 {
+                        pair = Some(((x, y), (bx, by)));
+                        break 'search;
+                    }
+                }
+            }
+        }
+    }
+    let ((dx, dy), (bx, by)) = pair.expect("a dark and a sunlit spot within 150 m");
+    let world = |x: usize, y: usize| {
+        let at = shadows.origin + (Vec2::new(x as f32, y as f32) + 0.5) * texel;
+        Vec3::new(at.x, 6.0, at.y)
+    };
+    let at = |app: &mut App, position: Vec3| {
+        let mut cameras = app
+            .world_mut()
+            .query_filtered::<&mut Transform, With<ElementsCamera>>();
+        for mut transform in cameras.iter_mut(app.world_mut()) {
+            transform.translation = position;
+        }
+        // Past twice the 1 s smoothing; the shade drifts about 12 m meanwhile.
+        run(app, 120);
+        let local = app
+            .world_mut()
+            .run_system_once(move |env: Environment| env.cloud_shadow_at(position))
+            .expect("the query runs")
+            .expect("a readback has completed");
+        let mean = app.world().resource::<CloudShadows>().mean_transmittance;
+        (local, mean, sun_light(app))
+    };
+    let (dark_local, dark_mean, dark_direct) = at(&mut app, world(dx, dy));
+    let (lit_local, lit_mean, lit_direct) = at(&mut app, world(bx, by));
+    finish(&mut app);
+    println!("shade: local {dark_local:.3}, mean {dark_mean:.3}, beam {dark_direct:.4}");
+    println!("sun:   local {lit_local:.3}, mean {lit_mean:.3}, beam {lit_direct:.4}");
+    assert!(
+        dark_local < 0.2 && lit_local > 0.8,
+        "{dark_local} / {lit_local}"
+    );
+    // The 8 km window moves with the camera: a 150 m move swaps up to 3.75 % of its area, so the
+    // mean may differ by that much. The camera's own shadow (0 against 1 here) would move the
+    // beam by 40 times as much: before the regional mean, 0.022 in the shade against 0.859.
+    assert!(
+        (dark_direct - lit_direct).abs() <= 0.05 * lit_direct,
+        "beam {dark_direct} in the shade, {lit_direct} in the sun"
+    );
 }
 
 /// Validation 11 (g): the shadow map exists before the first dispatch, transmittance 1
@@ -299,6 +396,64 @@ fn the_shadow_map_starts_unshadowed() {
     for texel in created.first_texels.chunks_exact(8) {
         assert_eq!(support::half(u16::from_le_bytes([texel[0], texel[1]])), 1.0);
     }
+}
+
+/// `Environment::cloud_shadow_at` reads the shadow map back: at the texels its grid samples
+/// (every fourth, `4k + 2`) it gives the map's transmittance, under a partly cloudy sky with
+/// both shadow and sun in the map; and `illuminance_at` keeps a quarter of the open ground's
+/// light in the darkest shadow.
+#[test]
+#[ignore = "needs a GPU"]
+fn the_cloud_shadow_query_reads_the_shadow_map() {
+    use bevy::ecs::system::RunSystemOnce;
+
+    let mut app = app(setup(WeatherPreset::Clear));
+    app.world_mut().resource_mut::<CoverOverride>().0 = Some(0.4);
+    run(&mut app, 420);
+    let t = shadow_transmittance(&mut app);
+    let shadows = app.world().resource::<CloudShadows>().clone();
+    let texel = shadows.extent / 1024.0;
+    let samples: Vec<(usize, Vec3)> = (0..256usize)
+        .step_by(5)
+        .flat_map(|ky| (0..256usize).step_by(5).map(move |kx| (kx, ky)))
+        .map(|(kx, ky)| {
+            let (x, y) = (4 * kx + 2, 4 * ky + 2);
+            let at = shadows.origin + (Vec2::new(x as f32, y as f32) + 0.5) * texel;
+            (y * 1024 + x, Vec3::new(at.x, 0.0, at.y))
+        })
+        .collect();
+    let points: Vec<Vec3> = samples.iter().map(|s| s.1).collect();
+    let (answers, lights) = app
+        .world_mut()
+        .run_system_once(move |env: Environment| {
+            let answers: Vec<Option<f32>> =
+                points.iter().map(|&p| env.cloud_shadow_at(p)).collect();
+            let lights: Vec<f32> = points.iter().map(|&p| env.illuminance_at(p)).collect();
+            (answers, lights)
+        })
+        .expect("the query runs");
+    finish(&mut app);
+
+    let (mut error, mut lit, mut dark) = (0.0, 0, 0);
+    for ((index, _), answer) in samples.iter().zip(&answers) {
+        let answer = answer.expect("a readback has completed");
+        // The readback is up to a quarter second older than the map: the clouds drift a metre.
+        error += (answer - t[*index]).abs();
+        lit += usize::from(answer > 0.9);
+        dark += usize::from(answer < 0.1);
+    }
+    let error = error / samples.len() as f32;
+    println!(
+        "{} samples: mean |query − map| {error:.4}, lit {lit}, dark {dark}",
+        samples.len()
+    );
+    assert!(error < 0.02, "{error}");
+    assert!(lit > 0 && dark > 0, "lit {lit}, dark {dark}");
+    let (lo, hi) = lights
+        .iter()
+        .fold((f32::MAX, 0.0f32), |(lo, hi), &e| (lo.min(e), hi.max(e)));
+    println!("illuminance {lo:.0}–{hi:.0} lx");
+    assert!((lo / hi - 0.25).abs() < 0.03, "{lo} / {hi}");
 }
 
 /// Validation 14 (GPU part): switching the quality at run time keeps the weather map, shadow
@@ -339,7 +494,7 @@ fn the_shadow_lookup_follows_the_ray_toward_the_light() {
         origin: Vec2::new(-4000.0, -3500.0),
         extent: 8000.0,
         light_direction: Vec3::new(0.5, 0.5, -0.3).normalize() * Vec3::new(1.0, 1.0, 1.0),
-        camera_transmittance: 1.0,
+        mean_transmittance: 1.0,
     };
     // A sun at 30°: l = (cos 30° · d, sin 30°).
     let l = Vec3::new(0.866_025_4 * 0.6, 0.5, 0.866_025_4 * 0.8);

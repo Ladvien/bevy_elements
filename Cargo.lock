@@ -853,12 +853,16 @@ dependencies = [
 
 [[package]]
 name = "bevy_elements"
-version = "0.1.0"
+version = "0.7.6"
 dependencies = [
  "bevy",
  "bevy_flora",
+ "bevy_isomesh",
  "bytemuck",
+ "isomesh",
+ "log",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -935,9 +939,9 @@ dependencies = [
 
 [[package]]
 name = "bevy_flora"
-version = "0.30.0"
+version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b73b7366f8573f2ac1990a5bba0d61910ec79308f278b64da02e29fc2cb040f0"
+checksum = "3f9a235b7f0d7cf637dd2e077517267409b2540032d038cc8130d6ce7a1646af"
 dependencies = [
  "bevy",
 ]
@@ -1186,6 +1190,22 @@ dependencies = [
  "bevy_window",
  "bevy_winit",
  "bevy_world_serialization",
+]
+
+[[package]]
+name = "bevy_isomesh"
+version = "0.0.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "021426302a141e4870cd876ae8a2f1286c9661b21fa8c7e8781ccaef3ef351f5"
+dependencies = [
+ "bevy_app",
+ "bevy_asset",
+ "bevy_ecs",
+ "bevy_mesh",
+ "bevy_platform",
+ "bevy_tasks",
+ "isomesh",
+ "tracing",
 ]
 
 [[package]]
@@ -3283,6 +3303,15 @@ name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
+
+[[package]]
+name = "isomesh"
+version = "0.0.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9755f7cce0db794ddb2782f134c9a4638e63145f5a1ca9d197a8001bfd15b300"
+dependencies = [
+ "libm",
+]
 
 [[package]]
 name = "itertools"

@@ -5,8 +5,18 @@ use std::time::Duration;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
-use crate::celestial::{SunState, WorldClock};
-use crate::climate::Weather;
+use crate::celestial::{
+    CelestialFrame, CloudLight, ElementsExposure, SunState, WorldClock, beam_transmittance,
+    scene_illuminance,
+};
+use crate::climate::{ClimateHistory, ClimateSummary, DayConditions, Weather};
+use crate::clouds::CloudShadowSnapshot;
+use crate::cover::CoverSnapshot;
+use crate::fog::HorizonRing;
+use crate::hydrology::{WaterDepthSnapshot, WaterVelocitySnapshot};
+use crate::plugin::ElementsUnits;
+use crate::terrain::{TerrainLeaves, TerrainSnapshot};
+use crate::trails::TrailSnapshot;
 use crate::wind::{WindSnapshot, WindState};
 
 /// CPU copies of GPU simulation state, filled by the throttled readback
@@ -15,14 +25,65 @@ use crate::wind::{WindSnapshot, WindState};
 pub struct EnvironmentSnapshot {
     /// The wind field at the last readback, if any.
     pub(crate) wind: Option<WindSnapshot>,
-    /// Mean direct cloud transmittance around the camera at the last readback, 0–1.
-    pub(crate) cloud_transmittance: Option<f32>,
+    /// The cloud shadow map's query grid at the last readback.
+    pub(crate) cloud_shadow: Option<CloudShadowSnapshot>,
+    /// The sky's radiance at the horizon all the way round at the last readback.
+    pub(crate) horizon: Option<HorizonRing>,
+    /// The terrain surface heights at the last readback, if a terrain exists.
+    pub(crate) terrain: Option<TerrainSnapshot>,
+    /// The terrain's leaf-patch bounds at the last readback.
+    pub(crate) terrain_leaves: Option<TerrainLeaves>,
+    /// The water depth at the last readback, if a terrain with hydrology exists.
+    pub(crate) water_depth: Option<WaterDepthSnapshot>,
+    /// The depth-weighted water velocity at the last readback (half resolution).
+    pub(crate) water_velocity: Option<WaterVelocitySnapshot>,
+    /// The snow depth and wetness at the last readback, if a terrain with ground cover exists.
+    pub(crate) cover: Option<CoverSnapshot>,
+    /// The trail field's deepest points at the last readback, if trails run.
+    pub(crate) trails: Option<TrailSnapshot>,
     /// Real time of the last completed readback.
     pub(crate) updated_at: Option<Duration>,
 }
 
+impl EnvironmentSnapshot {
+    /// Height of the ground at `xz` (metre frame: world ÷ `ElementsUnits::units_per_metre`), m:
+    /// the terrain surface at the last readback where there is terrain, the plane y = 0 elsewhere
+    /// (outside it, without one, or before the first readback).
+    pub(crate) fn ground_height(&self, xz: Vec2) -> f32 {
+        self.terrain
+            .as_ref()
+            .and_then(|t| t.height(xz))
+            .unwrap_or(0.0)
+    }
+}
+
+/// What the terrain's ground cover reads as at a point, in the shader's own terms
+/// ([`Environment::ground_look_at`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Reflect)]
+pub struct GroundLook {
+    /// The wetness map at the point, 0 dry to 1 a full film: the value the terrain fragment
+    /// shader reads as `wet`.
+    pub wet: f32,
+    /// The puddle mask of the simulated water depth, 0 to 1: `smoothstep(puddle_min_m,
+    /// puddle_full_m, depth)` of [`WetnessSettings`](crate::WetnessSettings), the shader's own
+    /// curve. 0 without a hydrology layer.
+    pub puddle: f32,
+    /// How much snow covers the ground, 0 bare to 1 buried: `smoothstep(0, 5 cm, depth)`.
+    pub snow: f32,
+    /// The wetness the surface model wears on **bare ground** (no grass canopy over it):
+    /// `min(max(wet, puddle), 1.4)`, the `wet` that darkens and glosses the albedo. A decal a
+    /// host fades with this fades with the ground. Grass is read from the albedo on the GPU and
+    /// is not in it, and neither is the rut-floor puddle of a trodden trail (it needs the field's
+    /// gradient).
+    pub drawn_wet: f32,
+}
+
 /// Ask about the environment from gameplay systems. Order such systems
 /// `.after(ElementsSystems::Readback)`.
+///
+/// Positions are world units ([`ElementsUnits`]: the queries convert them to the crate's metre
+/// frame), and so is [`terrain_height`](Self::terrain_height)'s answer; every other answer is SI
+/// (depths in m, speeds in m/s).
 ///
 /// Spatial answers come from a CPU snapshot of GPU state taken every
 /// [`ElementsReadback::interval`](crate::ElementsReadback) (4 Hz by default), so they are up to
@@ -33,8 +94,21 @@ pub struct Environment<'w> {
     weather: Res<'w, Weather>,
     clock: Res<'w, WorldClock>,
     sun: Res<'w, SunState>,
+    /// The moon's illuminance; absent without the celestial plugin (no moonlight then).
+    frame: Option<Res<'w, CelestialFrame>>,
     wind: Res<'w, WindState>,
     time: Res<'w, Time<Real>>,
+    units: Res<'w, ElementsUnits>,
+    /// The camera's exposure; absent without the celestial plugin.
+    exposure: Option<Res<'w, ElementsExposure>>,
+    /// The record of recent days; absent without the climate plugin (no days then).
+    history: Option<Res<'w, ClimateHistory>>,
+    /// The routes the game laid; absent without the paths plugin.
+    paths: Option<Res<'w, crate::PathNetwork>>,
+    /// The still water level a host declared; absent without one.
+    still: Option<Res<'w, crate::StillWater>>,
+    /// The wetness settings the ground's puddle mask follows; absent without ground cover.
+    wetness_settings: Option<Res<'w, crate::WetnessSettings>>,
 }
 
 impl Environment<'_> {
@@ -51,6 +125,25 @@ impl Environment<'_> {
     /// Air temperature at the climate's reference elevation, °C.
     pub fn temperature_c(&self) -> f32 {
         self.weather.temperature_c
+    }
+
+    /// The completed days of the last `window_days` local calendar days, oldest first
+    /// ([`ClimateHistory::recent`]): what the last few days were like, at the climate's
+    /// reference elevation. Empty for a window of 0, without the climate plugin and before a
+    /// day has been recorded; a window longer than the record is the record.
+    pub fn recent_days(&self, window_days: u32) -> &[DayConditions] {
+        self.history
+            .as_deref()
+            .map_or(&[], |history| history.recent(window_days))
+    }
+
+    /// The [`recent_days`](Self::recent_days) summed up ([`ClimateHistory::summary`]): wet days
+    /// (at least [`WET_DAY_MM`](crate::WET_DAY_MM) = 1 mm of precipitation), frost days (a
+    /// minimum below [`FREEZING_C`](crate::FREEZING_C) = 0 °C), icing days (a maximum below
+    /// it), the mean temperature and relative humidity, the extremes and the totals. `None`
+    /// when the window holds no recorded day.
+    pub fn recent_climate(&self, window_days: u32) -> Option<ClimateSummary> {
+        self.history.as_deref()?.summary(window_days)
     }
 
     /// Sun and moon positions and the moon's phase.
@@ -70,8 +163,271 @@ impl Environment<'_> {
         self.snapshot
             .wind
             .as_ref()
-            .and_then(|w| w.sample(position))
+            .and_then(|w| w.sample(self.units.point_to_metres(position)))
             .unwrap_or_else(|| self.wind.prevailing_velocity())
+    }
+
+    /// World height of the terrain surface (bedrock + sediment) at `position` (world XZ), in
+    /// world units. `None` outside the terrain, when there is none, and before the first
+    /// readback; the value is the surface at the last readback, up to one readback interval old.
+    pub fn terrain_height(&self, position: Vec2) -> Option<f32> {
+        self.terrain_height_metres(self.xz_to_metres(position))
+            .map(|h| self.units.world(h))
+    }
+
+    /// The terrain's heights at the last readback, as a [`TerrainSnapshot`] in the metre frame:
+    /// what a host saves to keep a sculpted ground, and
+    /// [`TerrainSnapshot::terrain`] respawns. `None` when there is no terrain or before the
+    /// first readback. A cheap clone (the heights are shared).
+    pub fn terrain_snapshot(&self) -> Option<TerrainSnapshot> {
+        self.snapshot.terrain.clone()
+    }
+
+    /// [`terrain_height`](Self::terrain_height) on the surface the level-0 patches draw: the
+    /// same taps, interpolated over the mesh's triangles (split along `(1, 0)–(0, 1)`) instead of
+    /// bilinearly. The two agree at every cell centre and differ inside a quad by at most a
+    /// quarter of its twist, which is what a figure on a crease (a pad's edge, a ramp) would
+    /// float or sink by. `terrain_height` is the bilinear; this is the picture. Coarser LOD
+    /// levels draw coarser surfaces, so it answers level 0 (the focus under an orthographic
+    /// camera, the ground near the eye under a perspective one).
+    pub fn terrain_drawn_height(&self, position: Vec2) -> Option<f32> {
+        let p = self.xz_to_metres(position);
+        self.snapshot
+            .terrain
+            .as_ref()
+            .and_then(|t| t.drawn_height(p))
+            .map(|h| self.units.world(h))
+    }
+
+    /// Unit upward normal of the terrain's ground at `position` (world XZ), from the gradient
+    /// the trail kernel and the sinkage law use (central differences over ±1 cell of the last
+    /// readback, interpolated bilinearly). It is smooth across cells, so it is the ground's
+    /// tilt, not a facet's; a slope has no unit, so a foot world and a metre world answer
+    /// alike. `None` outside the terrain, with no terrain and before the first readback.
+    pub fn terrain_normal(&self, position: Vec2) -> Option<Vec3> {
+        self.snapshot
+            .terrain
+            .as_ref()
+            .and_then(|t| t.normal(self.xz_to_metres(position)))
+    }
+
+    /// The terrain's slope at `position` (world XZ), degrees from horizontal: the angle of
+    /// [`terrain_normal`](Self::terrain_normal) from +Y. `None` where that is.
+    pub fn terrain_slope_deg(&self, position: Vec2) -> Option<f32> {
+        self.snapshot
+            .terrain
+            .as_ref()
+            .and_then(|t| t.slope_deg(self.xz_to_metres(position)))
+    }
+
+    /// [`terrain_height`](Self::terrain_height) in the metre frame: at a metre-frame XZ, in m.
+    pub(crate) fn terrain_height_metres(&self, position: Vec2) -> Option<f32> {
+        self.snapshot
+            .terrain
+            .as_ref()
+            .and_then(|t| t.height(position))
+    }
+
+    /// A world XZ in the metre frame.
+    fn xz_to_metres(&self, position: Vec2) -> Vec2 {
+        position / self.units.per_metre()
+    }
+
+    /// Depth of the water above the ground at `position` (world XZ), m: `Some(0.0)` on dry
+    /// ground, `None` outside the terrain, when there is none, and before the first readback
+    /// (the simulation has to have run). A bilinear sample of the last readback, up to one
+    /// readback interval old. Where a [`StillWater`](crate::StillWater) is set the answer is the
+    /// higher of the simulated surface and the still level, so it needs only the terrain readback
+    /// (no hydrology).
+    pub fn water_depth(&self, position: Vec2) -> Option<f32> {
+        self.water_depth_metres(self.xz_to_metres(position))
+    }
+
+    /// [`water_depth`](Self::water_depth) at a metre-frame XZ.
+    pub(crate) fn water_depth_metres(&self, position: Vec2) -> Option<f32> {
+        let simulated = self
+            .snapshot
+            .water_depth
+            .as_ref()
+            .and_then(|w| w.depth_at(position));
+        let Some(still) = self.still.as_ref() else {
+            return simulated;
+        };
+        let level = still.level / self.units.per_metre();
+        let still_depth = self
+            .terrain_height_metres(position)
+            .map(|ground| (level - ground).max(0.0));
+        match (simulated, still_depth) {
+            (Some(sim), Some(still)) => Some(sim.max(still)),
+            (sim, still) => sim.or(still),
+        }
+    }
+
+    /// Depth-averaged velocity of the water at `position` (world XZ), m/s along world X and Z:
+    /// zero where the water is shallower than a millimetre. `None` outside the terrain, when
+    /// there is none, and before the first readback. Sampled from a half-resolution field.
+    pub fn water_velocity(&self, position: Vec2) -> Option<Vec2> {
+        self.snapshot
+            .water_velocity
+            .as_ref()
+            .and_then(|w| w.velocity_at(self.xz_to_metres(position)))
+    }
+
+    /// Depth of the snow on the ground at `position` (world XZ), m: `Some(0.0)` on bare ground,
+    /// `None` outside the terrain, when there is none, and before the first readback (the cover
+    /// simulation has to have run). A bilinear sample of the last readback, up to one readback
+    /// interval old.
+    pub fn snow_depth(&self, position: Vec2) -> Option<f32> {
+        self.snapshot
+            .cover
+            .as_ref()
+            .and_then(|c| c.depth_at(self.xz_to_metres(position)))
+    }
+
+    /// How wet the ground is at `position` (world XZ), 0 dry to 1 soaked (a full film; puddles
+    /// are water depth, see [`water_depth`](Self::water_depth)). `None` outside the terrain,
+    /// when there is none, and before the first readback. A bilinear sample of the last
+    /// readback, up to one readback interval old.
+    pub fn wetness(&self, position: Vec2) -> Option<f32> {
+        self.snapshot
+            .cover
+            .as_ref()
+            .and_then(|c| c.wetness_at(self.xz_to_metres(position)))
+    }
+
+    /// What the terrain's ground cover looks like at `position` (world XZ), in the terms the
+    /// terrain shader uses ([`GroundLook`]): the wetness, the puddle mask, the snow cover and the
+    /// wetness the surface model wears on bare ground. `None` outside the cover maps, without a
+    /// ground-cover layer, and before the first readback.
+    ///
+    /// A game that draws a footprint decal only on wet ground compares `drawn_wet` and not its
+    /// own copy of the weather, so the decal and the ground agree. Like
+    /// [`wetness`](Self::wetness) it is a bilinear sample of the last readback, up to one
+    /// readback interval old.
+    pub fn ground_look_at(&self, position: Vec2) -> Option<GroundLook> {
+        let p = self.xz_to_metres(position);
+        let cover = self.snapshot.cover.as_ref()?;
+        let wet = cover.wetness_at(p)?;
+        let snow_depth = cover.depth_at(p)?;
+        let defaults = crate::WetnessSettings::default();
+        let settings = self.wetness_settings.as_deref().unwrap_or(&defaults);
+        let puddle = self
+            .snapshot
+            .water_depth
+            .as_ref()
+            .and_then(|w| w.depth_at(p))
+            .map_or(0.0, |d| crate::cover::model::puddle_mask(d, settings));
+        Some(GroundLook {
+            wet,
+            puddle,
+            snow: crate::cover::model::snow_coverage(snow_depth),
+            drawn_wet: wet.max(puddle).min(crate::cover::model::DRENCHED_MAX),
+        })
+    }
+
+    /// How deep, m, a foot-sized contact of half extents `half` (m) loaded with `load_n` newtons
+    /// would press into the ground at `position` (world XZ) now: the trail kernel's own sinkage
+    /// (`Imprint`'s pressure and plate width, Bekker–Wong on the terrain's snow, sand, soil and
+    /// rock) evaluated on the last readback, so a game gates its footprints on the depth the
+    /// ground will take and not on a copy of the physics. 0 on rock, and in snow the CRREL-capped
+    /// depth (snow of 1 cm or more always presses). `None` outside the terrain, without ground
+    /// cover, for a degenerate contact, and before the first readback.
+    ///
+    /// It answers for the terrain's ground: a [`TrailGround`](crate::TrailGround) a game
+    /// supplies is not read. Up to one readback interval old, like [`wetness`](Self::wetness).
+    pub fn sinkage_at(&self, position: Vec2, half: Vec2, load_n: f32) -> Option<f32> {
+        use crate::trails::model::mirror::Ground;
+        if !(half.x > 0.0 && half.y > 0.0 && load_n > 0.0) {
+            return None;
+        }
+        let p = self.xz_to_metres(position);
+        let cover = self.snapshot.cover.as_ref()?;
+        let terrain = self.snapshot.terrain.as_ref()?;
+        let ground = Ground {
+            snow_m: cover.depth_at(p)?,
+            snow_density: cover.snow_density_at(p)?,
+            sediment_m: terrain.sediment(p)?,
+            slope_deg: terrain.slope_deg(p)?,
+            wetness: cover.wetness_at(p)?,
+        };
+        let pressure_kpa = load_n / (std::f32::consts::PI * half.x * half.y) / 1000.0;
+        Some(ground.sinkage(pressure_kpa, 2.0 * half.min_element()))
+    }
+
+    /// How far the ground at `position` (world XZ) is pressed below its undisturbed surface by
+    /// [`Imprint`](crate::Imprint)s, m: the deepest point within a readback cell around it (two
+    /// texels, 10 cm at High), `Some(0.0)` on untouched ground or a rim, `None` outside the
+    /// trail window (the [`ElementsFocus`](crate::ElementsFocus)'s, else the camera's
+    /// surroundings: 51 m across at High) and before the first readback. Up to one readback
+    /// interval old. A footprint in snow reads its depth until new snow fills it, so a game can
+    /// tell where something walked and how long ago it snowed.
+    pub fn trail_depth(&self, position: Vec2) -> Option<f32> {
+        self.snapshot
+            .trails
+            .as_ref()
+            .and_then(|t| t.depth_at(self.xz_to_metres(position)))
+    }
+
+    /// What the ground under `position` (world XZ) is, nearest a route a game laid
+    /// ([`PathNetwork`](crate::PathNetwork)): its kind, the coverage (1 inside the route, 0 past its
+    /// edge, the shader's own curve), the route's half width and rut depth, and how deep in a wheel
+    /// line the point is ([`PathSurface`](crate::PathSurface)). `None` only when there is no network
+    /// at all: beyond a route's edge the coverage is 0, and the answer is still the nearest route
+    /// (use [`on_path`](Self::on_path) for the predicate).
+    ///
+    /// Unlike the snapshot queries this one is **exact and current**: the network is the game's own
+    /// CPU data, so a route inserted this frame answers this frame, and the answer does not depend
+    /// on the camera or the mask's resolution. A game maps it to its footstep and tyre sounds, a
+    /// movement speed, dust, or a print's depth — the *collision material* of shipping engines
+    /// (`docs/research/path-query.md`).
+    pub fn surface_at(&self, position: Vec2) -> Option<crate::PathSurface> {
+        self.nearest_path(position).map(|hit| hit.surface)
+    }
+
+    /// The route nearest to `position` (world XZ) and the surface there
+    /// ([`PathHit`](crate::PathHit)): the signed distance to the route's **edge** (negative inside,
+    /// positive outside), the nearest point of its centre line, and the surface. `None` with no
+    /// network.
+    ///
+    /// The distance is to the edge and not the centre line, so a game placing a prop 3 m clear of a
+    /// road measures what it means, and it is exact and current like
+    /// [`surface_at`](Self::surface_at).
+    pub fn nearest_path(&self, position: Vec2) -> Option<crate::PathHit> {
+        let network = self.paths.as_ref()?;
+        crate::paths::nearest(&network.paths, self.xz_to_metres(position))
+    }
+
+    /// Whether `position` (world XZ) is on a route's drawn surface — inside its edge, where the
+    /// coverage is above 0 — the cheap predicate for placement and spawn checks.
+    pub fn on_path(&self, position: Vec2) -> bool {
+        self.nearest_path(position)
+            .is_some_and(|hit| hit.surface.coverage > 0.0)
+    }
+
+    /// Direct transmittance of the clouds toward the sun (the moon once the sun is 4° below the
+    /// horizon) at a world position, 0 under a thick cloud's shadow to 1 in the open: the cloud
+    /// shadow map, sampled every 31.25 m over 8 km around the camera, with `position` projected
+    /// along the light as the ground's material does; 1 outside the map. `None` before the first
+    /// readback. Terrain, buildings and other meshes do not shadow it: it is the cloud's shadow
+    /// only.
+    pub fn cloud_shadow_at(&self, position: Vec3) -> Option<f32> {
+        self.snapshot
+            .cloud_shadow
+            .as_ref()
+            .map(|s| s.transmittance_at(self.units.point_to_metres(position)))
+    }
+
+    /// Horizontal illuminance at a world position, lx: the sun's and the moon's clear-sky
+    /// illuminance (direct plus sky, twilight included) times `0.25 + 0.75 · T`, with `T`
+    /// [`cloud_shadow_at`](Self::cloud_shadow_at) (the cover-only estimate `1 − cover^3.4`
+    /// before the first readback). The cloud's shadow only, like `cloud_shadow_at`; about
+    /// 0.0005 lx on a moonless night (and without the celestial plugin, the moon is not counted).
+    pub fn illuminance_at(&self, position: Vec3) -> f32 {
+        let beam = self
+            .cloud_shadow_at(position)
+            .unwrap_or_else(|| beam_transmittance(self.weather.cloud_cover));
+        let moon_lux = self.frame.as_ref().map_or(0.0, |f| f.moon_lux);
+        scene_illuminance(&self.sun, moon_lux, CloudLight::from_beam(beam))
     }
 
     /// Real time since the snapshot was last filled; `Duration::MAX` before the first readback.
@@ -79,5 +435,429 @@ impl Environment<'_> {
         self.snapshot
             .updated_at
             .map_or(Duration::MAX, |at| self.time.elapsed().saturating_sub(at))
+    }
+
+    /// The camera's exposure factor: the number a scene's luminance is multiplied by for the
+    /// display, `2^(−EV₁₀₀) / 1.2` — the same number Bevy's `Exposure::exposure()` returns.
+    ///
+    /// The crate meters its exposure on the scene's **illuminance** and not on the frame's
+    /// content, so a game's own light does not move it (Patry 2021: an "illuminance-based
+    /// exposure system… takes albedo out of the equation altogether",
+    /// `docs/research/game-lights.md`). This is what a game reads to balance its own light
+    /// against the camera.
+    ///
+    /// Without the celestial plugin there is no metered exposure, and this is Bevy's own
+    /// default (the "Blender" calibration, EV100 9.7).
+    pub fn exposure(&self) -> f32 {
+        self.exposure
+            .as_ref()
+            .map_or(bevy::camera::Exposure::BLENDER.exposure(), |e| e.exposure)
+    }
+
+    /// The display value a scene luminance of `luminance` cd/m² has under the camera's
+    /// exposure: the number the camera's target holds for it.
+    ///
+    /// The forward direction: given the light a game has, how bright does it read? A display
+    /// value of 1.0 is the reference white, and the crate's target tops out at 4096.
+    pub fn display_value(&self, luminance: f32) -> f32 {
+        crate::celestial::light::display_value(luminance, self.exposure())
+    }
+
+    /// The scene luminance, in cd/m², that reads at a given `display` value under the camera's
+    /// exposure: the inverse of [`display_value`](Self::display_value).
+    ///
+    /// The direction a game authors in: "I want the ground under my lamp to read at 0.3, so it
+    /// must be lit to this many cd/m²." A `display` of 0 is the black point.
+    pub fn luminance_for_display(&self, display: f32) -> f32 {
+        crate::celestial::light::luminance_for_display(display, self.exposure())
+    }
+
+    /// The `PointLight::intensity` or `SpotLight::intensity` (Bevy's **luminous power in
+    /// lumens**) that lights a surface `distance` metres away to a scene luminance of
+    /// `luminance` cd/m², for a surface of `albedo`.
+    ///
+    /// This is the answer to "how bright must my light be": the crate knows the camera's
+    /// exposure, the game knows its surface's albedo and how far the lamp stands from it, and
+    /// this turns those into the one number Bevy's light wants.
+    ///
+    /// **The same number works for a point light and for a spot light.** Bevy maps *both* to
+    /// `Φ / 4π` ("we choose to use the same 4\*PI divisor in both cases so that toggling
+    /// between point light and spot light keeps lit areas lit equally",
+    /// `bevy_pbr-0.20.0/src/render/light.rs:711`), so a spot's cone decides only *where* the
+    /// light lands, not how bright it is on the axis.
+    ///
+    /// `distance` is in **metres** (the metre frame: world ÷
+    /// [`ElementsUnits::units_per_metre`](crate::ElementsUnits::units_per_metre)), because the
+    /// falloff is a physical one and a world in feet has a light whose power scales with the
+    /// square of the units — the same scaling the crate's own lightning uses
+    /// (`src/lightning/visual.rs`).
+    pub fn light_intensity(&self, luminance: f32, distance_m: f32, albedo: f32) -> f32 {
+        crate::celestial::light::light_intensity(luminance, distance_m, albedo)
+    }
+
+    /// The illuminance (lx) a light of `intensity` (luminous power in lumens) puts on a surface
+    /// `distance` metres away: `Φ / 4πd²`.
+    ///
+    /// The inverse of the falloff [`light_intensity`](Self::light_intensity) uses, without the
+    /// surface's albedo: this is the light *falling* on the surface.
+    pub fn light_illuminance(&self, intensity: f32, distance_m: f32) -> f32 {
+        crate::celestial::light::light_illuminance(intensity, distance_m)
+    }
+
+    /// The colour a light reads as at night: the *scotopic* colour, the cool blue-green the
+    /// rod's eye expects when the cones have given way (Jensen et al. 2001 §7 on the blue
+    /// shift, and the scotopic curve, whose peak is at 507 nm).
+    ///
+    /// It is the crate's own night sky's colour, so a game's lamp and the crate's sky are
+    /// *one* night and not two. A warm lamp in the crate's night reads as a different scene
+    /// laid over the sky.
+    pub fn night_light_colour(&self) -> Vec3 {
+        crate::celestial::light::night_light_colour()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use bevy::ecs::system::RunSystemOnce;
+
+    use super::*;
+    use crate::celestial::CelestialFrame;
+    use crate::clouds::CloudShadowSnapshot;
+    use crate::cover::CoverSnapshot;
+    use crate::hydrology::WaterDepthSnapshot;
+
+    /// A world with the sun at 40° toward +X and a shadow grid whose cell (10, 20) is
+    /// shadowed (T = 0) and every other cell open (T = 1).
+    fn world(snapshot: Option<CloudShadowSnapshot>) -> World {
+        let mut world = World::new();
+        let elevation = 40f32.to_radians();
+        world.insert_resource(EnvironmentSnapshot {
+            cloud_shadow: snapshot,
+            ..default()
+        });
+        world.insert_resource(Weather {
+            cloud_cover: 0.5,
+            ..default()
+        });
+        world.insert_resource(WorldClock::default());
+        world.insert_resource(SunState {
+            direction: Vec3::new(elevation.cos(), elevation.sin(), 0.0),
+            altitude_deg: 40.0,
+            moon_altitude_deg: -30.0,
+            ..default()
+        });
+        world.insert_resource(CelestialFrame::default());
+        world.insert_resource(WindState::default());
+        world.insert_resource(Time::<Real>::default());
+        world.insert_resource(ElementsUnits::default());
+        world
+    }
+
+    fn shadowed_cell() -> (CloudShadowSnapshot, Vec2) {
+        let grid = CloudShadowSnapshot::grid(Vec2::splat(-4000.0));
+        let mut t = vec![1.0; (grid.size.x * grid.size.y) as usize];
+        t[grid.index(IVec2::new(10, 20))] = 0.0;
+        let centre = grid.origin + (Vec2::new(10.0, 20.0) + 0.5) * grid.cell_m;
+        let elevation = 40f32.to_radians();
+        let snapshot = CloudShadowSnapshot {
+            grid,
+            light: Vec3::new(elevation.cos(), elevation.sin(), 0.0),
+            transmittance: Arc::from(t),
+            mean: 1.0,
+        };
+        (snapshot, centre)
+    }
+
+    fn ask<T: Send + 'static>(world: &mut World, f: fn(&Environment) -> T) -> T {
+        world
+            .run_system_once(move |env: Environment| f(&env))
+            .expect("the query system runs")
+    }
+
+    #[test]
+    fn the_cloud_shadow_is_unknown_before_a_readback_and_estimated_from_cover_for_light() {
+        let mut w = world(None);
+        assert_eq!(ask(&mut w, |e| e.cloud_shadow_at(Vec3::ZERO)), None);
+        let estimated = ask(&mut w, |e| e.illuminance_at(Vec3::ZERO));
+        let open = {
+            let mut w = world(None);
+            w.resource_mut::<Weather>().cloud_cover = 0.0;
+            ask(&mut w, |e| e.illuminance_at(Vec3::ZERO))
+        };
+        let expected = 0.25 + 0.75 * (1.0 - 0.5f32.powf(3.4));
+        assert!(
+            (estimated / open - expected).abs() < 1e-3,
+            "{estimated} / {open}"
+        );
+    }
+
+    #[test]
+    fn a_point_in_a_cloud_shadow_is_dark_and_one_beside_it_or_above_it_is_lit() {
+        let (snapshot, centre) = shadowed_cell();
+        let cell = snapshot.grid.cell_m;
+        let mut w = world(Some(snapshot));
+        w.insert_resource(Shadowed(centre, cell));
+        let (at, beside, above, raised, outside, lit, dark) = w
+            .run_system_once(|env: Environment, s: Res<Shadowed>| {
+                let (c, cell) = (s.0, s.1);
+                let on = Vec3::new(c.x, 0.0, c.y);
+                // 100 m up, the shadow of the same cloud lies 100 / tan 40° further toward the
+                // light, so the point that sees through the shadowed cell is that far along +X.
+                let shift = 100.0 / 40f32.to_radians().tan();
+                (
+                    env.cloud_shadow_at(on),
+                    env.cloud_shadow_at(on + Vec3::X * 2.0 * cell),
+                    env.cloud_shadow_at(on + Vec3::Y * 100.0),
+                    env.cloud_shadow_at(on + Vec3::new(shift, 100.0, 0.0)),
+                    env.cloud_shadow_at(Vec3::new(9000.0, 0.0, 0.0)),
+                    env.illuminance_at(on + Vec3::X * 2.0 * cell),
+                    env.illuminance_at(on),
+                )
+            })
+            .expect("the query system runs");
+        assert_eq!(at, Some(0.0));
+        assert_eq!(beside, Some(1.0));
+        assert_eq!(above, Some(1.0));
+        assert!(raised.is_some_and(|t| t < 1e-3), "{raised:?}");
+        assert_eq!(outside, Some(1.0));
+        // The shadow keeps the overcast quarter of the clear-sky light.
+        assert!((dark / lit - 0.25).abs() < 1e-3, "{dark} / {lit}");
+    }
+
+    #[derive(Resource)]
+    struct Shadowed(Vec2, f32);
+
+    /// A flat terrain 2 m above the origin: 32 cells of 1 m from (0, 0) in the metre frame.
+    fn flat_terrain() -> TerrainSnapshot {
+        TerrainSnapshot {
+            grid: crate::terrain::TerrainGrid {
+                origin: Vec2::ZERO,
+                cell_m: 1.0,
+                size: UVec2::splat(32),
+                y0: 2.0,
+            },
+            surface: Arc::from(vec![0.0; 32 * 32]),
+            sediment: Arc::from(vec![0.0; 32 * 32]),
+            version: 1,
+        }
+    }
+
+    #[test]
+    fn in_feet_the_terrain_height_is_in_world_units_and_the_position_is_read_in_world_units() {
+        let mut w = world(None);
+        w.resource_mut::<EnvironmentSnapshot>().terrain = Some(flat_terrain());
+        w.insert_resource(ElementsUnits {
+            units_per_metre: 3.2808,
+        });
+        // (10 m, 10 m) is (32.808, 32.808) feet; 2 m is 6.5616 feet.
+        let height = ask(&mut w, |e| e.terrain_height(Vec2::splat(32.808)));
+        assert!(
+            height.is_some_and(|h| (h - 6.5616).abs() < 1e-4),
+            "{height:?}"
+        );
+        // 40 m is outside the 32 m grid, though 40 feet is not.
+        assert_eq!(
+            ask(&mut w, |e| e.terrain_height(Vec2::splat(40.0 * 3.2808))),
+            None
+        );
+        assert!(ask(&mut w, |e| e.terrain_height(Vec2::splat(40.0))).is_some());
+    }
+
+    #[test]
+    fn in_metres_the_terrain_height_is_unchanged() {
+        let mut w = world(None);
+        w.resource_mut::<EnvironmentSnapshot>().terrain = Some(flat_terrain());
+        assert_eq!(
+            ask(&mut w, |e| e.terrain_height(Vec2::splat(10.0))),
+            Some(2.0)
+        );
+    }
+
+    /// A 32 × 32 m cover map, 1 m cells from the origin: wetness 0.6 and no snow on the left
+    /// half, wetness 0 and 3 cm of snow on the right; 1 cm of water over the whole of it.
+    fn cover_world() -> World {
+        let grid = crate::terrain::TerrainGrid {
+            origin: Vec2::ZERO,
+            cell_m: 1.0,
+            size: UVec2::splat(32),
+            y0: 0.0,
+        };
+        let left = |i: usize| i % 32 < 16;
+        let wetness: Vec<f32> = (0..32 * 32)
+            .map(|i| if left(i) { 0.6 } else { 0.0 })
+            .collect();
+        let depth: Vec<f32> = (0..32 * 32)
+            .map(|i| if left(i) { 0.0 } else { 0.03 })
+            .collect();
+        let mut w = world(None);
+        let mut snapshot = w.resource_mut::<EnvironmentSnapshot>();
+        snapshot.cover = Some(CoverSnapshot {
+            grid,
+            depth: Arc::from(depth),
+            wetness: Arc::from(wetness),
+            swe: Arc::from(vec![0.0; 32 * 32]),
+        });
+        snapshot.water_depth = Some(WaterDepthSnapshot {
+            grid,
+            depth: Arc::from(vec![0.01; 32 * 32]),
+            volume_m3: 0.0,
+            wet_cells: 0,
+            request: 0,
+            input_m3: 0.0,
+        });
+        w
+    }
+
+    #[test]
+    fn the_ground_look_is_the_shaders_curves_over_the_readback() {
+        let mut w = cover_world();
+        let wet = ask(&mut w, |e| e.ground_look_at(Vec2::new(4.5, 4.5)));
+        let snowy = ask(&mut w, |e| e.ground_look_at(Vec2::new(28.5, 4.5)));
+        let (wet, snowy) = (wet.expect("on the map"), snowy.expect("on the map"));
+        // A puddle of 1 cm between 2 mm and 2 cm: smoothstep(0.002, 0.02, 0.01).
+        let t = (0.01f32 - 0.002) / 0.018;
+        let puddle = t * t * (3.0 - 2.0 * t);
+        assert!((wet.wet - 0.6).abs() < 1e-6 && wet.snow == 0.0, "{wet:?}");
+        assert!((wet.puddle - puddle).abs() < 1e-6, "{wet:?}");
+        // The surface model wears the wetter of the film and the puddle.
+        assert!((wet.drawn_wet - 0.6f32.max(puddle)).abs() < 1e-6, "{wet:?}");
+        // Dry ground under 3 cm of snow: smoothstep(0, 0.05, 0.03) = 0.648.
+        assert!(
+            (snowy.snow - 0.648).abs() < 1e-6 && snowy.wet == 0.0,
+            "{snowy:?}"
+        );
+        assert!((snowy.drawn_wet - puddle).abs() < 1e-6, "{snowy:?}");
+    }
+
+    #[test]
+    fn the_ground_look_is_unknown_off_the_map_and_reads_world_units() {
+        let mut w = cover_world();
+        assert_eq!(
+            ask(&mut w, |e| e.ground_look_at(Vec2::new(-5.0, 4.5))),
+            None
+        );
+        assert_eq!(
+            ask(&mut w, |e| e.ground_look_at(Vec2::new(40.0, 4.5))),
+            None
+        );
+        // In feet, 40 is 12.2 m: inside, on the wet side.
+        w.insert_resource(ElementsUnits {
+            units_per_metre: 3.2808,
+        });
+        let look = ask(&mut w, |e| e.ground_look_at(Vec2::new(40.0, 14.0)));
+        assert!(look.is_some_and(|l| (l.wet - 0.6).abs() < 1e-6), "{look:?}");
+        // No cover layer at all: unknown, not dry.
+        let mut bare = world(None);
+        assert_eq!(ask(&mut bare, |e| e.ground_look_at(Vec2::ZERO)), None);
+    }
+
+    /// A walker on one foot: half extents 0.13 × 0.05 m under 760 N (37.2 kPa).
+    fn step(e: &Environment, at: Vec2) -> Option<f32> {
+        e.sinkage_at(at, Vec2::new(0.13, 0.05), 760.0)
+    }
+
+    #[test]
+    fn a_step_presses_what_the_ground_under_it_takes() {
+        // Soil on the first 16 rows, sand (2 m of sediment) on the rest, over the cover map's
+        // wet left half and its 3 cm snow on the right.
+        let mut w = cover_world();
+        let mut terrain = flat_terrain();
+        terrain.sediment = (0..32 * 32)
+            .map(|i| if i / 32 < 16 { 0.0 } else { 2.0 })
+            .collect();
+        w.resource_mut::<EnvironmentSnapshot>().terrain = Some(terrain);
+        let soil = ask(&mut w, |e| step(e, Vec2::new(4.5, 4.5))).expect("on the map");
+        let sand = ask(&mut w, |e| step(e, Vec2::new(4.5, 24.5))).expect("on the map");
+        let snow = ask(&mut w, |e| step(e, Vec2::new(28.5, 4.5))).expect("on the map");
+        // Wetness 0.6: 0.0048 m · 62.5^0.6, between dry soil and the 30 cm cap.
+        assert!((soil - 0.0574).abs() < 0.002, "soil {soil}");
+        // Dry sand 3.4 cm, wet or not.
+        assert!((sand - 0.0339).abs() < 0.0005, "sand {sand}");
+        // 3 cm of snow of 50 kg/m³ (no water equivalent: the lightest): the compaction cap,
+        // 3 cm · (1 − 50/500), below Bekker's 31 cm.
+        assert!((snow - 0.027).abs() < 1e-5, "snow {snow}");
+    }
+
+    #[test]
+    fn a_step_has_no_answer_without_ground_or_contact() {
+        let mut w = cover_world();
+        // No terrain readback: the sediment and slope are unknown.
+        assert_eq!(ask(&mut w, |e| step(e, Vec2::new(4.5, 4.5))), None);
+        w.resource_mut::<EnvironmentSnapshot>().terrain = Some(flat_terrain());
+        assert_eq!(ask(&mut w, |e| step(e, Vec2::new(-5.0, 4.5))), None);
+        let degenerate = ask(&mut w, |e| {
+            (
+                e.sinkage_at(Vec2::new(4.5, 4.5), Vec2::new(0.0, 0.05), 760.0),
+                e.sinkage_at(Vec2::new(4.5, 4.5), Vec2::new(0.13, 0.05), 0.0),
+            )
+        });
+        assert_eq!(degenerate, (None, None));
+    }
+    #[test]
+    fn the_ground_answers_its_tilt_as_a_unit_normal_and_a_slope() {
+        let mut w = world(None);
+        let mut plane = flat_terrain();
+        // h = 0.5 x: cell (i, j) is centred at x = i + 0.5.
+        plane.surface = (0..32 * 32)
+            .map(|i| 0.5 * ((i % 32) as f32 + 0.5))
+            .collect();
+        w.resource_mut::<EnvironmentSnapshot>().terrain = Some(plane);
+        let expected = Vec3::new(-0.5, 1.0, 0.0).normalize();
+        // Inside, across a cell border, and on the edge cell (a one-sided difference).
+        for at in [
+            Vec2::new(9.3, 7.7),
+            Vec2::new(16.0, 3.0),
+            Vec2::new(0.2, 5.0),
+            Vec2::new(31.9, 31.9),
+        ] {
+            let n = ask_at(&mut w, at, |e, p| e.terrain_normal(p)).expect("on the map");
+            let slope = ask_at(&mut w, at, |e, p| e.terrain_slope_deg(p)).expect("on the map");
+            assert!((n - expected).length() < 1e-5, "{at}: {n}");
+            assert!((n.length() - 1.0).abs() < 1e-6);
+            assert!(
+                (slope - 0.5f32.atan().to_degrees()).abs() < 1e-4,
+                "{at}: {slope}"
+            );
+            assert!((n.angle_between(Vec3::Y).to_degrees() - slope).abs() < 1e-3);
+        }
+        // Off the grid, and before any readback.
+        assert_eq!(
+            ask_at(&mut w, Vec2::new(-1.0, 4.0), |e, p| e.terrain_normal(p)),
+            None
+        );
+        let mut bare = world(None);
+        assert_eq!(
+            ask_at(&mut bare, Vec2::new(4.0, 4.0), |e, p| e
+                .terrain_slope_deg(p)),
+            None
+        );
+    }
+
+    #[test]
+    fn in_feet_the_ground_has_the_same_tilt_at_the_matching_point() {
+        let mut w = world(None);
+        let mut plane = flat_terrain();
+        plane.surface = (0..32 * 32)
+            .map(|i| 0.5 * ((i % 32) as f32 + 0.5))
+            .collect();
+        w.resource_mut::<EnvironmentSnapshot>().terrain = Some(plane);
+        let metres =
+            ask_at(&mut w, Vec2::new(9.3, 7.7), |e, p| e.terrain_normal(p)).expect("on the map");
+        w.insert_resource(ElementsUnits {
+            units_per_metre: 3.2808,
+        });
+        let feet = ask_at(&mut w, Vec2::new(9.3, 7.7) * 3.2808, |e, p| {
+            e.terrain_normal(p)
+        })
+        .expect("on the map");
+        assert!((metres - feet).length() < 1e-5, "{metres} {feet}");
+    }
+
+    fn ask_at<T: Send + 'static>(world: &mut World, at: Vec2, f: fn(&Environment, Vec2) -> T) -> T {
+        world
+            .run_system_once(move |env: Environment| f(&env, at))
+            .expect("the query system runs")
     }
 }
