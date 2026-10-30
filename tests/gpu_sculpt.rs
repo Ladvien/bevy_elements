@@ -19,13 +19,26 @@ use bevy_elements::*;
 const CELLS: u32 = 128;
 const CELL_M: f32 = 2.0;
 
-fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+/// Spawn the terrain over this snapshot instead of the flat one.
+#[derive(Resource)]
+struct Restore(TerrainSnapshot);
+
+fn setup(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    restore: Option<Res<Restore>>,
+) {
     commands.spawn((
         Camera3d::default(),
         support::image_target(&mut images),
         ElementsCamera::default(),
         Transform::from_xyz(0.0, 30.0, 0.0),
     ));
+    if let Some(restore) = restore {
+        let terrain = restore.0.terrain(&mut images);
+        commands.spawn((terrain, Transform::from_translation(restore.0.centre_m())));
+        return;
+    }
     commands.spawn(
         Terrain::flat(10.0)
             .with_extent(Vec2::splat(CELLS as f32 * CELL_M))
@@ -51,7 +64,14 @@ struct Sim {
 
 impl Sim {
     fn new() -> Self {
+        Self::build(None)
+    }
+
+    fn build(restore: Option<TerrainSnapshot>) -> Self {
         let mut app = App::new();
+        if let Some(snapshot) = restore {
+            app.insert_resource(Restore(snapshot));
+        }
         app.add_plugins((support::headless_plugins(), ElementsPlugins))
             .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
                 1.0 / 60.0,
@@ -120,12 +140,20 @@ impl Sim {
         self.frames(8);
     }
 
+    /// The ground height at `p`, once the readback has landed.
     fn ground(&mut self, p: Vec2) -> f32 {
-        self.app
-            .world_mut()
-            .run_system_once(move |env: Environment| env.terrain_height(p))
-            .expect("the query runs")
-            .expect("the terrain is live")
+        let found: Arc<Mutex<Option<f32>>> = Arc::default();
+        let sink = found.clone();
+        self.run_until("the ground query", move |app| {
+            let h = app
+                .world_mut()
+                .run_system_once(move |env: Environment| env.terrain_height(p))
+                .expect("the query runs");
+            *sink.lock().expect("lock") = h;
+            h.is_some()
+        });
+        let h = found.lock().expect("lock").expect("answered");
+        h
     }
 
     fn finish(mut self) {
@@ -280,4 +308,46 @@ fn gpu_a_stroke_changes_the_bedrock_under_it_and_nowhere_else() {
     assert_ne!(delta_one, delta_three, "another seed is another stroke");
 
     sim.finish();
+}
+
+/// A sculpted terrain, saved as a snapshot and respawned from it in a fresh app, answers the same
+/// heights at every cell centre. See `docs/research/terrain-heightfield-save.md`.
+#[test]
+#[ignore = "needs a GPU"]
+fn gpu_a_saved_heightfield_respawns_as_the_same_ground() {
+    let mut sim = Sim::new();
+    let centre = cell_centre(&sim, 64, 64);
+    sim.stroke(
+        SculptTerrain::new(centre, 40.0, SculptKind::Raise { amount_m: 5.0 }).with_hardness(0.5),
+    );
+    sim.frames(8);
+    let saved = sim
+        .app
+        .world_mut()
+        .run_system_once(|env: Environment| env.terrain_snapshot())
+        .expect("the query runs")
+        .expect("a readback has landed");
+    let range = saved.height_range_m();
+    assert!((range.end - range.start - 5.0).abs() < 1e-3, "{range:?}");
+    let want: Vec<f32> = (0..CELLS)
+        .flat_map(|z| (0..CELLS).map(move |x| (x, z)))
+        .map(|(x, z)| sim.ground(cell_centre(&sim, x, z)))
+        .collect();
+    sim.finish();
+
+    let mut restored = Sim::build(Some(saved));
+    restored.run_until("the first readback", |app| {
+        app.world_mut()
+            .run_system_once(|env: Environment| env.terrain_snapshot().is_some())
+            .expect("the query runs")
+    });
+    let mut worst = 0.0_f32;
+    for z in 0..CELLS {
+        for x in 0..CELLS {
+            let got = restored.ground(cell_centre(&restored, x, z));
+            worst = worst.max((got - want[(z * CELLS + x) as usize]).abs());
+        }
+    }
+    assert!(worst < 2e-4, "the restored ground differs by {worst} m");
+    restored.finish();
 }

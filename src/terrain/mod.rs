@@ -38,7 +38,7 @@ use bevy::math::UVec4;
 use bevy::mesh::{Indices, MeshTag, PrimitiveTopology};
 use bevy::pbr::MaterialPlugin;
 use bevy::prelude::*;
-use bevy::render::render_resource::{ShaderType, TextureFormat};
+use bevy::render::render_resource::{Extent3d, ShaderType, TextureDimension, TextureFormat};
 use bevy::render::storage::ShaderBuffer;
 use bevy::transform::TransformSystems;
 pub(crate) use gpu::TerrainDispatch;
@@ -227,6 +227,69 @@ impl Terrain {
     pub fn external(mut self) -> Self {
         self.render = TerrainRender::External;
         self
+    }
+}
+
+impl TerrainSnapshot {
+    /// Lowest to highest stored surface height, m (relative to `grid.y0`). A level surface is
+    /// widened to one metre so the range is never empty.
+    pub fn height_range_m(&self) -> Range<f32> {
+        let (lo, hi) = self
+            .surface
+            .iter()
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &h| {
+                (lo.min(h), hi.max(h))
+            });
+        if !(hi > lo) {
+            let lo = if lo.is_finite() { lo } else { 0.0 };
+            return lo..lo + 1.0;
+        }
+        lo..hi
+    }
+
+    /// The surface as a height map [`TerrainSource::Heightmap`] reads back exactly: an
+    /// `R32Float` image of one texel per cell holding `(h − lo) / (hi − lo)`, and the range
+    /// `lo..hi` that decodes it ([`height_range_m`](Self::height_range_m)).
+    pub fn to_heightmap(&self) -> (Image, Range<f32>) {
+        let range = self.height_range_m();
+        let span = range.end - range.start;
+        let bytes: Vec<u8> = self
+            .surface
+            .iter()
+            .flat_map(|&h| ((h - range.start) / span).to_le_bytes())
+            .collect();
+        let image = Image::new(
+            Extent3d {
+                width: self.grid.size.x,
+                height: self.grid.size.y,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            bytes,
+            TextureFormat::R32Float,
+            RenderAssetUsages::default(),
+        );
+        (image, range)
+    }
+
+    /// A [`Terrain`] that redraws this surface: the height map of
+    /// [`to_heightmap`](Self::to_heightmap) added to `images`, at the grid's extent and
+    /// resolution. Spawn it at [`centre_m`](Self::centre_m) (times
+    /// [`ElementsUnits::units_per_metre`](crate::ElementsUnits::units_per_metre)) so the ground
+    /// lies where it was. The surface comes back exactly, all of it as bedrock: the sediment
+    /// layer over the rock is not restored.
+    pub fn terrain(&self, images: &mut Assets<Image>) -> Terrain {
+        let (image, range) = self.to_heightmap();
+        Terrain::from_heightmap(images.add(image), range)
+            .with_extent(self.grid.extent())
+            .with_resolution(self.grid.size)
+    }
+
+    /// Where the terrain entity sits in the metre frame: the grid's centre in XZ and `grid.y0`
+    /// in Y.
+    pub fn centre_m(&self) -> Vec3 {
+        let c = self.grid.origin + 0.5 * self.grid.extent();
+        Vec3::new(c.x, self.grid.y0, c.y)
     }
 }
 
