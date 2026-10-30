@@ -134,8 +134,8 @@ pub use flora::{ElementsFloraPlugin, FLORA_FULL_WIND_MS};
 
 // Weathered materials.
 pub use weathered::{
-    ELEMENTS_GLOBALS_BUFFER, ElementsGlobals, SNOW_ALBEDO, SNOW_ROUGHNESS, WeatheredExtension,
-    WeatheredMaterial, WeatheredPlugin,
+    CoverBand, ELEMENTS_GLOBALS_BUFFER, ElementsGlobals, SNOW_ALBEDO, SNOW_ROUGHNESS, SurfaceCover,
+    WeatheredExtension, WeatheredMaterial, WeatheredPlugin,
 };
 
 // Volumetric snow on `bevy_isomesh` voxel volumes.
