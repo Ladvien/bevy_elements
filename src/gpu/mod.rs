@@ -4,4 +4,5 @@ pub(crate) mod grid;
 pub(crate) mod kernel;
 #[cfg(test)]
 pub(crate) mod noise_mirror;
+pub(crate) mod perlin;
 pub(crate) mod readback;
