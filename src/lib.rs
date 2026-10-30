@@ -3,11 +3,15 @@
 
 mod celestial;
 mod climate;
+mod clouds;
+mod flash;
 #[cfg(feature = "flora")]
 mod flora;
 mod fog;
 mod gpu;
+mod lightning;
 mod plugin;
+mod precipitation;
 mod query;
 mod wind;
 
@@ -37,10 +41,26 @@ pub use wind::{
     log_wind_speed,
 };
 
+// Precipitation.
+pub use precipitation::{
+    MAX_PRECIPITATION_BLOCKERS, PRECIPITATION_BOX_M, PrecipitationBlocker, PrecipitationPlugin,
+    PrecipitationState,
+};
+
 // Fog.
 pub use fog::{
     FogPlugin, GROUND_FOG_EXTENT, GROUND_FOG_TEXELS, GroundFog, KOSCHMIEDER, distance_fog_falloff,
     extinction_for_visibility, fog_hue, volume_light_compensation,
+};
+
+// Clouds.
+pub use clouds::{CloudLayer, CloudPlugin, CloudQuality, CloudShadows, CloudWeatherMap};
+
+// Lightning and thunder; `LightningFlash` is shared with the cloud and precipitation passes.
+pub use flash::LightningFlash;
+pub use lightning::{
+    FLASH_LUMENS, LightningPlugin, LightningStrike, SPEED_OF_SOUND_MS, STRIKE_RADIUS_M,
+    StrikeLightning, Thunder,
 };
 
 // `bevy_flora` integration.

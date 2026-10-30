@@ -1,7 +1,7 @@
 // The star field: one quad per star, placed at infinity, expanded to a fixed pixel size, radiance
 // from catalogue illuminance. See `stars.rs` for the model and `docs/research/celestial.md` §Stars.
 //
-//   L = E / Ω · (3/π) · (1 − ρ²)² · colour · T_atm · (1 − cloud_cover) · exposure   [cd/m²]
+//   L = E / Ω · (3/π) · (1 − ρ²)² · colour · T_atm · exposure   [cd/m²]
 //   Ω = (1.5 p)²,  p = 2 tan(fov_y / 2) / viewport_height  [rad per pixel]
 //   T_atm = exp(−τ · X),  X = Kasten–Young airmass at the star's altitude
 
@@ -12,7 +12,7 @@ struct StarsParams {
     c0: vec4<f32>,
     c1: vec4<f32>,
     c2: vec4<f32>,
-    // xyz: zenith optical depth per channel. w: 1 − cloud cover.
+    // xyz: zenith optical depth per channel. w: unused (1).
     extinction_cloud: vec4<f32>,
     // xyz: unit world direction of the moon. w: cosine of its angular radius.
     moon: vec4<f32>,

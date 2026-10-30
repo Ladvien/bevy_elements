@@ -2,7 +2,7 @@
 // sphere from an equirectangular albedo map. See `moon.rs` for the model and
 // `docs/research/celestial.md` §Moon disc.
 //
-//   L = A · E_sun/π · (2 μ0 / (μ0 + μ) + 0.0002 (1 − k)) · T_atm · (1 − cloud_cover) · exposure
+//   L = A · E_sun/π · (2 μ0 / (μ0 + μ) + 0.0002 (1 − k)) · T_atm · exposure
 //   A = Ā · texel / 128                                                         [cd/m²]
 //
 // `exposure` is the darker of the scene's and that of an eye adapted to the lit lunar surface
@@ -16,7 +16,7 @@ struct MoonParams {
     moon: vec4<f32>,
     // xyz: moon-fixed +Z (north), unit, perpendicular to `moon`. w: illuminated fraction k.
     north: vec4<f32>,
-    // xyz: unit world direction to the sun. w: 1 − cloud cover.
+    // xyz: unit world direction to the sun. w: unused (1).
     sun_cloud: vec4<f32>,
     // xyz: zenith optical depth per channel. w: exposure adapted to the lit lunar surface.
     extinction: vec4<f32>,

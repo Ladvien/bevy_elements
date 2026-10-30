@@ -2,7 +2,9 @@
 //!
 //! `cargo run --release --example weather_tour`
 //!
-//! `ELEMENTS_PRESET=Fog` holds one preset instead (for screenshots).
+//! `ELEMENTS_PRESET=Fog` holds one preset instead (for screenshots). `ELEMENTS_HOUR=19.5` pauses
+//! the clock at that local hour, `ELEMENTS_PITCH=15` looks that many degrees above the horizon,
+//! `ELEMENTS_HEADING=290` looks along that compass bearing.
 
 mod common;
 
@@ -28,13 +30,17 @@ fn main() {
             .into_iter()
             .find(|p| format!("{p:?}").eq_ignore_ascii_case(&name))
     });
+    let hour: Option<f64> = std::env::var("ELEMENTS_HOUR")
+        .ok()
+        .and_then(|h| h.parse().ok());
+    let clock = WorldClock::new(CivilDate::new(2026, 4, 20)).at_hour(hour.unwrap_or(10.0));
+    let clock = WorldClock {
+        paused: hour.is_some(),
+        ..clock.with_time_scale(1.0)
+    };
     App::new()
         .add_plugins((DefaultPlugins, ElementsPlugins, ExampleHarness))
-        .insert_resource(
-            WorldClock::new(CivilDate::new(2026, 4, 20))
-                .at_hour(10.0)
-                .with_time_scale(1.0),
-        )
+        .insert_resource(clock)
         .insert_resource(Tour {
             held,
             index: 0,
@@ -52,9 +58,28 @@ fn setup(
     mut tour: ResMut<Tour>,
     mut director: ResMut<WeatherDirector>,
 ) {
+    let pitch = std::env::var("ELEMENTS_PITCH")
+        .ok()
+        .and_then(|p| p.parse::<f32>().ok())
+        .unwrap_or(3.5)
+        .to_radians();
+    // `ELEMENTS_HEADING` is a compass bearing in degrees: 0 north (−Z), 90 east (+X).
+    let heading = std::env::var("ELEMENTS_HEADING")
+        .ok()
+        .and_then(|h| h.parse::<f32>().ok())
+        .map_or(Vec2::new(120.0, 60.0).normalize(), |deg| {
+            let a = deg.to_radians();
+            Vec2::new(a.sin(), -a.cos())
+        });
+    let position = Vec3::new(0.0, 6.0, 0.0);
     commands.spawn(camera(
-        Vec3::new(0.0, 6.0, 0.0),
-        Vec3::new(120.0, 8.0, 60.0),
+        position,
+        position
+            + Vec3::new(
+                heading.x * pitch.cos(),
+                pitch.sin(),
+                heading.y * pitch.cos(),
+            ) * 120.0,
     ));
     test_scene(&mut commands, &mut meshes, &mut materials);
     commands.spawn((

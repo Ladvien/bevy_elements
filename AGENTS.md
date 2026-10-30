@@ -53,6 +53,11 @@ No system is implemented without its `docs/research/<system>.md`, committed firs
 - **Shaders are WESL.** `embedded://bevy_elements/noise.wesl` is importable as `bevy_elements::noise`; shared libraries are loaded with `load_shader_library!`.
 - **GPU timings on a lightly loaded NVIDIA card read 5–10× slow** (P8/P5 clocks under Xvfb). Report the minimum over the diagnostic history and log `nvidia-smi` clocks in the same shell.
 - **Screenshots without a display:** `xvfb-run -a -s "-screen 0 1920x1080x24" env ELEMENTS_FRAMES=… ELEMENTS_SHOT=… ./target/release/examples/<name>` renders on the GPU.
+- **A `Camera3d` requires `Msaa` (4 samples by default)**, so an observer's `insert_if_new(Msaa::Off)` never applies; `ElementsCamera` inserts `Msaa::Off` unconditionally. The cloud and precipitation passes bind the depth prepass single-sampled and skip a view that has MSAA.
+- **Bevy's `ScatteringMedium::earth` falloffs are fractions of the atmosphere thickness** (100 km): effective scale heights 13.3 km (Rayleigh) and 2 km (Mie), not Hillaire's 8 and 1.2 km. Oracles for the sky or cloud light use `bevy_optical_transmittance` (`src/clouds/model.rs`).
+- **`ReadbackOnce` lives for one frame**: Bevy removes it in `First`. Spawn it from a system in `Update` (as `gpu/readback.rs` does), never between `app.update()` calls, or use `Readback` and despawn it (`tests/support`). Bevy's readback pool can return a buffer larger than the one asked for: decode only the length you know.
+- **`active` is a reserved word in WGSL**: the shader compiler rejects it as an identifier and the kernel then stays idle (look for the `ERROR bevy_elements::gpu::kernel` line).
+- **Particle and splash buffers** are read back in tests through `PrecipitationState` (`tests/gpu_precipitation.rs`); one test process builds one renderer at a time, so the GPU tests share a lock.
 
 ## Build and test
 
