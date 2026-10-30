@@ -8,6 +8,7 @@
 //! replace it), the [`Weather`] and the [`CloudShadows`]. A material's own
 //! [`WeatheredExtension::exposure`] scales every weather effect: 1 is open sky, 0 is sheltered.
 
+mod cover;
 mod model;
 
 #[cfg(test)]
@@ -19,6 +20,8 @@ use bevy::prelude::*;
 use bevy::render::render_resource::AsBindGroup;
 use bevy::render::storage::ShaderBuffer;
 use bevy::shader::ShaderRef;
+
+pub use cover::{CoverBand, SurfaceCover};
 
 use crate::climate::{SurfaceWeathering, Weather};
 use crate::clouds::CloudShadows;
@@ -238,10 +241,18 @@ pub struct WeatheredExtension {
     /// The stone grain's feature size, m: 0 for none ([`with_grain`](Self::with_grain)).
     #[uniform(100)]
     grain_m: f32,
+    /// 1 when the material wears a [`SurfaceCover`] ([`with_cover`](Self::with_cover)).
+    #[uniform(100)]
+    cover: f32,
     /// A colour grade of the base colour (tint, saturation): the identity, except on the crate's
     /// scattered rocks, which carry [`TerrainLook`](crate::TerrainLook).
     #[uniform(100)]
     pub(crate) look: Vec4,
+    /// The cover's snow band and wet band, as [`CoverBand::packed`] gives them.
+    #[uniform(100)]
+    snow_band: [Vec4; 2],
+    #[uniform(100)]
+    wet_band: [Vec4; 2],
     #[storage(101, read_only, visibility(fragment))]
     pub(crate) globals: Handle<ShaderBuffer>,
     #[texture(102)]
@@ -266,7 +277,10 @@ impl WeatheredExtension {
             exposure,
             trails: 0.0,
             grain_m: 0.0,
+            cover: 0.0,
             look: Vec4::ONE,
+            snow_band: [Vec4::ZERO; 2],
+            wet_band: [Vec4::ZERO; 2],
             globals: ELEMENTS_GLOBALS_BUFFER,
             cloud_shadow: None,
             trail: None,
@@ -303,6 +317,22 @@ impl WeatheredExtension {
     /// The stone grain's feature size, m (0 for none).
     pub fn grain_m(&self) -> f32 {
         self.grain_m
+    }
+
+    /// The same extension wearing `cover`: its snow and wetness are the cover's, not the scene's
+    /// (see [`SurfaceCover`]).
+    pub fn with_cover(mut self, cover: SurfaceCover) -> Self {
+        self.set_cover(Some(cover));
+        self
+    }
+
+    /// Put on (`Some`) or take off (`None`, the scene's weather again) a [`SurfaceCover`] of a
+    /// material that is already live: mutate it through `Assets::get_mut`, and the next frame draws it.
+    pub fn set_cover(&mut self, cover: Option<SurfaceCover>) {
+        self.cover = if cover.is_some() { 1.0 } else { 0.0 };
+        let cover = cover.unwrap_or_default();
+        self.snow_band = cover.snow.packed();
+        self.wet_band = cover.wetness.packed();
     }
 }
 
