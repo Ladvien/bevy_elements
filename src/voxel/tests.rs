@@ -363,6 +363,9 @@ fn carve_the_top_lowers_the_top() {
         changes: 0,
         packed: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         generated: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        stroke: None,
+        stroke_epoch: 0,
+        stroked: Arc::new(std::sync::atomic::AtomicU64::new(0)),
     })
     .insert_resource(live_state);
 

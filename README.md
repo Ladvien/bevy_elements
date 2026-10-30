@@ -308,6 +308,18 @@ fn load_level(world: &mut World) {
 }
 ```
 
+#### Sculpting the live terrain
+
+Send a `SculptTerrain` message to edit the running terrain: a brush at a metre-frame XZ with a radius, a `hardness` (the fraction of the radius at full effect; the weight then falls as a smoothstep, so the rim leaves no crease) and a kind: `Raise`, `Lower`, `Smooth`, `Flatten { height_m, blend }` or `Noise { amplitude_m, feature_m, seed }`. The stroke edits bedrock on the GPU (sediment stays), one stroke is applied per frame in order, and the drawn ground, the rocks, the cover and `Environment::terrain_height` follow it the next frame. Nothing outside the radius changes. `SculptTerrain::validate()` names a field that breaks its bound; an invalid stroke is dropped with a warning.
+
+```rust
+# use bevy::prelude::*;
+# use bevy_elements::{SculptKind, SculptTerrain};
+fn dig_a_pit(mut strokes: MessageWriter<SculptTerrain>) {
+    strokes.write(SculptTerrain::new(Vec2::new(40.0, -12.0), 6.0, SculptKind::Lower { amount_m: 1.5 }));
+}
+```
+
 ### Ground cover
 
 `GroundCoverPlugin` keeps two maps on the `Terrain`'s grid, stepped on game time (the `WorldClock`) at most 20 times a second after hydrology's substeps. **Snow** is a depth and a water equivalent per cell: it accumulates at the cell's own rain–snow split (the lapse rate makes ridges snowier than valleys), keeps less on slopes between 35° and 55° and none under a `PrecipitationBlocker` (the roof's shelter follows the slanted fall of the rain or snow), settles from 100 toward 300 kg/m³ with a 3-day time constant, drifts downwind above 5 m/s (a flux that grows with the cube of the excess, deposited where the wind slows in the lee), is smoothed over a few cells, and melts at 4 mm of water per °C per day, every millimetre arriving in the `water` layer. **Wetness** follows rain and evaporation; the terrain and ground materials shade snow, wet darkening and a porous sheen, and puddles with ripples. On the terrain the grass is a canopy whose wax beads the rain: a wet meadow deepens its green by `bevy_flora`'s wet-leaf rule (saturation × 1.25, brightness kept) and does not gloss, and only the soil, sand, rock and scree between darken and shine. Rain rings on a live terrain only where water stands at least `WetnessSettings::puddle_min_m` deep (`docs/research/wet-ground.md`).
