@@ -1,4 +1,6 @@
 ## [Unreleased]
+### Added
+- **`SculptTerrain::inverse()`**: the stroke that undoes a `Raise` or `Lower` (the other kind, same amount, centre, radius, hardness); `None` for `Smooth`, `Flatten` and `Noise`, which depend on the ground they met and are undone from a snapshot of the heights. For an editor's undo stack (bevy_emerge #99).
 
 ## [0.7.3] - 2026-10-29
 ### Added
