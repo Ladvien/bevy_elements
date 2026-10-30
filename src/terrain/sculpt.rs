@@ -95,6 +95,30 @@ impl SculptTerrain {
         self
     }
 
+    /// The stroke that undoes this one, for the kinds that only add a delta: a raise is undone by
+    /// a lower of the same amount, centre, radius and hardness, and the reverse. `None` for
+    /// `Smooth`, `Flatten` and `Noise`, whose result depends on the ground they met; an editor
+    /// undoes those from a snapshot of the heights taken before the stroke.
+    ///
+    /// ```
+    /// # use bevy_elements::{SculptKind, SculptTerrain};
+    /// # use bevy::math::Vec2;
+    /// let hill = SculptTerrain::new(Vec2::ZERO, 30.0, SculptKind::Raise { amount_m: 4.0 });
+    /// let undo = hill.inverse().unwrap();
+    /// assert_eq!(undo.kind, SculptKind::Lower { amount_m: 4.0 });
+    /// assert_eq!(undo.inverse(), Some(hill));
+    /// ```
+    pub fn inverse(&self) -> Option<Self> {
+        let kind = match self.kind {
+            SculptKind::Raise { amount_m } => SculptKind::Lower { amount_m },
+            SculptKind::Lower { amount_m } => SculptKind::Raise { amount_m },
+            SculptKind::Smooth { .. } | SculptKind::Flatten { .. } | SculptKind::Noise { .. } => {
+                return None;
+            }
+        };
+        Some(Self { kind, ..*self })
+    }
+
     /// Check every field against its bound; the error names the field. A stroke that fails is
     /// dropped (with a warning) by the terrain plugin, so an editor calls this first.
     pub fn validate(&self) -> Result<(), SetupError> {
@@ -256,6 +280,18 @@ mod tests {
         }
         // Zero slope at the rim: no crease where the brush ends.
         assert!(sculpt_weight(9.99, 10.0, 0.5) < 1e-4);
+    }
+
+    #[test]
+    fn only_the_stroke_kinds_that_add_a_delta_have_an_inverse() {
+        let at = |kind| SculptTerrain::new(Vec2::new(3.0, 4.0), 12.0, kind).with_hardness(0.6);
+        let raise = at(SculptKind::Raise { amount_m: 2.5 });
+        let undo = raise.inverse().expect("a raise is undone by a lower");
+        assert_eq!(undo, at(SculptKind::Lower { amount_m: 2.5 }).with_hardness(0.6));
+        assert_eq!(undo.inverse(), Some(raise));
+        assert!(at(SculptKind::Smooth { blend: 1.0 }).inverse().is_none());
+        assert!(at(SculptKind::Flatten { height_m: 1.0, blend: 1.0 }).inverse().is_none());
+        assert!(at(SculptKind::Noise { amplitude_m: 1.0, feature_m: 5.0, seed: 1 }).inverse().is_none());
     }
 
     #[test]
