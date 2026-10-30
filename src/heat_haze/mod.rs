@@ -103,16 +103,17 @@ impl HeatSource {
 #[reflect(Resource)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HeatHazeSettings {
-    /// The deflection drawn over the physical one; 0 switches the pass off. Default 10: a real
+    /// The deflection drawn over the physical one; 0 switches the pass off. Default 20: a real
     /// fire bends light by 20–60″, plain to an eye that resolves 5″ of misalignment but a tenth
-    /// of a 1080p pixel, so the physical value is drawn ten times larger
+    /// of a 1080p pixel, so the physical value is drawn twenty times larger, which shifts the
+    /// background of a campfire seen from 7 m by 1–3 px and by 5 px beside its flames
     /// (`docs/research/heat-haze.md`, Deviation 1).
     pub gain: f32,
 }
 
 impl Default for HeatHazeSettings {
     fn default() -> Self {
-        Self { gain: 10.0 }
+        Self { gain: 20.0 }
     }
 }
 

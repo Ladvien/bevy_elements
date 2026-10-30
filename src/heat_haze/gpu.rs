@@ -168,7 +168,8 @@ fn prepare_views(
             commands.entity(entity).remove::<HazeTarget>();
             continue;
         };
-        let copy = padded(draw, view.viewport, MAX_SHIFT_PX as u32 + 2);
+        // The Catmull-Rom sample reaches two texels past the shift.
+        let copy = padded(draw, view.viewport, MAX_SHIFT_PX as u32 + 4);
         let scratch = textures.get(
             &device,
             TextureDescriptor {
