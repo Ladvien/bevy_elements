@@ -148,6 +148,24 @@ impl ProceduralTerrain {
     pub const fn plains(seed: u64) -> Self {
         Self::preset(seed, 800.0, 15.0, 0.0, 8, 0.0)
     }
+
+    /// The surface this generator draws, evaluated on the CPU: `size.x × size.y` heights, m,
+    /// row-major (`z * size.x + x`), the height of cell `(x, z)` taken at its centre
+    /// `((x, z) + ½) · cell_m` from the terrain's minimum corner, relative to the terrain
+    /// transform, with the octave count the GPU kernel uses for that cell size. Needs no app, no
+    /// GPU and no [`TerrainPlugin`]: a tool can bake a preset into a height map, a game can
+    /// preview it or test against it. The kernel evaluates the same noise in `f32` on the GPU,
+    /// so the two agree to within the sampling tolerance of `terrain.md`, not bit for bit. It
+    /// is deterministic per seed. A zero `size` or a `cell_m` that is not a positive finite
+    /// number gives an empty vector.
+    ///
+    /// Sediment ([`initial_sand_m`](Self::initial_sand_m)) is not part of the surface.
+    pub fn sample_surface(&self, size: UVec2, cell_m: f32) -> Vec<f32> {
+        if size.x == 0 || size.y == 0 || !(cell_m.is_finite() && cell_m > 0.0) {
+            return Vec::new();
+        }
+        model::surface::generate_surface(self, size, cell_m)
+    }
 }
 
 /// Who draws the ground.
