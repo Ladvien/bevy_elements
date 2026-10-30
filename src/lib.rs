@@ -128,16 +128,6 @@ pub use rocks::{
     stone_mesh, stone_palette,
 };
 
-// Clouds.
-pub use clouds::{CloudLayer, CloudPlugin, CloudQuality, CloudShadows, CloudWeatherMap};
-
-// Lightning and thunder; `LightningFlash` is shared with the cloud and precipitation passes.
-pub use flash::LightningFlash;
-pub use lightning::{
-    FLASH_LUMENS, LightningPlugin, LightningStrike, SPEED_OF_SOUND_MS, STRIKE_RADIUS_M,
-    StrikeLightning, Thunder,
-};
-
 // `bevy_flora` integration.
 #[cfg(feature = "flora")]
 pub use flora::{ElementsFloraPlugin, FLORA_FULL_WIND_MS};
