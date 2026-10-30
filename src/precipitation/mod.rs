@@ -120,6 +120,10 @@ pub struct PrecipitationState {
     pub dust: u32,
 }
 
+/// The precipitation's draw pass in `Core3d`: passes that read the scene colour order after it.
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct PrecipitationDraw;
+
 /// Marks a camera the precipitation draws into; added to every [`ElementsCamera`].
 #[derive(Component, Clone, Copy, Default, ExtractComponent)]
 #[extract_app(RenderApp)]
