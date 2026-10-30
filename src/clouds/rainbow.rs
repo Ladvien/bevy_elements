@@ -6,7 +6,12 @@
 //! illuminance `E` has the radiance `E · p · τ`. The composite reads it at the angle between the
 //! sun's direction and the pixel's ray.
 
+use bevy::light::light_consts::lux;
 use bevy::prelude::*;
+
+use crate::celestial::SunState;
+use crate::climate::Weather;
+use crate::precipitation::model::rain_extinction;
 
 const PI: f64 = std::f64::consts::PI;
 
@@ -356,6 +361,42 @@ pub(crate) fn sun_transmittance(altitude_deg: f32) -> Vec3 {
     Vec3::from(ZENITH_OPTICAL_DEPTH.map(|tau| (-tau * am).exp()))
 }
 
+/// The rate the weather map's green channel stands for at 1, mm/h
+/// ([`CloudLayer::precipitation_from_weather`](super::CloudLayer::precipitation_from_weather)).
+const MAP_FULL_RATE_MM_H: f32 = 25.0;
+
+/// The share of the weather's precipitation that falls as rain, 0–1. Only liquid drops make a
+/// bow; a snowflake is neither liquid nor round (`docs/research/rainbow.md`, "Only the liquid
+/// share makes a bow").
+fn rain_share(weather: &Weather) -> f32 {
+    1.0 - weather.snow_fraction()
+}
+
+/// The rainbow's uniform (`CloudParams::bow`): the sun's light at the camera and the row of the
+/// phase-function table that the rain's median drop picks; `w` is −1 (no bow) while the sun is
+/// below the horizon, no rain falls (snow makes none), or the strength is 0.
+pub(crate) fn bow_params(sun: &SunState, weather: &Weather, beam: f32, strength: f32) -> Vec4 {
+    let rain_mm_h = weather.precipitation_mm_h * rain_share(weather);
+    if strength <= 0.0 || sun.altitude_deg <= 0.0 || rain_mm_h <= 0.0 {
+        return Vec4::new(0.0, 0.0, 0.0, -1.0);
+    }
+    let light =
+        sun_transmittance(sun.altitude_deg) * (lux::RAW_SUNLIGHT * beam.clamp(0.0, 1.0) * strength);
+    light.extend(row_coordinate(median_radius_mm(rain_mm_h)))
+}
+
+/// The rainbow's curtain (`CloudParams::shower`): x the extinction of the rain where the weather
+/// map's green is 1, m⁻¹. The green is the total rate over 25 mm/h, so a texel of green `g` holds
+/// `25 g · rain_share` mm/h of rain and its extinction is `x · g^0.68`.
+pub(crate) fn shower_params(weather: &Weather) -> Vec4 {
+    Vec4::new(
+        rain_extinction(MAP_FULL_RATE_MM_H * rain_share(weather)),
+        0.0,
+        0.0,
+        0.0,
+    )
+}
+
 /// Settings of the rainbow ([`crate::CloudPlugin`]).
 ///
 /// Insert it before the plugin to override. A bow needs the sun below 42° of elevation, a
@@ -630,6 +671,65 @@ mod tests {
                 sign * (1.0 + man / 1024.0) * 2.0f32.powi(exp - 15)
             };
             assert!((back - v).abs() <= v * 1.0e-3 + 1.0e-7, "{v} -> {back}");
+        }
+    }
+
+    fn shower(rate_mm_h: f32, temperature_c: f32) -> Weather {
+        Weather {
+            precipitation_mm_h: rate_mm_h,
+            temperature_c,
+            snow_possible: 1.0,
+            ..Weather::default()
+        }
+    }
+
+    fn low_sun() -> SunState {
+        SunState {
+            altitude_deg: 20.0,
+            ..SunState::default()
+        }
+    }
+
+    #[test]
+    fn falling_snow_draws_no_bow() {
+        let snow = shower(5.0, -5.0);
+        assert_eq!(snow.snow_fraction(), 1.0);
+        assert_eq!(
+            bow_params(&low_sun(), &snow, 1.0, 5.0).w,
+            -1.0,
+            "snow makes no rainbow"
+        );
+        assert_eq!(
+            shower_params(&snow).x,
+            0.0,
+            "snow puts no drops in the curtain"
+        );
+        let rain = shower(5.0, 15.0);
+        assert!(
+            bow_params(&low_sun(), &rain, 1.0, 5.0).w >= 0.0,
+            "rain still does"
+        );
+        assert_eq!(shower_params(&rain).x, rain_extinction(25.0));
+    }
+
+    #[test]
+    fn sleet_draws_the_bow_of_its_rain_alone() {
+        // At 0.5 °C half of 5 mm/h falls as snow: the bow is that of 2.5 mm/h of rain.
+        let sleet = shower(5.0, 0.5);
+        assert_eq!(sleet.snow_fraction(), 0.5);
+        let sun = low_sun();
+        assert_eq!(
+            bow_params(&sun, &sleet, 1.0, 5.0),
+            bow_params(&sun, &shower(2.5, 15.0), 1.0, 5.0)
+        );
+        // A weather-map texel of green g stands for 25 g mm/h in all, half of it rain.
+        for g in [0.05f32, 0.2, 1.0] {
+            let k = shower_params(&sleet).x * g.powf(0.68);
+            let want = rain_extinction(25.0 * g * 0.5);
+            assert!(
+                (k - want).abs() <= 1e-5 * want,
+                "green {g}: {k} against {want}"
+            );
         }
     }
 }

@@ -24,9 +24,9 @@ const BOW_COS_FAR: f32 = -0.98481;
 /// The table's angles, radians (110° and 60° more).
 const BOW_THETA_MIN: f32 = 1.91986;
 const BOW_THETA_SPAN: f32 = 1.04720;
-/// Rain's extinction, m⁻¹, at `R` mm/h is `2.12e-4 R^0.68` (docs/research/precipitation.md); the
-/// weather map's green channel is `R / 25`.
-const RAIN_EXTINCTION: f32 = 2.12e-4;
+/// Rain's extinction at `R` mm/h is `2.12e-4 R^0.68` m⁻¹ (docs/research/precipitation.md); the
+/// weather map's green channel is the total rate over 25 mm/h and `params.shower.x` the extinction
+/// of its rain share at a green of 1, so a texel's is `shower.x · g^0.68` and snow adds nothing.
 /// The curtain's taps: horizontal distances `1500 · 2^j` m (1.5, 3, 6 and 12 km), each standing for
 /// the length `x` (the first) or `0.75 x` (the rest) of the ray's ground track.
 
@@ -58,7 +58,7 @@ fn rainbow_light(cam: vec3<f32>, dir: vec3<f32>) -> vec3<f32> {
         let reach = 1.0 - smoothstep(0.7 * params.layer.x, params.layer.x, height);
         let xz = cam.xz + heading * x;
         let g = textureSampleLevel(weather_tex, smp_repeat, (xz - params.weather.xy) / params.weather.z, 0.0).g;
-        let k = RAIN_EXTINCTION * pow(g * 25.0, 0.68);
+        let k = params.shower.x * pow(g, 0.68);
         tau += k * stand / flat_len * reach;
     }
     return params.bow.xyz * table * (1.0 - exp(-tau)) * view.exposure;
