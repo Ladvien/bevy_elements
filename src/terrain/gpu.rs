@@ -261,6 +261,15 @@ fn prepare(
     };
     uniforms.params.set(gpu.params);
     uniforms.params.write_buffer(&device, &queue);
+    // A restored region is written ahead of this frame's kernels, once.
+    if let Some(cut) = gpu
+        .restore
+        .as_ref()
+        .filter(|_| gpu.restore_epoch > gpu.restored.load(Ordering::Relaxed))
+    {
+        cut.write(&queue, bedrock, sediment, gpu.state.grid.size.x);
+        gpu.restored.fetch_max(gpu.restore_epoch, Ordering::Relaxed);
+    }
     let generate = if generated {
         None
     } else {
