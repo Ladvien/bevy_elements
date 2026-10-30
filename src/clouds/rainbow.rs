@@ -6,7 +6,12 @@
 //! illuminance `E` has the radiance `E · p · τ`. The composite reads it at the angle between the
 //! sun's direction and the pixel's ray.
 
+use bevy::light::light_consts::lux;
 use bevy::prelude::*;
+
+use crate::celestial::SunState;
+use crate::climate::Weather;
+use crate::precipitation::model::{rain_extinction, snow_extinction};
 
 const PI: f64 = std::f64::consts::PI;
 
@@ -356,6 +361,46 @@ pub(crate) fn sun_transmittance(altitude_deg: f32) -> Vec3 {
     Vec3::from(ZENITH_OPTICAL_DEPTH.map(|tau| (-tau * am).exp()))
 }
 
+/// The rate the weather map's green channel stands for at 1, mm/h
+/// ([`CloudLayer::precipitation_from_weather`](super::CloudLayer::precipitation_from_weather)).
+const MAP_FULL_RATE_MM_H: f32 = 25.0;
+
+/// The share of the weather's precipitation that falls as rain, 0–1. Only liquid drops make a
+/// bow; a snowflake is neither liquid nor round (`docs/research/rainbow.md`, "Only the liquid
+/// share makes a bow").
+fn rain_share(weather: &Weather) -> f32 {
+    1.0 - weather.snow_fraction()
+}
+
+/// The rainbow's uniform (`CloudParams::bow`): the sun's light at the camera and the row of the
+/// phase-function table that the rain's median drop picks; `w` is −1 (no bow) while the sun is
+/// below the horizon, no rain falls (snow makes none), or the strength is 0.
+pub(crate) fn bow_params(sun: &SunState, weather: &Weather, beam: f32, strength: f32) -> Vec4 {
+    let rain_mm_h = weather.precipitation_mm_h * rain_share(weather);
+    if strength <= 0.0 || sun.altitude_deg <= 0.0 || rain_mm_h <= 0.0 {
+        return Vec4::new(0.0, 0.0, 0.0, -1.0);
+    }
+    let light =
+        sun_transmittance(sun.altitude_deg) * (lux::RAW_SUNLIGHT * beam.clamp(0.0, 1.0) * strength);
+    light.extend(row_coordinate(median_radius_mm(rain_mm_h)))
+}
+
+/// The rainbow's curtain (`CloudParams::shower`), the extinctions where the weather map's green
+/// is 1, m⁻¹: x the rain's, y the snow's. The green is the total rate over 25 mm/h, so a texel of
+/// green `g` holds `25 g · rain_share` mm/h of rain, extinction `x · g^0.68`, and the rest as
+/// snow, extinction `y · g`. The two share the curtain's light by their extinction and only the
+/// rain's makes the bow (`docs/research/rainbow.md`, "Snow in the curtain takes its share of the
+/// light").
+pub(crate) fn shower_params(weather: &Weather) -> Vec4 {
+    let rain = rain_share(weather);
+    Vec4::new(
+        rain_extinction(MAP_FULL_RATE_MM_H * rain),
+        snow_extinction(MAP_FULL_RATE_MM_H * (1.0 - rain)),
+        0.0,
+        0.0,
+    )
+}
+
 /// Settings of the rainbow ([`crate::CloudPlugin`]).
 ///
 /// Insert it before the plugin to override. A bow needs the sun below 42° of elevation, a
@@ -631,5 +676,113 @@ mod tests {
             };
             assert!((back - v).abs() <= v * 1.0e-3 + 1.0e-7, "{v} -> {back}");
         }
+    }
+
+    fn shower(rate_mm_h: f32, temperature_c: f32) -> Weather {
+        Weather {
+            precipitation_mm_h: rate_mm_h,
+            temperature_c,
+            snow_possible: 1.0,
+            ..Weather::default()
+        }
+    }
+
+    fn low_sun() -> SunState {
+        SunState {
+            altitude_deg: 20.0,
+            ..SunState::default()
+        }
+    }
+
+    #[test]
+    fn falling_snow_draws_no_bow() {
+        let snow = shower(5.0, -5.0);
+        assert_eq!(snow.snow_fraction(), 1.0);
+        assert_eq!(
+            bow_params(&low_sun(), &snow, 1.0, 5.0).w,
+            -1.0,
+            "snow makes no rainbow"
+        );
+        assert_eq!(
+            shower_params(&snow).x,
+            0.0,
+            "snow puts no drops in the curtain"
+        );
+        let rain = shower(5.0, 15.0);
+        assert!(
+            bow_params(&low_sun(), &rain, 1.0, 5.0).w >= 0.0,
+            "rain still does"
+        );
+        // Rain alone: the full rate's extinction and no snow in the curtain.
+        assert_eq!(
+            shower_params(&rain),
+            Vec4::new(rain_extinction(25.0), 0.0, 0.0, 0.0)
+        );
+    }
+
+    /// The rain's share of a weather-map texel's extinction at green `g` (`composite.wesl`).
+    fn rain_part(weather: &Weather, g: f32) -> f32 {
+        let s = shower_params(weather);
+        let rain = s.x * g.powf(0.68);
+        rain / (rain + s.y * g)
+    }
+
+    #[test]
+    fn sleet_draws_the_bow_of_its_rain_through_its_snow() {
+        // At 0.5 °C half of 5 mm/h falls as snow: the drops are those of 2.5 mm/h of rain.
+        let sleet = shower(5.0, 0.5);
+        assert_eq!(sleet.snow_fraction(), 0.5);
+        let sun = low_sun();
+        assert_eq!(
+            bow_params(&sun, &sleet, 1.0, 5.0),
+            bow_params(&sun, &shower(2.5, 15.0), 1.0, 5.0)
+        );
+        // A weather-map texel of green g stands for 25 g mm/h in all, half rain and half snow.
+        for g in [0.05f32, 0.2, 1.0] {
+            let s = shower_params(&sleet);
+            let rain = s.x * g.powf(0.68);
+            let want = rain_extinction(25.0 * g * 0.5);
+            assert!(
+                (rain - want).abs() <= 1e-5 * want,
+                "rain at green {g}: {rain} against {want}"
+            );
+            let snow = s.y * g;
+            let want = snow_extinction(25.0 * g * 0.5);
+            assert!(
+                (snow - want).abs() <= 1e-5 * want,
+                "snow at green {g}: {snow} against {want}"
+            );
+        }
+        // The snow, some thirty times as opaque per mm/h, takes nearly all the curtain's light.
+        let part = rain_part(&sleet, 0.2);
+        assert!((part - 0.031).abs() < 0.002, "{part}");
+    }
+
+    #[test]
+    fn the_bow_fades_through_the_sleet_band_without_a_step() {
+        // From 2 °C (all rain) to −1 °C (all snow) the rain's share of the curtain falls
+        // continuously and monotonically to 0, so the last rain draws almost nothing when the
+        // gate shuts the bow. The fall is steep at first (the first 3 % of snow halves it), so
+        // the sweep steps a thousandth of a degree.
+        let mut previous = rain_part(&shower(5.0, 2.0), 0.2);
+        assert_eq!(previous, 1.0);
+        let mut last_open = 1.0;
+        for k in 1..=3000 {
+            let t = 2.0 - 3.0 * k as f32 / 3000.0;
+            let weather = shower(5.0, t);
+            let open = bow_params(&low_sun(), &weather, 1.0, 5.0).w >= 0.0;
+            let part = if open { rain_part(&weather, 0.2) } else { 0.0 };
+            assert!(part <= previous + 1e-6, "{t} °C: {part} after {previous}");
+            assert!(
+                previous - part < 0.02,
+                "a step at {t} °C: {previous} to {part}"
+            );
+            if open {
+                last_open = part;
+            }
+            previous = part;
+        }
+        assert_eq!(previous, 0.0);
+        assert!(last_open < 0.01, "the gate shuts a bow of {last_open}");
     }
 }
