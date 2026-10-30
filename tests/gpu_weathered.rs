@@ -187,6 +187,18 @@ impl Rig {
             .exposure = exposure;
     }
 
+    fn set_cover(&mut self, cover: Option<SurfaceCover>) {
+        let mut materials = self
+            .app
+            .world_mut()
+            .resource_mut::<Assets<WeatheredMaterial>>();
+        materials
+            .get_mut(&self.left)
+            .expect("the weathered material")
+            .extension
+            .set_cover(cover);
+    }
+
     /// The plain cube's material: the colour and roughness the weather should have produced.
     fn set_plain(&mut self, color: Color, roughness: f32) {
         let mut materials = self
@@ -312,6 +324,66 @@ fn weathered_tops_match_the_plain_material_with_the_notes_numbers() {
     let (sheltered, plain) = centres(&rig.render());
     assert_eq!(sheltered, plain, "exposure 0 under rain");
     println!("dry {l:?} snow {snowy:?} half {mixed:?} wet {wet:?}");
+    done(rig);
+}
+
+/// A `SurfaceCover` replaces the scene's weather on its material: in dry weather its snow and wetness
+/// draw the same pixels the weather's would, its slope and height bands bare the faces they exclude,
+/// and taking it off returns the scene's weather.
+#[test]
+#[ignore = "needs a GPU"]
+fn a_surface_cover_weathers_a_dry_scene() {
+    let _lock = serial();
+    let mut rig = rig();
+    let base = BASE.to_linear();
+    let (dry, _) = centres(&rig.render());
+
+    rig.set_cover(Some(SurfaceCover::new(1.0, 0.0)));
+    rig.set_plain(snow_color(), 0.9);
+    let (snowy, plain_snow) = centres(&rig.render());
+    assert!(
+        max_diff(snowy, plain_snow) <= 1,
+        "cover snow: {snowy:?} vs plain {plain_snow:?}"
+    );
+    assert!(snowy[0] > dry[0] + 20, "snow is brighter: {snowy:?} vs {dry:?}");
+
+    // The cube's top is 6 m up: a ceiling below it leaves the top bare.
+    rig.set_cover(Some(SurfaceCover {
+        snow: CoverBand {
+            max_height_m: Some(5.0),
+            ..CoverBand::snow(1.0)
+        },
+        ..SurfaceCover::default()
+    }));
+    rig.set_plain(BASE, 0.9);
+    let (capped, plain) = centres(&rig.render());
+    assert_eq!(capped, plain, "snow line below the top");
+
+    // A limit flatter than the top's own slope is bare too (the top is 0 degrees: a negative
+    // limit excludes it).
+    rig.set_cover(Some(SurfaceCover {
+        snow: CoverBand {
+            max_slope_deg: -1.0,
+            ..CoverBand::snow(1.0)
+        },
+        ..SurfaceCover::default()
+    }));
+    let (flat, plain) = centres(&rig.render());
+    assert_eq!(flat, plain, "no face is flat enough");
+
+    rig.set_cover(Some(SurfaceCover::new(0.0, 1.0)));
+    rig.set_plain(wet_color(base), 0.54);
+    let (wet, plain_wet) = centres(&rig.render());
+    assert!(
+        max_diff(wet, plain_wet) <= 1,
+        "cover wetness: {wet:?} vs plain {plain_wet:?}"
+    );
+
+    // Off: the scene's weather, dry.
+    rig.set_cover(None);
+    rig.set_plain(BASE, 0.9);
+    let (off, plain) = centres(&rig.render());
+    assert_eq!(off, plain);
     done(rig);
 }
 
