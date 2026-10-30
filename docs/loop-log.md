@@ -5439,3 +5439,4 @@ Host: the Mac (no captures, no benchmark; no kernel or shader touched, so no vis
 3. The sea film at grazing angles should reach the sky's colour at dusk.
 4. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
 5. Restore water too (a flood undone with the ground it carved), if the editor asks.
+- Not released this pass: v0.7.6 is under 6 hours old (owner rule 2026-10-30); the change rides in the next release (CHANGELOG `[Unreleased]`).
