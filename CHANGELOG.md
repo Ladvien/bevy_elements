@@ -1,4 +1,6 @@
 ## [Unreleased]
+
+## [0.7.6] - 2026-10-30
 ### Added
 - **`ProceduralTerrain::sample_surface(size, cell_m)`: a preset's surface on the CPU.** Row-major heights, m, of the generator `generate.wesl` runs, with no app, no GPU and no `TerrainPlugin`: a tool can bake `hills(seed)` into a height file, a game can preview or test a preset. Deterministic per seed; agrees with the kernel within the sampling tolerance of `terrain.md`, not bit for bit. The test mirror's generator and its lattice noise moved out of `#[cfg(test)]` to make it public (`terrain/model/surface.rs`, `gpu/perlin.rs`). Fixes #48 (bevy_emerge #99). `docs/research/terrain-surface-cpu.md`.
 
