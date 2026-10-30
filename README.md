@@ -332,6 +332,17 @@ fn save_and_restore(env: Environment, mut images: ResMut<Assets<Image>>, mut com
 }
 ```
 
+To undo a stroke in place (any kind, including the ones with no `inverse`), take `Environment::terrain_snapshot()` before it and later send `RestoreTerrain::new(snapshot, region_m)`: every cell whose centre lies in the metre-frame `Rect` gets the snapshot's bedrock and sediment back, in order with the strokes, and nothing else (water, cover, trails) is touched. A snapshot read from another grid is dropped with a warning.
+
+```rust
+# use bevy::prelude::*;
+# use bevy_elements::*;
+fn undo(env: Environment, mut restores: MessageWriter<RestoreTerrain>, before: Res<Saved>) {
+    restores.write(RestoreTerrain::new(before.0.clone(), Rect::new(20.0, -30.0, 70.0, 10.0)));
+}
+# #[derive(Resource)] struct Saved(TerrainSnapshot);
+```
+
 To start from a preset instead of the GPU's output, `ProceduralTerrain::sample_surface(size, cell_m)` evaluates the generator on the CPU, with no app and no `TerrainPlugin`: row-major heights in metres, deterministic per seed, within the sampling tolerance of the kernel's output and not bit for bit. A tool can bake `ProceduralTerrain::hills(7)` into a height file this way; sediment is not part of it.
 
 ### Ground cover
