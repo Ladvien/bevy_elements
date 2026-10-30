@@ -28,17 +28,21 @@ const PITCH_DEG: f32 = 8.0;
 #[derive(Resource)]
 struct Target(Handle<Image>);
 
-/// The held weather: the rate and the cover.
+/// The held weather: the rate, the cover and the temperature (which sets the share of the rate
+/// that falls as snow).
 #[derive(Resource, Clone, Copy)]
 struct Shower {
     rate_mm_h: f32,
     cover: f32,
+    temperature_c: f32,
 }
 
 fn pin_weather(mut weather: ResMut<Weather>, shower: Res<Shower>) {
     weather.precipitation_mm_h = shower.rate_mm_h;
     weather.cloud_cover = shower.cover;
-    weather.temperature_c = 15.0;
+    weather.temperature_c = shower.temperature_c;
+    // June has no snow season: let the temperature alone decide the phase.
+    weather.snow_possible = 1.0;
 }
 
 fn setup(
@@ -210,7 +214,28 @@ fn luminance(c: Vec3) -> f32 {
 const RAIN: Shower = Shower {
     rate_mm_h: 5.0,
     cover: 0.45,
+    temperature_c: 15.0,
 };
+
+/// [`RAIN`]'s rate at 0.5 °C: half of it falls as snow (`Weather::snow_fraction`).
+const SLEET: Shower = Shower {
+    temperature_c: 0.5,
+    ..RAIN
+};
+
+/// [`RAIN`]'s rate at −5 °C: all of it falls as snow.
+const SNOW: Shower = Shower {
+    temperature_c: -5.0,
+    ..RAIN
+};
+
+/// The light a frame's bow adds over the primary's band, 136–141°, against the sky behind it.
+fn primary_band(on: &Frame, off: &Frame) -> (f32, f32) {
+    (
+        luminance(ring(on, off, 136.0, 141.0)),
+        luminance(sky_mean(off, 136.0, 141.0)),
+    )
+}
 
 /// Low sun, a shower behind the camera: the bow's ring adds light with red on its outside, the
 /// secondary is fainter and reversed, the sky between is not lit, and a frame with the strength
@@ -262,6 +287,27 @@ fn gpu_a_shower_opposite_a_low_sun_draws_a_rainbow() {
     // Nothing near the sun.
     let near_sun = ring(&on, &off, 100.0, 110.0);
     assert!(luminance(near_sun).abs() < 2e-3, "{near_sun:?}");
+
+    // Sleet's drops are those of the rain half of the same rate, and its snow, some thirty times
+    // as opaque per mm/h, takes all but a few per cent of the curtain's light: a bow, and under a
+    // fifth of the rain's. Not under the 3 % share itself: the rain alone is a thin curtain
+    // (`1 − e^{−τ}` well under 1), the snow makes the sleet's thick (`docs/research/rainbow.md`,
+    // Validation target 11).
+    let sleet_off = render(17.5, SLEET, 0.0, "sleet-off");
+    let sleet_on = render(17.5, SLEET, RainbowSettings::default().strength, "sleet-on");
+    let (rain_added, _) = primary_band(&on, &off);
+    let (sleet_added, sleet_sky) = primary_band(&sleet_on, &sleet_off);
+    println!(
+        "ROW primary band: rain adds {rain_added:.4}, sleet adds {sleet_added:.4} to {sleet_sky:.4}"
+    );
+    assert!(
+        sleet_added < 0.2 * rain_added,
+        "sleet adds {sleet_added}, rain {rain_added}"
+    );
+    assert!(
+        sleet_added > 0.005 * rain_added,
+        "sleet adds {sleet_added}, rain {rain_added}"
+    );
 }
 
 /// A high sun puts the whole bow below the horizon, and a dry sky has no shower to draw it on (the
@@ -281,7 +327,7 @@ fn gpu_no_rainbow_under_a_high_sun_or_without_rain() {
     assert!(worst < 0.02, "a noon sun drew {worst}");
     let dry = Shower {
         rate_mm_h: 0.0,
-        cover: 0.45,
+        ..RAIN
     };
     let off = render(17.5, dry, 0.0, "dry-off");
     let on = render(17.5, dry, RainbowSettings::default().strength, "dry-on");
@@ -292,4 +338,20 @@ fn gpu_no_rainbow_under_a_high_sun_or_without_rain() {
         .map(|(a, b)| (*a - *b).abs().max_element())
         .fold(0.0f32, f32::max);
     assert!(worst < 0.02, "a dry sky drew {worst}");
+}
+
+/// Falling snow makes no rainbow: a flake is not a liquid sphere. The same rate, cover and sun as
+/// the rain's bow, at −5 °C (issue #51; `docs/research/rainbow.md`, Validation target 11).
+#[test]
+#[ignore = "needs a GPU"]
+fn gpu_falling_snow_draws_no_rainbow() {
+    let _lock = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let off = render(17.5, SNOW, 0.0, "snow-off");
+    let on = render(17.5, SNOW, RainbowSettings::default().strength, "snow-on");
+    let (added, behind) = primary_band(&on, &off);
+    println!("ROW snow: the primary band adds {added:.4} to a sky of {behind:.4}");
+    assert!(
+        added.abs() < 0.02 * behind,
+        "falling snow drew a bow: {added} on {behind}"
+    );
 }
