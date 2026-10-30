@@ -79,7 +79,7 @@ Plume tops at 15 °C: candle 0.6 m, torch (3 kW) 2.4 m, campfire (50 kW) 7.6 m, 
 
 ## Validation targets
 
-1. **Physics on the CPU**: McCaffrey's centreline at the regime joins is continuous to the rounding of his constants (852 K against `66.6/0.08` = 832 K, and `66.6/0.2` = 333 K against `22.3·0.2^{−5/3}` = 326 K: within 3 %); `flame_height_m` for 50 kW on a 0.6 m base is 0.5–0.6 m; `puffing_hz` is 1.94 Hz for a 0.6 m base; `δn₀` for 838 K excess at 15 °C is 2.07 × 10⁻⁴; the largest mean deflection of a Gaussian plume is `1.52 δn₀`.
+1. **Physics on the CPU**: McCaffrey's centreline at the regime joins is continuous to the rounding of his constants (852 K against `66.6/0.08` = 832 K, and `66.6/0.2` = 333 K against `22.3·0.2^{−5/3}` = 326 K: within 3 %); `flame_height_m` for 50 kW on a 0.6 m base is 0.46 m (Delichatsios' Eq. 4; Heskestad's dimensional `0.235 Q^{2/5} − 1.02 D` gives 0.51 m, so 0.44–0.52 m); `puffing_hz` is 1.94 Hz for a 0.6 m base; `δn₀` for 838 K excess at 15 °C is 2.07 × 10⁻⁴; the largest mean deflection of a Gaussian plume is `1.52 δn₀`.
 2. **No plume, no change**: with no `HeatSource`, and with one behind the camera, the rendered frame equals the frame of a gain-0 run bit for bit (the pass did not run or copied exactly).
 3. **Outside the plume, no change**: with a fire in view, every pixel outside the plume's projected rectangle, and every pixel of the ground at the fire's base, is bit-identical to the gain-0 frame.
 4. **The plume shifts what is behind it**: against a high-contrast background, the pixels above the fire differ from the gain-0 frame, by a mean shift of 1–4 px within a flame height above a 50 kW fire seen from 10 m at 1080p-equivalent pixel size, and the differences fade above the plume's top.
