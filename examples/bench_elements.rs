@@ -31,7 +31,9 @@
 //! `WaterContact` spheres round the `lake` (`elements_waves`); `ELEMENTS_WAVES=off` leaves the
 //! waves out (their shading in `main_transparent_pass_3d`). `ELEMENTS_ROCKS=off` leaves the
 //! scattered rocks out (their draws in `main_opaque_pass_3d`, `early prepass` and
-//! `per_view_shadow_pass`). `dunes` runs the aeolian transport
+//! `per_view_shadow_pass`). `ELEMENTS_HEAT=4` stands that many 50 kW campfires in a row across
+//! `ELEMENTS_LOOK` on the flat scene's ground (`elements_heat_haze`, with `ELEMENTS_TERRAIN=none`
+//! and a camera placed with `ELEMENTS_EYE`/`ELEMENTS_LOOK`). `dunes` runs the aeolian transport
 //! (`elements_aeolian_*`, 20 steps a second) in a forced `DustStorm`, unless `ELEMENTS_PRESET`
 //! says otherwise. Bevy's main, depth and shadow passes the scene is drawn in
 //! are printed on their own line.
@@ -59,7 +61,7 @@ const WARMUP_FRAMES: u32 = 240;
 const AEOLIAN_FRAME_SHARE: f64 = 20.0 / 60.0;
 
 /// The crate's GPU passes, by diagnostic span name.
-const PASSES: [&str; 26] = [
+const PASSES: [&str; 27] = [
     "elements_wind",
     "elements_fog",
     "elements_clouds_noise",
@@ -86,6 +88,7 @@ const PASSES: [&str; 26] = [
     "elements_waves_force",
     "elements_waves_step",
     "elements_waves_publish",
+    "elements_heat_haze",
 ];
 
 /// Bevy's own passes the terrain is drawn in, printed on a separate line.
@@ -412,6 +415,26 @@ fn setup(
             BenchContact(i as f32),
             WaterContact::sphere(0.3),
             Transform::from_xyz(0.0, -1000.0, 0.0),
+        ));
+    }
+    // Campfires (50 kW) in a row across `ELEMENTS_LOOK` on the flat scene's ground, 2.5 m apart:
+    // the heat haze's pass covers their plumes.
+    let fires: usize = std::env::var("ELEMENTS_HEAT")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0);
+    let centre = vec3_env("ELEMENTS_LOOK").unwrap_or(Vec3::ZERO);
+    for i in 0..fires {
+        commands.spawn((
+            HeatSource {
+                power_kw: 50.0,
+                radius_m: 0.3,
+            },
+            Transform::from_xyz(
+                centre.x + (i as f32 - 0.5 * (fires as f32 - 1.0)) * 2.5,
+                0.0,
+                centre.z,
+            ),
         ));
     }
 }
