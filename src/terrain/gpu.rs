@@ -28,6 +28,7 @@ use bevy::render::{Render, RenderApp, RenderStartup, RenderSystems};
 use bevy::shader::ShaderDefVal;
 
 use super::model::LEAF_CELLS;
+use super::sculpt::SculptParamsGpu;
 use super::{GenParams, GenerateSource, HeightmapParams, TerrainGpu, TerrainParamsGpu};
 use crate::gpu::kernel::{Kernel, groups, queue_kernel, ready};
 
@@ -52,6 +53,7 @@ struct TerrainPipelines {
     readback: Kernel,
     minmax: Kernel,
     flow: Kernel,
+    sculpt: Kernel,
 }
 
 #[derive(Resource, Default)]
@@ -59,6 +61,7 @@ struct TerrainUniforms {
     generate: UniformBuffer<GenParams>,
     heightmap: UniformBuffer<HeightmapParams>,
     params: UniformBuffer<TerrainParamsGpu>,
+    sculpt: UniformBuffer<SculptParamsGpu>,
 }
 
 #[derive(Resource)]
@@ -66,6 +69,8 @@ struct TerrainBindGroups {
     generate: Option<BindGroup>,
     main: BindGroup,
     flow: BindGroup,
+    /// Only while a stroke is waiting for this frame.
+    sculpt: Option<BindGroup>,
 }
 
 pub(super) fn plugin(app: &mut App) {
@@ -151,11 +156,32 @@ fn flow_layout() -> BindGroupLayoutDescriptor {
     )
 }
 
+fn sculpt_layout() -> BindGroupLayoutDescriptor {
+    BindGroupLayoutDescriptor::new(
+        "elements_terrain_sculpt",
+        &BindGroupLayoutEntries::sequential(
+            ShaderStages::COMPUTE,
+            (
+                uniform_buffer::<SculptParamsGpu>(false),
+                storage_buffer_sized(false, None),
+                storage_buffer_read_only_sized(false, None),
+            ),
+        ),
+    )
+}
+
+/// The stroke the render world has not run yet.
+fn pending_stroke(gpu: &TerrainGpu) -> Option<SculptParamsGpu> {
+    gpu.stroke
+        .filter(|_| gpu.stroke_epoch > gpu.stroked.load(Ordering::Relaxed))
+}
+
 fn init_pipelines(mut commands: Commands, assets: Res<AssetServer>, cache: Res<PipelineCache>) {
     let generate = load_embedded_asset!(assets.as_ref(), "generate.wesl");
     let heightmap = load_embedded_asset!(assets.as_ref(), "heightmap.wesl");
     let pack = load_embedded_asset!(assets.as_ref(), "pack.wesl");
     let flow = load_embedded_asset!(assets.as_ref(), "flow.wesl");
+    let sculpt = load_embedded_asset!(assets.as_ref(), "sculpt.wesl");
     let main = main_layout();
     let kernel = |shader: &Handle<Shader>, entry, layout: &BindGroupLayoutDescriptor| {
         queue_kernel(&cache, shader.clone(), entry, layout.clone(), Vec::new())
@@ -181,6 +207,7 @@ fn init_pipelines(mut commands: Commands, assets: Res<AssetServer>, cache: Res<P
         readback: kernel(&pack, "terrain_readback", &main),
         minmax: kernel(&pack, "terrain_minmax", &main),
         flow: kernel(&flow, "flow_pack", &flow_layout()),
+        sculpt: kernel(&sculpt, "terrain_sculpt", &sculpt_layout()),
     });
 }
 
@@ -300,10 +327,24 @@ fn prepare(
             flow_cells.as_entire_buffer_binding(),
         )),
     );
+    let sculpt = pending_stroke(&gpu).map(|stroke| {
+        uniforms.sculpt.set(stroke);
+        uniforms.sculpt.write_buffer(&device, &queue);
+        device.create_bind_group(
+            "elements_terrain_sculpt",
+            &cache.get_bind_group_layout(&pipelines.sculpt.layout),
+            &BindGroupEntries::sequential((
+                &uniforms.sculpt,
+                bedrock.as_entire_buffer_binding(),
+                cells.as_entire_buffer_binding(),
+            )),
+        )
+    });
     commands.insert_resource(TerrainBindGroups {
         generate,
         main,
         flow,
+        sculpt,
     });
 }
 
@@ -337,6 +378,14 @@ fn dispatch(
     if !generated && bind_groups.generate.is_none() {
         return;
     }
+    // A stroke waits for its own kernel; a sculpt shader that failed leaves the terrain running.
+    let stroke = match pending_stroke(&gpu) {
+        Some(_) => match (ready(&cache, &pipelines.sculpt), &bind_groups.sculpt) {
+            (Some(kernel), Some(group)) => Some((kernel, group)),
+            _ => return,
+        },
+        None => None,
+    };
     let grid = &gpu.state.grid;
     let (cx, cy) = (groups(grid.size.x, 8), groups(grid.size.y, 8));
     let rb = gpu.state.readback_size;
@@ -349,6 +398,11 @@ fn dispatch(
             ..default()
         });
     let span = diagnostics.pass_span(&mut pass, "elements_terrain");
+    if let Some((kernel, group)) = stroke {
+        pass.set_pipeline(kernel);
+        pass.set_bind_group(0, group, &[]);
+        pass.dispatch_workgroups(cx, cy, 1);
+    }
     if let Some(group) = bind_groups.generate.as_ref().filter(|_| !generated) {
         pass.set_pipeline(generator);
         pass.set_bind_group(0, group, &[]);
@@ -368,6 +422,7 @@ fn dispatch(
     pass.dispatch_workgroups(groups(rb.x, 8), groups(rb.y, 8), 1);
     span.end(&mut pass);
     drop(pass);
+    gpu.stroked.fetch_max(gpu.stroke_epoch, Ordering::Relaxed);
     gpu.packed.store(gpu.changes, Ordering::Relaxed);
     gpu.generated.store(true, Ordering::Relaxed);
     gpu.state.version.fetch_add(1, Ordering::Relaxed);
