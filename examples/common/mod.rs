@@ -14,6 +14,10 @@
 //!   is the same every run, which is what temporal effects (cloud accumulation, rain, lightning,
 //!   wind, water flow, snow melt) are reviewed on. A run with `ELEMENTS_SHOT_DIR` and no
 //!   `ELEMENTS_FRAMES` captures until it is killed.
+//! - `ELEMENTS_OFFSCREEN=1920x1080` renders the `ElementsCamera` into an image of that size and
+//!   takes `ELEMENTS_SHOT` and `ELEMENTS_SHOT_DIR` from it instead of the window: a Mac whose ssh
+//!   user has no GUI session saves a byte-black window, but its offscreen renders are real. The
+//!   status line is drawn in the window only.
 //! - The terrain wears the golem-generated soil and grass in `assets/ground/golem/`
 //!   ([`TerrainTextures`]); `ELEMENTS_GROUND_TEXTURES=0` renders the procedural ground alone,
 //!   `ELEMENTS_GROUND_SWAP=S` toggles the set every S seconds (re-texturing the terrain at
@@ -168,8 +172,9 @@ impl Plugin for ExampleHarness {
                 .unwrap_or(0.0),
             pending: std::sync::Arc::default(),
         })
+        .add_systems(PreStartup, make_offscreen)
         .add_systems(Startup, (spawn_status, load_ground_textures))
-        .add_systems(Update, texture_terrain)
+        .add_systems(Update, (texture_terrain, retarget_offscreen))
         .add_systems(
             Update,
             (grow_weather, fly, ortho_rig, clock_keys, weather_keys).before(ElementsSystems::Clock),
@@ -738,6 +743,7 @@ fn status(
 fn capture_frames(
     mut commands: Commands,
     config: Res<RunConfig>,
+    offscreen: Option<Res<Offscreen>>,
     mut seen: Local<u32>,
     mut index: Local<u32>,
 ) {
@@ -761,18 +767,69 @@ fn capture_frames(
     *index += 1;
     let pending = config.pending.clone();
     pending.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    commands
-        .spawn(Screenshot::primary_window())
-        .observe(move |captured: On<ScreenshotCaptured>| {
+    commands.spawn(screenshot(offscreen.as_deref())).observe(
+        move |captured: On<ScreenshotCaptured>| {
             save_to_disk(path.clone())(captured);
             pending.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-        });
+        },
+    );
+}
+
+/// The image the `ElementsCamera` renders into under `ELEMENTS_OFFSCREEN`.
+#[derive(Resource, Clone)]
+struct Offscreen(Handle<Image>);
+
+/// `ELEMENTS_OFFSCREEN=WxH`, parsed.
+fn offscreen_size() -> Option<UVec2> {
+    let value = std::env::var("ELEMENTS_OFFSCREEN").ok()?;
+    let (w, h) = value.split_once('x')?;
+    Some(UVec2::new(w.trim().parse().ok()?, h.trim().parse().ok()?))
+}
+
+fn make_offscreen(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+    let Some(size) = offscreen_size() else {
+        return;
+    };
+    let mut image = Image::new_target_texture(
+        size.x,
+        size.y,
+        bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+        None,
+    );
+    image.texture_descriptor.usage |= bevy::render::render_resource::TextureUsages::COPY_SRC;
+    commands.insert_resource(Offscreen(images.add(image)));
+}
+
+fn retarget_offscreen(
+    mut commands: Commands,
+    offscreen: Option<Res<Offscreen>>,
+    cameras: Query<Entity, Added<ElementsCamera>>,
+) {
+    let Some(offscreen) = offscreen else {
+        return;
+    };
+    for camera in &cameras {
+        commands
+            .entity(camera)
+            .insert(bevy::camera::RenderTarget::Image(
+                offscreen.0.clone().into(),
+            ));
+    }
+}
+
+/// A screenshot of the window, or of the offscreen image under `ELEMENTS_OFFSCREEN`.
+fn screenshot(offscreen: Option<&Offscreen>) -> Screenshot {
+    match offscreen {
+        Some(o) => Screenshot::image(o.0.clone()),
+        None => Screenshot::primary_window(),
+    }
 }
 
 fn run_limit(
     mut config: ResMut<RunConfig>,
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
+    offscreen: Option<Res<Offscreen>>,
     mut waited: Local<u32>,
 ) {
     config.frame += 1;
@@ -795,7 +852,7 @@ fn run_limit(
         Some(path) if !config.shot_taken => {
             config.shot_taken = true;
             let mut save = save_to_disk(path);
-            commands.spawn(Screenshot::primary_window()).observe(
+            commands.spawn(screenshot(offscreen.as_deref())).observe(
                 move |captured: On<ScreenshotCaptured>, mut exit: MessageWriter<AppExit>| {
                     exit.write(AppExit::Success);
                     save(captured);
