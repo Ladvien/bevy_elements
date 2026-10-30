@@ -19,6 +19,7 @@ use crate::cover::GroundCoverPlugin;
 use crate::dust::DustPlugin;
 use crate::fog::FogPlugin;
 use crate::gpu::readback::ReadbackPlugin;
+use crate::heat_haze::HeatHazePlugin;
 use crate::hydrology::{HydrologyPlugin, WaterPlugin};
 use crate::lightning::LightningPlugin;
 use crate::paths::PathsPlugin;
@@ -60,6 +61,7 @@ impl PluginGroup for ElementsPlugins {
             .add(CloudPlugin)
             .add(LightningPlugin)
             .add(PrecipitationPlugin)
+            .add(HeatHazePlugin)
             .add(WeatheredPlugin)
             // Rocks on the terrain, drawn with the weathered material above.
             .add(RocksPlugin);
