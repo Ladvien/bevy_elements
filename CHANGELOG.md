@@ -1,5 +1,6 @@
 ## [Unreleased]
 
+## [0.7.3] - 2026-10-29
 ### Added
 
 - **`SculptTerrain`: height brushes on the live terrain.** A message with a metre-frame centre, a radius, a hardness (plateau fraction; a smoothstep fall to the rim) and a `SculptKind`: `Raise`, `Lower`, `Smooth`, `Flatten { height_m, blend }`, `Noise { amplitude_m, feature_m, seed }`. A new kernel (`sculpt.wesl`) edits the bedrock layer at the head of the terrain's compute pass, so the pack, leaf bounds and height readback of the same frame carry the edit; cells at or beyond the radius are bit-identical. `SculptTerrain::validate()` returns the `SetupError` naming a bad field, `sculpt_weight` is the brush weight. Built for bevy_emerge #99 (terrain brushes, pieces following the ground); a game can dig and landscape with it. `docs/research/terrain-sculpt.md`.
