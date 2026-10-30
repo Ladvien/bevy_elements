@@ -326,8 +326,12 @@ pub(crate) struct CloudParams {
     pub sea_box: Vec4,
     /// The rainbow (`docs/research/rainbow.md`): xyz the sun's illuminance at the camera
     /// through the atmosphere and the cloud's beam, lx, times [`RainbowSettings::strength`]; w
-    /// the phase-function table's row for the shower's median drop, or −1 for no bow.
+    /// the phase-function table's row for the rain's median drop, or −1 for no bow.
     pub bow: Vec4,
+    /// The rainbow's curtain (`rainbow::shower_params`), the extinctions where the weather map's
+    /// green is 1, m⁻¹: x the rain's (the liquid share of its 25 mm/h), y the snow's; a texel of
+    /// green `g` stands for `x · g^0.68` and `y · g`.
+    pub shower: Vec4,
 }
 
 /// The per-view images: this frame's march result and the two history textures.
@@ -1092,21 +1096,9 @@ fn update_gpu(
         probe,
         sea,
         sea_box,
-        bow: bow_params(&sun, &weather, shadows.mean_transmittance, rainbow.strength),
+        bow: rainbow::bow_params(&sun, &weather, shadows.mean_transmittance, rainbow.strength),
+        shower: rainbow::shower_params(&weather),
     };
-}
-
-/// The rainbow's uniform ([`CloudParams::bow`]): the sun's light at the camera and the row of the
-/// phase-function table that the weather's median drop picks; `w` is −1 (no bow) while the sun
-/// is below the horizon, nothing falls, or the strength is 0.
-fn bow_params(sun: &SunState, weather: &Weather, beam: f32, strength: f32) -> Vec4 {
-    if strength <= 0.0 || sun.altitude_deg <= 0.0 || weather.precipitation_mm_h <= 0.0 {
-        return Vec4::new(0.0, 0.0, 0.0, -1.0);
-    }
-    let light = rainbow::sun_transmittance(sun.altitude_deg)
-        * (lux::RAW_SUNLIGHT * beam.clamp(0.0, 1.0) * strength);
-    let row = rainbow::row_coordinate(rainbow::median_radius_mm(weather.precipitation_mm_h));
-    light.extend(row)
 }
 
 /// The distance fog as the clouds' ground haze: its linear colour and its grey extinction in
