@@ -5456,3 +5456,19 @@ Host: the Mac (no captures, no benchmark; CPU query only, no shader touched, so 
 3. The sea film at grazing angles should reach the sky's colour at dusk.
 4. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
 5. Restore water too, if the editor asks.
+
+## Iteration 98 — 2026-10-30 — #46 acceptance 5: `min_depth_m` names `sinkage_at`
+
+Host: the Mac (no GPU, no captures, no benchmark; doc-only, no visual verdict claimed). Issues read: #46 (Sanctuary adopted `sinkage_at` with numbers: dry 4.778 mm, law ratio 0.997-0.998, print line at wetness 0.5002; its acceptance item 5, the `min_depth_m` docs naming `sinkage_at`, was unchecked and was missing), #44, #43 (delivered, awaiting adoption; none a bug; skipped). No parked branch. Ranked: (1) close #46's open acceptance item; (2) sculpted-hill capture on `big`; (3) night sea horizon step; (4) sea film at dusk; (5) #41 remainder. Took (1): the only workable item on a GPU-less host.
+
+- **Change**: `TrailSettings::min_depth_m` rustdoc points to `Environment::sinkage_at` as the depth the test compares. Gate: `RUSTDOCFLAGS=-D warnings cargo doc --all-features` green. Not released (doc only; v0.7.6 under 6 h old).
+- **Sanctuary's 2 % overshoot** (5.106 vs 5.005 cm): not isolated here; their hypothesis (a print pressed over three frames, twice after the first-frame skip) is consistent with the kernel's design and is left for them to confirm.
+- **Cleanup**: no worktree or scratch made.
+
+### Next five items, ranked
+
+1. Capture a sculpted hill (aerial and grazing) on `big` and judge the rim.
+2. Night: the sea's horizon step (4.1x) and the near rows' olive tint.
+3. The sea film at grazing angles should reach the sky's colour at dusk.
+4. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
+5. Restore water too, if the editor asks.
