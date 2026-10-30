@@ -5440,3 +5440,19 @@ Host: the Mac (no captures, no benchmark; no kernel or shader touched, so no vis
 4. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
 5. Restore water too (a flood undone with the ground it carved), if the editor asks.
 - Not released this pass: v0.7.6 is under 6 hours old (owner rule 2026-10-30); the change rides in the next release (CHANGELOG `[Unreleased]`).
+
+## Iteration 97 — 2026-10-30 — Environment::terrain_normal / terrain_slope_deg
+
+Host: the Mac (no captures, no benchmark; CPU query only, no shader touched, so no visual verdict claimed). Issues read through the API: #46, #44, #43 (delivered, awaiting Sanctuary's adoption; none a bug; skipped). bevy_emerge #98/#99/#100 all closed with acceptance met; nothing owed crate-side. No parked branch. Idle-pass rule, item 2 (a query a game expects). Ranked: (1) ground normal/slope query (Mac-testable, closes a gap in the README's gameplay queries); (2) sculpted-hill capture on `big`; (3) night sea horizon step; (4) sea film at dusk; (5) #41 remainder. Took (1).
+
+- **Change**: `TerrainSnapshot::gradient` extracted from `slope_deg` (results unchanged), `normal`; `Environment::terrain_normal(Vec2) -> Option<Vec3>` and `terrain_slope_deg(Vec2) -> Option<f32>`. Same gradient as the trail kernel and `sinkage_at`, so a host's slope agrees with the crate's. Research: `docs/research/terrain-normal.md` (textbook maths, no corpus source).
+- **Proof**: `the_ground_answers_its_tilt_as_a_unit_normal_and_a_slope` (plane h = 0.5x: exact normal and 26.565° at interior, cell border and both edge cells, unit length, angle from +Y equals slope, `None` off grid and before readback); `in_feet_the_ground_has_the_same_tilt_at_the_matching_point`. Gates: `cargo test --release` (356 lib + all non-ignored green), doctests (28), clippy `-D warnings --all-targets --all-features`, rustdoc `-D warnings`, wasm32 lib.
+- **Cleanup**: no worktree or scratch made. Not released: v0.7.6 is under 6 hours old at pass start; rides in the next release.
+
+### Next five items, ranked
+
+1. Capture a sculpted hill (aerial and grazing) on `big` and judge the rim.
+2. Night: the sea's horizon step (4.1x) and the near rows' olive tint.
+3. The sea film at grazing angles should reach the sky's colour at dusk.
+4. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
+5. Restore water too, if the editor asks.
