@@ -248,7 +248,7 @@ fn simulate(
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-fn draw(
+pub(crate) fn draw(
     view: ViewQuery<(
         &ViewTarget,
         &ViewUniformOffset,
