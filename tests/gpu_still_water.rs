@@ -563,7 +563,7 @@ fn linear_luminance(level: Vec3) -> f32 {
 }
 
 /// A sea at a grazing view reflects the sky the screen draws, not the lighting fill: at midnight
-/// the sea a few degrees under the horizon is within 6x of the sky just over it (measured 4.1). The night fill
+/// the sea a few degrees under the horizon is within 3x of the sky just over it (measured 2.3, was 4.1). The night fill
 /// in the sky cube is lifted by the exposure for the light it casts on surfaces, and Bevy's
 /// specular reflection of the horizon took the lift too: 100x the sky, a grey slab under a black
 /// sky (`docs/research/night-sky-light.md` Deviation 5).
@@ -585,7 +585,7 @@ fn gpu_a_night_sea_is_not_brighter_than_the_sky_it_reflects() {
         sea / sky
     );
     assert!(
-        sea < 6.0 * sky,
+        sea < 3.0 * sky,
         "the sea is {}x the sky at midnight",
         sea / sky
     );

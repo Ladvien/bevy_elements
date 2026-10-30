@@ -5472,3 +5472,24 @@ Host: the Mac (no GPU, no captures, no benchmark; doc-only, no visual verdict cl
 3. The sea film at grazing angles should reach the sky's colour at dusk.
 4. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
 5. Restore water too, if the editor asks.
+
+## Iteration 99 — 2026-10-30 — The night sea's horizon step: 4.1x to 2.3x
+
+Host: the Mac (Metal offscreen renders dumped as PPM; `big` is up but loaded at 23 and its clone is dirty at iteration 72, so no captures or benchmark there). Issues read through the API: #46, #44, #43 (delivered, awaiting Sanctuary's adoption; none a bug; skipped). No parked branch (only pass 22's stale one). Ranked: (1) sculpted-hill look (done as a scratch render, below); (2) night sea horizon step; (3) sea film at dusk; (4) #41 remainder; (5) restore water. Took (2), a visible artifact the scratch look turned out not to beat.
+
+- **Sculpted-hill look** (scratch fixture, deleted; 768x512 offscreen, noon/dusk/morning, aerial and grazing): hill, mesa, pit render without seams or popping; strata read as terraced contour bands on a 28 m dome; a 1-2 px tan line sits at the lip of a hard-edged pit or mesa (grass to soil in one cell); a hardness-0.95 stroke at 2 m cells leaves a sawtooth silhouette (the circle quantised to cells). All design/grid-resolution effects, not defects; nothing changed.
+- **Cause of the night step (by elimination)**: with the night term zeroed the sea rows read 0.4x the sky; with it, 4.1x. So the step is the lifted cube reached through the reflection's lobe (roughness 0.089 plus wave normals), not the body or the fog.
+- **Change**: `src/clouds/march.wesl`: lift ramp 20-60 deg (was 8-40), horizon share 0.05 (was 0.15), normalisation 1.608 (was 1.198, computed numerically). `docs/research/night-sky-light.md` Deviation 6.
+- **Evidence**: `gpu_a_night_sea_is_not_brighter_than_the_sky_it_reflects` ratio 4.1 -> 2.3 (assertion tightened from 6x to 3x); centre-column sea rows (9-11,11-13,15-17) -> (7-8,9-10,11-14) against a sky of (7,5,5); `the_night_fill_lifts_the_light_on_surfaces_and_not_the_horizon` irradiance 3.26e-3 against 3.29e-3; near bed rows read cleaner teal (21,33,34) -> (7,24,22), the grey haze of the grazing reflection gone. Frames: `/tmp/i99/n-h0-Clear-y0.ppm` (before), `x1-h0-Clear-y0.ppm` (after; removed).
+- **Critique / verdict**: midnight, clear, one fixture: NOT YET as a showcase. The sea reads as a dark navy mirror and the grey slab is further reduced, but a blue sea still meets a brown-grey horizon sky (the screen sky's residual twilight is warm, the fill is blue) and a step of ~3-4 levels remains. Walls under a moonless sky now take about 0.50 of the uniform lift (computed). Not judged: dusk and noon (the night weight is zero there), wet ground at grazing night views, the isometric town.
+- **Gates** (Mac): `cargo test --release` (no failures), clippy `-D warnings --all-targets --all-features`, `tools/wesl-check`; GPU: `gpu_sky_probe` (4), `gpu_twilight` (3), `gpu_still_water` (8), `gpu_cloud_ambient` (2), `gpu_water` (2). Not run: rustdoc/wasm (no Rust source changed beyond a test assertion), `clouds::gpu_tests`, benchmark (a `smoothstep` constant change in `cloud_sky_probe`, cost-neutral).
+- **Not released**: v0.7.6 under 6 h old at pass start; rides in the next release (CHANGELOG `[Unreleased]`).
+- **Cleanup**: removed `/tmp/i99`; no worktree made. Left: `big:~/bevy_elements` (dirty, iteration 72, not mine), `~/bevy_elements_base`, `~/bevy_elements_base70`, `~/i57..i70` on big (not mine, not inspected).
+
+### Next five items, ranked
+
+1. Night: the horizon sky's warm residual twilight against the sea's blue fill (a hue step); let the fill take the sky's own hue near the horizon.
+2. The sea film at grazing angles should reach the sky's colour at dusk.
+3. Capture a sculpted hill on `big` once it is idle; consider a soft-edge guard for strokes whose falloff is under two cells.
+4. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
+5. Restore water too, if the editor asks.
