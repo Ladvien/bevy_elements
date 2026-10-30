@@ -5389,3 +5389,19 @@ Host: the Mac (no captures, no benchmark). Issues read through the API: #46, #44
 3. Night: the sea's horizon step (4.1x) and the near rows' olive tint.
 4. The sea film at grazing angles should reach the sky's colour at dusk.
 5. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
+
+## Iteration 94 — 2026-10-29 — Saving and restoring a sculpted heightfield (what bevy_emerge's project save and undo need, #99 there)
+
+Host: the Mac (no captures, no benchmark). Issues read through the API: #46, #44, #43 (delivered, Sanctuary adoption pending; none a bug, none workable further; skipped). No parked branch. Idle-pass rule, item 1. Ranked: (1) heightfield snapshot (save, and undo for Smooth/Flatten/Noise); (2) night sea horizon step (needs `big`); (3) sea film at dusk; (4) sculpted-hill capture on `big`. Took (1).
+
+- **Change**: `Environment::terrain_snapshot()`, `TerrainSnapshot::{height_range_m, to_heightmap, terrain, centre_m}`. The crate already read the surface back; this opens it and turns it into an `R32Float` height map plus a `Terrain` at the same extent, resolution and centre. Sediment is not restored (Deviation 1 in `docs/research/terrain-heightfield-save.md`). No corpus source (recorded).
+- **Proof**: `tests/terrain_heightfield.rs` (3 CPU tests: decode round trip, level ground range, extent/resolution/place); `tests/gpu_sculpt.rs::gpu_a_saved_heightfield_respawns_as_the_same_ground` (Metal: 5 m raise, snapshot, fresh app on `snapshot.terrain`, every cell centre within 2e-4 m). The old sculpt test's `ground()` raced the first readback; it now waits for an answer. Gates: `cargo test --release`, doctests, clippy `-D warnings --all-targets --all-features`, rustdoc `-D warnings`, wasm32 lib. Not a rendering change: no visual verdict claimed. No kernel touched, so no benchmark.
+- **Cleanup**: no worktree made.
+
+### Next five items, ranked
+
+1. Restore sediment too (second image + kernel) and a region-restore message so Smooth/Flatten/Noise strokes can be undone without respawning the terrain.
+2. Capture a sculpted hill (aerial and grazing) on `big` and judge the rim.
+3. Night: the sea's horizon step (4.1x) and the near rows' olive tint.
+4. The sea film at grazing angles should reach the sky's colour at dusk.
+5. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
