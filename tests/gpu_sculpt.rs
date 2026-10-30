@@ -23,11 +23,7 @@ const CELL_M: f32 = 2.0;
 #[derive(Resource)]
 struct Restore(TerrainSnapshot);
 
-fn setup(
-    mut commands: Commands,
-    mut images: ResMut<Assets<Image>>,
-    restore: Option<Res<Restore>>,
-) {
+fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, restore: Option<Res<Restore>>) {
     commands.spawn((
         Camera3d::default(),
         support::image_target(&mut images),
@@ -352,4 +348,81 @@ fn gpu_a_saved_heightfield_respawns_as_the_same_ground() {
     }
     assert!(worst < 2e-4, "the restored ground differs by {worst} m");
     restored.finish();
+}
+
+/// A region restored from an earlier snapshot takes the old bedrock and sediment back inside its
+/// rect and leaves the stroke's work outside it, and the ground query follows. See
+/// `docs/research/terrain-restore.md`.
+#[test]
+#[ignore = "needs a GPU"]
+fn gpu_a_restored_region_takes_the_old_ground_back_and_only_there() {
+    let mut sim = Sim::new();
+    sim.frames(8);
+    let before = sim
+        .app
+        .world_mut()
+        .run_system_once(|env: Environment| env.terrain_snapshot())
+        .expect("the query runs")
+        .expect("a readback has landed");
+    let flat = sim.bedrock();
+
+    let centre = cell_centre(&sim, 64, 64);
+    sim.stroke(
+        SculptTerrain::new(centre, 40.0, SculptKind::Raise { amount_m: 5.0 }).with_hardness(0.5),
+    );
+    let raised = sim.bedrock();
+    assert!(
+        raised.iter().zip(&flat).any(|(r, f)| r > f),
+        "the hill rose"
+    );
+
+    // The east half of the hill: cells whose centres have x at or past the hill's centre.
+    let region = Rect::new(
+        centre.x,
+        centre.y - 100.0,
+        centre.x + 100.0,
+        centre.y + 100.0,
+    );
+    let version = sim.terrain.version.clone();
+    let seen = version.load(std::sync::atomic::Ordering::Relaxed);
+    sim.app
+        .world_mut()
+        .write_message(RestoreTerrain::new(before.clone(), region));
+    sim.run_until("the restore", move |_| {
+        version.load(std::sync::atomic::Ordering::Relaxed) > seen
+    });
+    sim.frames(8);
+
+    let restored = sim.bedrock();
+    let (mut inside, mut outside) = (0, 0);
+    for z in 0..CELLS {
+        for x in 0..CELLS {
+            let k = (z * CELLS + x) as usize;
+            if region.contains(cell_centre(&sim, x, z)) {
+                inside += 1;
+                assert!(
+                    (restored[k] - flat[k]).abs() < 1e-5,
+                    "cell ({x},{z}) inside the region is {} not {}",
+                    restored[k],
+                    flat[k]
+                );
+            } else {
+                outside += 1;
+                assert_eq!(restored[k], raised[k], "cell ({x},{z}) outside was touched");
+            }
+        }
+    }
+    assert!(
+        inside > 1000 && outside > 1000,
+        "{inside} in, {outside} out"
+    );
+    // The ground query follows on both sides of the rect's edge.
+    let east = sim.ground(cell_centre(&sim, 80, 64));
+    let west = sim.ground(cell_centre(&sim, 48, 64));
+    assert!(
+        (east - 10.0).abs() < 1e-3,
+        "east {east} should be level again"
+    );
+    assert!(west > 14.0, "west {west} should still carry the hill");
+    sim.finish();
 }
