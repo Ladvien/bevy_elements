@@ -365,15 +365,15 @@ pub(crate) fn sun_transmittance(altitude_deg: f32) -> Vec3 {
 #[reflect(Resource)]
 pub struct RainbowSettings {
     /// The gain on the sun's light on the shower; 0 switches the rainbow off, 1 is the thin-curtain
-    /// estimate `E · p · τ` as it stands. Default 3, which makes the primary bow of a 5 mm/h
-    /// shower add about a quarter to the sky behind it under a 22° sun (`docs/research/rainbow.md`,
+    /// estimate `E · p · τ` as it stands. Default 5, which makes the primary bow of a 5 mm/h
+    /// shower add about 40 % to the sky behind it under a 22° sun (`docs/research/rainbow.md`,
     /// Deviation 1).
     pub strength: f32,
 }
 
 impl Default for RainbowSettings {
     fn default() -> Self {
-        Self { strength: 3.0 }
+        Self { strength: 5.0 }
     }
 }
 

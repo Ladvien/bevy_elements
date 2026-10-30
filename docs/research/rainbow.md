@@ -40,7 +40,7 @@ with the Fresnel weight of the ray `ε = ½ Σ_{s,p} (1 − R)² R^N` (R the ref
 | drop law | Marshall–Palmer, `a₀ = 0.45 R^0.21` mm | `precipitation.md` |
 | LUT | 512 angles over 110–170°, 16 median radii from 0.02 to 1.2 mm (log) | this note |
 | curtain taps | 1.5, 3, 6, 12 km | the weather map's 32 km extent |
-| `RainbowSettings::strength` | 3.0 | a gain on `E · p · τ`, measured (Deviation 1) |
+| `RainbowSettings::strength` | 5.0 | a gain on `E · p · τ`, measured (Deviation 1) |
 
 ## GPU mapping
 
@@ -70,7 +70,7 @@ The bow is drawn by the cloud composite pass, which already runs at full resolut
 
 ## Deviations from this plan
 
-1. **`strength` 3.0, not 1.** The thin-curtain estimate `L = E p τ` with the Marshall–Palmer table gives a primary bow that adds only 10 % to a blue sky under a 22° sun at 5 mm/h (first capture, strength 0.35 of the sun: 0.056 linear against a sky near 0.5): the bow is there and invisible. Marshall–Palmer over-counts small drops (Gunn–Marshall and every drizzle measurement), which spread the colours and lower the peak, and the real shower that makes a vivid bow is a narrower distribution; a gain of 3 on the sun's light restores a bow that adds about a quarter to the sky (24 % at the peak bin, `gpu_a_shower_opposite_a_low_sun_draws_a_rainbow`) and reads at sunset (case 2). A gain, not a physical constant: it is a setting, 0 switches the feature off.
+1. **`strength` 5.0, not 1.** The thin-curtain estimate `L = E p τ` with the Marshall–Palmer table gives a primary bow that adds only 10 % to a blue sky under a 22° sun at 5 mm/h (first capture, strength 0.35 of the sun: 0.056 linear against a sky near 0.5): the bow is there and invisible. Marshall–Palmer over-counts small drops (Gunn–Marshall and every drizzle measurement), which spread the colours and lower the peak, and the real shower that makes a vivid bow is a narrower distribution; a gain of 3 added 24 % at the peak bin and read as delicate (a hostile reading: not a hero), a gain of 5 adds about 40 % and reads as a clear double bow with the pale inner glow at 17.5, 18.5 and 19 h (the pass's captures `t-h0..h2`), neither garish at sunset. A gain, not a physical constant: it is a setting, 0 switches the feature off.
 2. **The sun's colour** is `exp(−τ₀ · air mass)` with `τ₀ = (0.096, 0.218, 0.451)` (Hillaire's coefficients on the effective scale heights of Bevy's medium), checked against `model::bevy_optical_transmittance` within 15 % for 8°–70°, not `ZENITH_TRANSMITTANCE`, which is a measured sky colour (0.904, 0.640, 0.353) and turned a 22° sun to orange.
 3. **The sun's disc** (0.53°) is applied as a 5-tap chord kernel along the angle of the finished table, not per tap in the integral: eight times cheaper and the same blur.
 
