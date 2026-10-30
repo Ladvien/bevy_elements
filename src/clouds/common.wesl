@@ -62,6 +62,10 @@ struct CloudParams {
     /// xy: world XZ of the minimum corner of the region the sea and its skirt cover, m. zw: the
     /// maximum corner.
     sea_box: vec4<f32>,
+    /// The rainbow (`docs/research/rainbow.md`): xyz the sun's illuminance at the camera times the
+    /// settings' strength, lx. w: the phase-function table's row for the shower's median drop, or
+    /// −1 for no bow.
+    bow: vec4<f32>,
 }
 
 const PI: f32 = 3.14159265358979;
