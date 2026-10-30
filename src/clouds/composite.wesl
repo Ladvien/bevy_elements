@@ -24,15 +24,16 @@ const BOW_COS_FAR: f32 = -0.98481;
 /// The table's angles, radians (110° and 60° more).
 const BOW_THETA_MIN: f32 = 1.91986;
 const BOW_THETA_SPAN: f32 = 1.04720;
-/// Rain's extinction, m⁻¹, at `R` mm/h is `2.12e-4 R^0.68` (docs/research/precipitation.md); the
-/// weather map's green channel is `R / 25`.
-const RAIN_EXTINCTION: f32 = 2.12e-4;
+/// Rain's extinction at `R` mm/h is `2.12e-4 R^0.68` m⁻¹ and snow's `4.917e-3 S`
+/// (docs/research/precipitation.md); the weather map's green channel is the total rate over
+/// 25 mm/h, and `params.shower` holds the rain's (x) and the snow's (y) extinction at a green of
+/// 1, so a texel's are `shower.x · g^0.68` and `shower.y · g`.
 /// The curtain's taps: horizontal distances `1500 · 2^j` m (1.5, 3, 6 and 12 km), each standing for
 /// the length `x` (the first) or `0.75 x` (the rest) of the ray's ground track.
 
-/// The light a shower sends back along a sky ray, `E · p(θ) · (1 − e^{−τ})`, display-referred: the
-/// phase function of the table at the angle to the sun, and the curtain's optical depth from the
-/// weather map where the ray is still under the cloud base.
+/// The light a shower sends back along a sky ray, `E · p(θ) · (τ_rain / τ) · (1 − e^{−τ})`,
+/// display-referred: the phase function of the table at the angle to the sun, and the curtain's
+/// optical depths from the weather map where the ray is still under the cloud base.
 fn rainbow_light(cam: vec3<f32>, dir: vec3<f32>) -> vec3<f32> {
     let c = dot(dir, params.light.xyz);
     // A bow is a pattern of angles: an orthographic view has one direction for every pixel.
@@ -49,6 +50,7 @@ fn rainbow_light(cam: vec3<f32>, dir: vec3<f32>) -> vec3<f32> {
     let flat_len = max(length(dir.xz), 1.0e-4);
     let tan_e = max(dir.y, 0.0) / flat_len;
     let heading = dir.xz / flat_len;
+    var tau_rain = 0.0;
     var tau = 0.0;
     for (var j = 0; j < 4; j += 1) {
         let x = 1500.0 * exp2(f32(j));
@@ -58,10 +60,15 @@ fn rainbow_light(cam: vec3<f32>, dir: vec3<f32>) -> vec3<f32> {
         let reach = 1.0 - smoothstep(0.7 * params.layer.x, params.layer.x, height);
         let xz = cam.xz + heading * x;
         let g = textureSampleLevel(weather_tex, smp_repeat, (xz - params.weather.xy) / params.weather.z, 0.0).g;
-        let k = RAIN_EXTINCTION * pow(g * 25.0, 0.68);
-        tau += k * stand / flat_len * reach;
+        let along = stand / flat_len * reach;
+        let k_rain = params.shower.x * pow(g, 0.68);
+        tau_rain += k_rain * along;
+        tau += (k_rain + params.shower.y * g) * along;
     }
-    return params.bow.xyz * table * (1.0 - exp(-tau)) * view.exposure;
+    // Rain and snow share the curtain's light by their extinction; only the rain's makes the bow
+    // (rainbow.md, "Snow in the curtain takes its share of the light"). With no snow the ratio is 1.
+    let rain_part = tau_rain / max(tau, 1.0e-9);
+    return params.bow.xyz * table * rain_part * (1.0 - exp(-tau)) * view.exposure;
 }
 
 @fragment
