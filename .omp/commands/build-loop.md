@@ -256,7 +256,7 @@ Start only after section 7 passes. Then release (the "Release" block at the end 
 3. `git tag -a v<version> -m v<version>`, then push the commit and the tag (merge, never force, on a refused push).
 4. `cargo info <crate>@<version>` resolves; put the crates.io URL in the log entry.
 
-A failed publish is logged with its error and retried next pass. Never yank, never reuse a version; fix a bad release forward.
+**At most one release every 6 hours** (owner, 2026-10-30: bevy_lights published v0.2.1 through v0.2.20 in one day, and then crates.io answered 429 for three passes in a row, each of which did nothing but retry). Release only when the last tag is more than 6 hours old (`git log -1 --format=%ct <last tag>`); until then the changes ride in the next release. A publish refused with 429 is not retried in this pass or the next: log it once and build, and the next release carries it. A pass that only retries a release is an idle pass. Any other failed publish is logged with its error and retried at the next release. Never yank, never reuse a version; fix a bad release forward.
 
 ### README, demos and docs stay true
 
