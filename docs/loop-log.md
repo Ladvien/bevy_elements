@@ -5354,3 +5354,21 @@ Host: the Mac (no `big`, no captures, no benchmark; nothing rendered changes). I
 5. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
 
 - Published: https://crates.io/crates/bevy_elements/0.7.2, tag v0.7.2 (additive, patch; cargo-semver-checks: no update required).
+
+## Iteration 92 — 2026-10-29 — SculptTerrain (what bevy_emerge's terrain brushes need, #99 there)
+
+Host: the Mac (no `big`, no captures, no benchmark). Issues read through the API: #46, #44, #43 (delivered, awaiting Sanctuary's adoption; none workable, none a bug). No `consumer` issue; no parked branch for this item (only pass 22's stale `WIP(pass 22, parked)`). Idle-pass rule, item 1. Ranked: (1) terrain brushes (the editor's #99 acceptance: "a raise stroke changes the heights under it and nowhere else", ground following sculpting; the crate had no way to edit a live terrain); (2) night sea horizon step (needs `big`); (3) dusk sea film. Took (1).
+
+- **Change**: `SculptTerrain { centre_m, radius_m, hardness, kind }` message, `SculptKind::{Raise, Lower, Smooth, Flatten, Noise}`, `validate()` (`SetupError`), `sculpt_weight`. `src/terrain/sculpt.wesl` edits bedrock (reading the previous pack for smooth/flatten, no race) at the head of the terrain's compute pass, so pack, bounds and readback carry it. One stroke per frame through an epoch field on the extracted `TerrainGpu` answered by an atomic (the pipelined-rendering rule). Research: `docs/research/terrain-sculpt.md` (no corpus source for brushes; smoothstep falloff is editor convention, recorded as Deviation 1).
+- **Proof**: `tests/gpu_sculpt.rs` (GPU, Metal): raise is bit-identical at and beyond the radius and equals `amount · sculpt_weight` inside to 2e-5, the plateau centre is exactly +5 m, `terrain_height` follows, lower undoes raise to 1e-5, flatten levels the plateau to 1e-4, smooth drops a spike and conserves the sum, noise is seed-deterministic and bounded. Two lib tests (weight shape, field-named errors).
+- **Verdict**: not a rendering change (the existing pack/render path draws the edited heights); no capture possible on the Mac, so no visual GREAT claim: the validation target "round hill, no ring at the rim, grazing view" is NOT judged. Next pass on `big` should capture it.
+- **Gates (Mac)**: `cargo test --release` (351 lib + integration), doctests, clippy `-D warnings --all-targets --all-features`, rustdoc `-D warnings`, wasm32 lib, `tools/wesl-check`, `gpu_sculpt`. Not re-run: other GPU suites (additive: the dispatch is skipped without a stroke).
+- **Cleanup**: no worktree made.
+
+### Next five items, ranked
+
+1. Capture a sculpted hill (aerial and grazing) on `big` and judge the rim; `SculptTerrain` on voxel ground is not supported (heightfield only).
+2. Night: the sea's horizon step (4.1x) and the near rows' olive tint.
+3. The sea film at grazing angles should reach the sky's colour at dusk.
+4. bevy_emerge #99 remainder: a CPU read of a whole heightfield for saving (`TerrainState` readback of bedrock) and a stroke-undo helper (inverse of a stroke for Raise/Lower).
+5. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
