@@ -5373,3 +5373,19 @@ Host: the Mac (no `big`, no captures, no benchmark). Issues read through the API
 4. bevy_emerge #99 remainder: a CPU read of a whole heightfield for saving (`TerrainState` readback of bedrock) and a stroke-undo helper (inverse of a stroke for Raise/Lower).
 5. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
 - Published: https://crates.io/crates/bevy_elements/0.7.3, tag v0.7.3 (additive, patch).
+
+## Iteration 93 — 2026-10-29 — SculptTerrain::inverse (an editor's undo for brush strokes, #99 there)
+
+Host: the Mac (no captures, no benchmark). Issues read through the API: #46, #44, #43 (all delivered, awaiting Sanctuary's adoption; none a bug, none workable further; skipped for that reason). No parked branch for this item. Idle-pass rule, item 1. Ranked: (1) stroke undo (CPU, testable here); (2) night sea horizon step (needs `big`); (3) sea film at dusk; (4) heightfield snapshot readback for saving and for undoing Smooth/Flatten/Noise. Took (1).
+
+- **Change**: `SculptTerrain::inverse() -> Option<SculptTerrain>`: Raise <-> Lower with the same amount, centre, radius, hardness; `None` for Smooth, Flatten, Noise (they depend on the ground they met). Pure CPU; the GPU suite already proves lower undoes raise to 1e-5 (`tests/gpu_sculpt.rs`). Not a rendering change: no visual verdict claimed.
+- **Proof**: lib test `only_the_stroke_kinds_that_add_a_delta_have_an_inverse`, doctest, clippy `-D warnings --all-targets --all-features`, doctests all pass.
+- **Cleanup**: no worktree made.
+
+### Next five items, ranked
+
+1. Heightfield snapshot readback (save, and undo for Smooth/Flatten/Noise).
+2. Capture a sculpted hill (aerial and grazing) on `big` and judge the rim.
+3. Night: the sea's horizon step (4.1x) and the near rows' olive tint.
+4. The sea film at grazing angles should reach the sky's colour at dusk.
+5. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
