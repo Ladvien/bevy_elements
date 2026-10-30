@@ -320,6 +320,18 @@ fn dig_a_pit(mut strokes: MessageWriter<SculptTerrain>) {
 }
 ```
 
+To keep a sculpted ground, ask `Environment::terrain_snapshot()` for the last readback and store its heights; `TerrainSnapshot::terrain(&mut images)` builds a `Terrain` that redraws them (spawn it at `snapshot.centre_m()` times `ElementsUnits::units_per_metre`). The surface comes back to within f32 rounding, all of it as bedrock: the sediment layer is not restored. The snapshot is at the readback's resolution, which is 2x coarser than the simulation above 1024² cells.
+
+```rust
+# use bevy::prelude::*;
+# use bevy_elements::*;
+fn save_and_restore(env: Environment, mut images: ResMut<Assets<Image>>, mut commands: Commands) {
+    if let Some(saved) = env.terrain_snapshot() {
+        commands.spawn((saved.terrain(&mut images), Transform::from_translation(saved.centre_m())));
+    }
+}
+```
+
 ### Ground cover
 
 `GroundCoverPlugin` keeps two maps on the `Terrain`'s grid, stepped on game time (the `WorldClock`) at most 20 times a second after hydrology's substeps. **Snow** is a depth and a water equivalent per cell: it accumulates at the cell's own rain–snow split (the lapse rate makes ridges snowier than valleys), keeps less on slopes between 35° and 55° and none under a `PrecipitationBlocker` (the roof's shelter follows the slanted fall of the rain or snow), settles from 100 toward 300 kg/m³ with a 3-day time constant, drifts downwind above 5 m/s (a flux that grows with the cube of the excess, deposited where the wind slows in the lee), is smoothed over a few cells, and melts at 4 mm of water per °C per day, every millimetre arriving in the `water` layer. **Wetness** follows rain and evaporation; the terrain and ground materials shade snow, wet darkening and a porous sheen, and puddles with ripples. On the terrain the grass is a canopy whose wax beads the rain: a wet meadow deepens its green by `bevy_flora`'s wet-leaf rule (saturation × 1.25, brightness kept) and does not gloss, and only the soil, sand, rock and scree between darken and shine. Rain rings on a live terrain only where water stands at least `WetnessSettings::puddle_min_m` deep (`docs/research/wet-ground.md`).
