@@ -1,4 +1,6 @@
 ## [Unreleased]
+### Added
+- **`Environment::terrain_snapshot()`, `TerrainSnapshot::to_heightmap()`, `terrain()`, `height_range_m()`, `centre_m()`: save a sculpted ground and respawn it.** The snapshot is the crate's last height readback (surface and sediment, metre frame); `to_heightmap` is an `R32Float` image plus the range that decodes it, `terrain` a `Terrain` over it at the grid's extent and resolution, `centre_m` where its entity belongs. The surface comes back within f32 rounding (GPU test: 2e-4 m after a 5 m raise); the sediment layer is not restored. For bevy_emerge #99 (saving a project's sculpt, undoing Smooth, Flatten and Noise strokes). `docs/research/terrain-heightfield-save.md`.
 
 ## [0.7.4] - 2026-10-29
 ### Added
