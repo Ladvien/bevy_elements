@@ -5423,3 +5423,19 @@ Host: the Mac (no captures, no benchmark; not a rendering change, no visual verd
 4. The sea film at grazing angles should reach the sky's colour at dusk.
 5. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
 - Published: https://crates.io/crates/bevy_elements/0.7.6, tag v0.7.6 (additive, patch). Cleanup: nothing created outside the clone.
+
+## Iteration 96 — 2026-10-30 — RestoreTerrain (an in-place undo for any sculpt stroke, bevy_emerge #99)
+
+Host: the Mac (no captures, no benchmark; no kernel or shader touched, so no visual verdict claimed). Issues read through the API: #46, #44, #43 (all delivered earlier, awaiting Sanctuary's adoption; none a bug, nothing workable further; skipped). No parked branch. Idle-pass rule, item 1. Ranked: (1) region restore (CPU+Metal testable here, closes the Smooth/Flatten/Noise undo gap); (2) sculpted-hill capture on `big`; (3) night sea horizon step; (4) sea film at dusk; (5) #41 remainder. Took (1).
+
+- **Change**: `RestoreTerrain { snapshot, region_m }` message. Cells whose centres lie in the rect take the snapshot's bedrock (`surface − sediment`) and sediment; one queue of edits with the strokes keeps order; the render world writes the rows with `RenderQueue::write_buffer` in terrain `prepare` and the usual pack/bounds/readback follow. Sediment is restored here (the earlier backlog asked for it; the snapshot already carried it). No new kernel. Research: `docs/research/terrain-restore.md` (no corpus source; recorded).
+- **Proof**: lib tests `a_region_takes_the_cells_whose_centres_it_contains`, `a_restore_is_cut_from_the_snapshots_bedrock_and_sediment`; Metal test `gpu_a_restored_region_takes_the_old_ground_back_and_only_there` (inside the rect bedrock equals the before-snapshot within 1e-5, outside bit-identical to the stroked bedrock, ground query follows on both sides); the other two `gpu_sculpt` tests still pass. Gates: `cargo test --release` (all green), doctests, clippy `-D warnings --all-targets --all-features`, rustdoc `-D warnings`, wasm32 lib. A test literal of `TerrainGpu` in `voxel/tests.rs` needed the three new fields (only clippy `--all-targets --all-features` builds it).
+- **Cleanup**: no worktree made.
+
+### Next five items, ranked
+
+1. Capture a sculpted hill (aerial and grazing) on `big` and judge the rim.
+2. Night: the sea's horizon step (4.1x) and the near rows' olive tint.
+3. The sea film at grazing angles should reach the sky's colour at dusk.
+4. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
+5. Restore water too (a flood undone with the ground it carved), if the editor asks.
