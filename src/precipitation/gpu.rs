@@ -30,7 +30,8 @@ use bevy::render::view::{Msaa, ViewTarget, ViewUniform, ViewUniformOffset, ViewU
 use bevy::render::{Render, RenderApp, RenderStartup, RenderSystems};
 
 use super::{
-    BlockerGpu, DrawParams, PrecipParams, PrecipitationGpu, PrecipitationView, SPLASH_RING,
+    BlockerGpu, DrawParams, PrecipParams, PrecipitationDraw, PrecipitationGpu, PrecipitationView,
+    SPLASH_RING,
 };
 use crate::gpu::kernel::{Kernel, groups, queue_kernel, ready};
 
@@ -81,7 +82,11 @@ pub(super) fn plugin(app: &mut App) {
                 .after(crate::terrain::TerrainDispatch)
                 .before(camera_driver),
         )
-        .add_systems(Core3d, draw.in_set(Core3dSystems::EarlyPostProcess));
+        .add_systems(
+            Core3d,
+            draw.in_set(Core3dSystems::EarlyPostProcess)
+                .in_set(PrecipitationDraw),
+        );
 }
 
 fn sim_layout() -> BindGroupLayoutDescriptor {
