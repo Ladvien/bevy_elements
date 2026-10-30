@@ -5422,3 +5422,4 @@ Host: the Mac (no captures, no benchmark; not a rendering change, no visual verd
 3. Night: the sea's horizon step (4.1x) and the near rows' olive tint.
 4. The sea film at grazing angles should reach the sky's colour at dusk.
 5. #41 remainder (`ground_look_at` GPU fixture, `FootprintPressure`); #39 `paths_resist_prints`.
+- Published: https://crates.io/crates/bevy_elements/0.7.6, tag v0.7.6 (additive, patch). Cleanup: nothing created outside the clone.
