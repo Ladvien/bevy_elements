@@ -19,7 +19,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::render::storage::ShaderBuffer;
 use bevy::time::TimeUpdateStrategy;
 
-use super::model::mirror::{generate_surface, slope_deg};
+use super::model::mirror::slope_deg;
 use super::{ProceduralTerrain, Terrain, TerrainState};
 use crate::{ElementsCamera, ElementsPlugins, ElementsQuality, Environment};
 
@@ -139,7 +139,7 @@ fn the_gpu_generator_matches_the_cpu_mirror() {
     assert_eq!(state.grid.origin, Vec2::splat(-1024.0));
 
     let n = 256 * 256;
-    let cpu = generate_surface(&hills, UVec2::splat(256), 8.0);
+    let cpu = hills.sample_surface(UVec2::splat(256), 8.0);
     let cells = bytemuck::pod_collect_to_vec::<u8, [f32; 4]>(
         &read_buffer(&mut app, state.cells.clone())[..n * 16],
     );
