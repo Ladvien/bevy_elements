@@ -24,12 +24,12 @@ const BOW_COS_FAR: f32 = -0.98481;
 /// The table's angles, radians (110° and 60° more).
 const BOW_THETA_MIN: f32 = 1.91986;
 const BOW_THETA_SPAN: f32 = 1.04720;
-/// Rain's extinction at `R` mm/h is `2.12e-4 R^0.68` m⁻¹ and snow's `4.917e-3 S`
-/// (docs/research/precipitation.md); the weather map's green channel is the total rate over
-/// 25 mm/h, and `params.shower` holds the rain's (x) and the snow's (y) extinction at a green of
-/// 1, so a texel's are `shower.x · g^0.68` and `shower.y · g`.
-/// The curtain's taps: horizontal distances `1500 · 2^j` m (1.5, 3, 6 and 12 km), each standing for
-/// the length `x` (the first) or `0.75 x` (the rest) of the ray's ground track.
+// Rain's extinction at `R` mm/h is `2.12e-4 R^0.68` m⁻¹ and snow's `4.917e-3 S`
+// (docs/research/precipitation.md); the weather map's green channel is the total rate over
+// 25 mm/h, and `params.shower` holds the rain's (x) and the snow's (y) extinction at a green of
+// 1, so a texel's are `shower.x · g^0.68` and `shower.y · g`.
+// The curtain's taps: horizontal distances `1500 · 2^j` m (1.5, 3, 6 and 12 km), each standing for
+// the length `x` (the first) or `0.75 x` (the rest) of the ray's ground track.
 
 /// The light a shower sends back along a sky ray, `E · p(θ) · (τ_rain / τ) · (1 − e^{−τ})`,
 /// display-referred: the phase function of the table at the angle to the sun, and the curtain's
